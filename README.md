@@ -1,7 +1,13 @@
 # Features
 
-- Automatically gets players in your game and fetches stats extremely fast
+- Automatically gets players in your game and fetches stats (real fast)
 - Command Interception: Enable/disable client commands
+
+## Usage
+
+- Inject `ovson.dll` into Minecraft yourself  
+**or**  
+- Run `OVsonLoader.exe` when Minecraft is fully loaded
 
 ## Toggle Key
 - Default: `Insert`
@@ -129,7 +135,7 @@ All commands use the `.` prefix in-game.
 - Colors will be reworked
 - General UI improvements planned
 - Some modules still experimental
-- Tags shown on `.stats` command
+- Tags will be shown on `.stats` command
 - Tab stats will be fully reworked
 
 ---

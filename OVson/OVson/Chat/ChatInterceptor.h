@@ -22,6 +22,15 @@ namespace ChatInterceptor {
     bool isInHypixelGame();
     int getGameMode();
     void clearAllCaches();
+    extern float g_jniLatency;
+    extern float g_apiLatency;
+    extern float g_scanSpeed;
+
+    int getProcessedCount();
+    int getActiveFetchCount();
+    int getPendingStatsCount();
+    float getApiLatency();
+    float getScanSpeed();
 }
 
 

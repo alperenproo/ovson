@@ -3,119 +3,130 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
-
 namespace Config {
-	bool initialize(HMODULE selfModule);
-    HMODULE getModuleHandle();
-	bool save();
-	const std::string& getApiKey();
-	void setApiKey(const std::string& key);
-	
-	// overlay mode: "gui", "chat", "invisible"
-	const std::string& getOverlayMode();
-	void setOverlayMode(const std::string& mode);
+bool initialize(HMODULE selfModule);
+HMODULE getModuleHandle();
+bool save();
+const std::string &getApiKey();
+void setApiKey(const std::string &key);
 
-    // AutoGG settings
-    bool isAutoGGEnabled();
-    void setAutoGGEnabled(bool enabled);
-    const std::string& getAutoGGMessage();
-    void setAutoGGMessage(const std::string& msg);
+// overlay mode: "gui", "chat", "invisible"
+const std::string &getOverlayMode();
+void setOverlayMode(const std::string &mode);
 
-	bool isTabEnabled();
-	void setTabEnabled(bool enabled);
-	const std::string& getSortMode(); // General sort metric (Stars, FKDR, etc.)
-	void setSortMode(const std::string& mode);
-	
-    const std::string& getTabDisplayMode(); // What stat shows in Tab
-    void setTabDisplayMode(const std::string& mode);
-    
-    bool isTabSortDescending();
-    void setTabSortDescending(bool desc);
+// AutoGG settings
+bool isAutoGGEnabled();
+void setAutoGGEnabled(bool enabled);
+const std::string &getAutoGGMessage();
+void setAutoGGMessage(const std::string &msg);
 
-	bool isDebugging();
-	void setDebugging(bool enabled);
+bool isTabEnabled();
+void setTabEnabled(bool enabled);
+const std::string &getSortMode(); // General sort metric (Stars, FKDR, etc.)
+void setSortMode(const std::string &mode);
 
-	// bed defense settings
-	bool isBedDefenseEnabled();
-	void setBedDefenseEnabled(bool enabled);
+const std::string &getTabDisplayMode(); // What stat shows in Tab
+void setTabDisplayMode(const std::string &mode);
 
-    bool isNickedBypass();
-    void setNickedBypass(bool enabled);
+bool isTabSortDescending();
+void setTabSortDescending(bool desc);
 
-    // click gui settings
-    int getClickGuiKey();
-    void setClickGuiKey(int key);
+bool isDebugging();
+void setDebugging(bool enabled);
 
-    bool isNotificationsEnabled();
-    void setNotificationsEnabled(bool enabled);
+// bed defense settings
+bool isBedDefenseEnabled();
+void setBedDefenseEnabled(bool enabled);
 
-    bool isClickGuiOn();
-    void setClickGuiOn(bool on);
+bool isNickedBypass();
+void setNickedBypass(bool enabled);
 
-    // theme customization
-    DWORD getThemeColor();
-    void setThemeColor(DWORD color);
+// click gui settings
+int getClickGuiKey();
+void setClickGuiKey(int key);
 
-    // motion blur (gonna make this work one day)
-    bool isMotionBlurEnabled();
-    void setMotionBlurEnabled(bool enabled);
-    float getMotionBlurAmount();
-    void setMotionBlurAmount(float amount);
+bool isNotificationsEnabled();
+void setNotificationsEnabled(bool enabled);
 
-    // tags general
-    bool isTagsEnabled();
-    void setTagsEnabled(bool enabled);
-    const std::string& getActiveTagService();
-    void setActiveTagService(const std::string& service);
+bool isClickGuiOn();
+void setClickGuiOn(bool on);
 
-    bool isChatBypasserEnabled();
-    void setChatBypasserEnabled(bool enabled);
+// commands toggle
+bool isCommandsEnabled();
+void setCommandsEnabled(bool enabled);
 
-    // overlay category visibility
-    bool isShowStar();
-    void setShowStar(bool show);
-    bool isShowFk();
-    void setShowFk(bool show);
-    bool isShowFkdr();
-    void setShowFkdr(bool show);
-    bool isShowWins();
-    void setShowWins(bool show);
-    bool isShowWlr();
-    void setShowWlr(bool show);
-    bool isShowWs();
-    void setShowWs(bool show);
+// theme customization
+DWORD getThemeColor();
+void setThemeColor(DWORD color);
 
-    // urchin tags
-    bool isUrchinEnabled();
-    void setUrchinEnabled(bool enabled);
-    const std::string& getUrchinApiKey();
-    void setUrchinApiKey(const std::string& key);
+// motion blur (gonna make this work one day)
+bool isMotionBlurEnabled();
+void setMotionBlurEnabled(bool enabled);
+float getMotionBlurAmount();
+void setMotionBlurAmount(float amount);
 
-    // seraph tags
-    bool isSeraphEnabled();
-    void setSeraphEnabled(bool enabled);
-    const std::string& getSeraphApiKey();
-    void setSeraphApiKey(const std::string& key);
+// tags general
+bool isTagsEnabled();
+void setTagsEnabled(bool enabled);
+const std::string &getActiveTagService();
+void setActiveTagService(const std::string &service);
 
-    // granular debugging
-    enum class DebugCategory {
-        General,
-        GameDetection,
-        BedDetection,
-        Urchin,
-        Seraph,
-        GUI,
-        BedDefense
-    };
+bool isChatBypasserEnabled();
+void setChatBypasserEnabled(bool enabled);
 
-    bool isDebugEnabled(DebugCategory cat);
-    void setDebugEnabled(DebugCategory cat, bool enabled);
-    bool isGlobalDebugEnabled();
-    void setGlobalDebugEnabled(bool enabled);
-    bool isDiscordRpcEnabled();
-    void setDiscordRpcEnabled(bool enabled);
-    const std::string& getDiscordAppId();
-    void setDiscordAppId(const std::string& id);
-}
+// overlay category visibility
+bool isShowStar();
+void setShowStar(bool show);
+bool isShowFk();
+void setShowFk(bool show);
+bool isShowFkdr();
+void setShowFkdr(bool show);
+bool isShowWins();
+void setShowWins(bool show);
+bool isShowWlr();
+void setShowWlr(bool show);
+bool isShowWs();
+void setShowWs(bool show);
 
+// urchin tags
+bool isUrchinEnabled();
+void setUrchinEnabled(bool enabled);
+const std::string &getUrchinApiKey();
+void setUrchinApiKey(const std::string &key);
 
+// seraph tags
+bool isSeraphEnabled();
+void setSeraphEnabled(bool enabled);
+const std::string &getSeraphApiKey();
+void setSeraphApiKey(const std::string &key);
+
+// granular debugging
+enum class DebugCategory {
+  General,
+  GameDetection,
+  BedDetection,
+  Urchin,
+  Seraph,
+  GUI,
+  BedDefense
+};
+
+bool isDebugEnabled(DebugCategory cat);
+void setDebugEnabled(DebugCategory cat, bool enabled);
+bool isGlobalDebugEnabled();
+void setGlobalDebugEnabled(bool enabled);
+bool isDiscordRpcEnabled();
+void setDiscordRpcEnabled(bool enabled);
+const std::string &getDiscordAppId();
+void setDiscordAppId(const std::string &id);
+
+// Tech Info Overlay
+bool isTechEnabled();
+void setTechEnabled(bool enabled);
+float getTechX();
+void setTechX(float x);
+float getTechY();
+void setTechY(float y);
+
+bool isForgeEnvironment();
+} // namespace Config

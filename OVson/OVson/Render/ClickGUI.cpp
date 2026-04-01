@@ -1,4 +1,4 @@
-﻿#include "ClickGUI.h"
+#include "ClickGUI.h"
 #include "../Config/Config.h"
 #include "FontRenderer.h"
 #include "NotificationManager.h"
@@ -20,6 +20,7 @@
 #include "../Services/UrchinService.h"
 #include "../Services/SeraphService.h"
 #include "../Chat/ChatInterceptor.h"
+#include "../Utils/ReplaySpammer.h"
 #include "RenderUtils.h"
 
 namespace Render {
@@ -124,11 +125,15 @@ namespace Render {
         jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
         if (!mcCls) return false;
         jmethodID m_getMc = env->GetStaticMethodID(mcCls, "getMinecraft", "()Lnet/minecraft/client/Minecraft;");
-        if (!m_getMc) return false;
+        if (!m_getMc) { if (env->ExceptionCheck()) env->ExceptionClear(); m_getMc = env->GetStaticMethodID(mcCls, "func_71410_x", "()Lnet/minecraft/client/Minecraft;"); }
+        if (!m_getMc) { if (env->ExceptionCheck()) env->ExceptionClear(); m_getMc = env->GetStaticMethodID(mcCls, "A", "()Lave;"); }
+        if (!m_getMc) { if (env->ExceptionCheck()) env->ExceptionClear(); return false; }
         jobject mcObj = env->CallStaticObjectMethod(mcCls, m_getMc);
         if (!mcObj) return false;
         jfieldID f_screen = env->GetFieldID(mcCls, "currentScreen", "Lnet/minecraft/client/gui/GuiScreen;");
-        if (!f_screen) return false;
+        if (!f_screen) { if (env->ExceptionCheck()) env->ExceptionClear(); f_screen = env->GetFieldID(mcCls, "field_71462_r", "Lnet/minecraft/client/gui/GuiScreen;"); }
+        if (!f_screen) { if (env->ExceptionCheck()) env->ExceptionClear(); f_screen = env->GetFieldID(mcCls, "m", "Laxu;"); }
+        if (!f_screen) { if (env->ExceptionCheck()) env->ExceptionClear(); return false; }
         jobject screen = env->GetObjectField(mcObj, f_screen);
         bool ingame = (screen == nullptr);
         if (screen) env->DeleteLocalRef(screen);
@@ -560,7 +565,28 @@ namespace Render {
                 glEnable(GL_TEXTURE_2D);
                 if (clickEvent && hNicked) {
                     Config::setNickedBypass(!nickedBypass);
-                    NotificationManager::getInstance()->add("Utils", !nickedBypass ? "Nicked Bypass Enabled" : "Nicked Bypass Disabled", !nickedBypass ? NotificationType::Success : NotificationType::Warning);
+                    NotificationManager::getInstance()->add("Utils", !nickedBypass ? "Direct UUID Fetching Enabled" : "Direct UUID Fetching Disabled", !nickedBypass ? NotificationType::Success : NotificationType::Warning);
+                }
+                cy += 110;
+
+                g_guiFont.drawString(cx, cy, "Replay Automations", applyAlpha(0xFFFFFFFF, alpha));
+                bool hReplay = isHovered(mx, my, mainX + 190, cy + 30, g_w - 210, 60);
+                glDisable(GL_TEXTURE_2D);
+                DWORD replayCol = hReplay ? 0xFF222226 : THEME_CARD;
+                RenderUtils::drawRoundedRect(mainX + 190, cy + 30, g_w - 210, 60, 6.0f, replayCol, 0.6f * alpha);
+                if (hReplay) RenderUtils::drawRect(mainX + 190, cy + 30, 3, 60, THEME_NAVY, alpha);
+
+                glEnable(GL_TEXTURE_2D);
+                g_guiFont.drawString(cx, cy + 40, "Replay Report Spammer", applyAlpha(0xFFFFFFFF, alpha));
+                g_guiFont.drawString(cx, cy + 58, "Auto reporting for cheating (requires Anvil menu)", applyAlpha(0xFFA0A0A5, alpha));
+
+                bool replaySpammer = Utils::ReplaySpammer::getInstance().isEnabled();
+                glDisable(GL_TEXTURE_2D);
+                float replaySwX = mainX + g_w - 65;
+                drawSwitch(21, replaySwX, cy + 40, replaySpammer, hReplay, alpha);
+                glEnable(GL_TEXTURE_2D);
+                if (clickEvent && hReplay) {
+                    Utils::ReplaySpammer::getInstance().toggle();
                 }
                 cy += 110;
           }
@@ -595,6 +621,10 @@ namespace Render {
               bool notifEnabled = Config::isNotificationsEnabled();
               drawSettingsCard("Refined Notifications", "Enable silky smooth toast alerts", notifEnabled, 2, cy);
               Config::setNotificationsEnabled(notifEnabled);
+
+              bool techEnabled = Config::isTechEnabled();
+              drawSettingsCard("Tech Overlay", "Show technical JNI and system metrics", techEnabled, 9, cy);
+              Config::setTechEnabled(techEnabled);
 
               bool blurEnabled = Config::isMotionBlurEnabled();
               drawSettingsCard("Motion Blur", "Adds a cinematic trail to camera movement", blurEnabled, 4, cy);
@@ -647,6 +677,26 @@ namespace Render {
             }
 
             cy += 40;
+            g_guiFont.drawString(cx, cy, "Tab List Display:", applyAlpha(0xFFA0A0A5, alpha));
+            const char* dModes[] = { "fk", "fkdr", "wins", "wlr", "ws" };
+            std::string curMode = Config::getTabDisplayMode();
+            
+             float dbx = cx + 170;
+             for(int i=0; i<5; ++i) {
+                 bool hov = isHovered(mx, my, dbx, cy - 5, 45, 25);
+                 bool sel = (curMode == dModes[i]);
+                 glDisable(GL_TEXTURE_2D);
+                 RenderUtils::drawRoundedRect(dbx, cy - 5, 45, 25, 4.0f, sel ? THEME_NAVY : (hov ? 0xFF35353A : THEME_CARD), alpha);
+                 glEnable(GL_TEXTURE_2D);
+                 g_guiFont.drawString(dbx + (strlen(dModes[i]) > 3 ? 2 : 10), cy + 2, dModes[i], applyAlpha(sel ? 0xFFFFFFFF : 0xFF808085, alpha), 0.4f);
+                 if (clickEvent && hov) {
+                     Config::setTabDisplayMode(dModes[i]);
+                     NotificationManager::getInstance()->add("Tab", "Display set to " + std::string(dModes[i]), NotificationType::Info);
+                 }
+                 dbx += 50;
+             }
+             cy += 45;
+
             {
                 bool isDesc = Config::isTabSortDescending();
                 std::string currentOrder = isDesc ? "Descending" : "Ascending";
@@ -934,7 +984,7 @@ namespace Render {
                   cy += 30;
               } else {
                   g_guiFont.drawString(cx, cy, "Player", applyAlpha(0xFFA0A0A5, alpha));
-                  g_guiFont.drawString(cx + 140, cy, "Star", applyAlpha(0xFFA0A0A5, alpha));
+                  g_guiFont.drawString(cx + 140, cy, "FK", applyAlpha(0xFFA0A0A5, alpha));
                   g_guiFont.drawString(cx + 200, cy, "FKDR", applyAlpha(0xFFA0A0A5, alpha));
                   g_guiFont.drawString(cx + 280, cy, "Urchin", applyAlpha(0xFFA0A0A5, alpha));
                   g_guiFont.drawString(cx + 420, cy, "Seraph", applyAlpha(0xFFA0A0A5, alpha));
@@ -957,7 +1007,7 @@ namespace Render {
                       }
                       g_guiFont.drawString(cx, cy, name, applyAlpha(nameCol, alpha));
                       
-                      g_guiFont.drawString(cx + 140, cy, std::to_string(stats.bedwarsStar), applyAlpha(0xFFCCCCCC, alpha));
+                      g_guiFont.drawString(cx + 140, cy, std::to_string(stats.bedwarsFinalKills), applyAlpha(0xFFCCCCCC, alpha));
                       double fkdr = (stats.bedwarsFinalDeaths == 0) ? stats.bedwarsFinalKills : (double)stats.bedwarsFinalKills / stats.bedwarsFinalDeaths;
                       char fBuf[16]; sprintf_s(fBuf, "%.2f", fkdr);
                       g_guiFont.drawString(cx + 200, cy, fBuf, applyAlpha(0xFFCCCCCC, alpha));
@@ -1063,7 +1113,27 @@ namespace Render {
                    s_typingAutoGG = false;
                }
           
-          cy += 65;
+          cy += 70;
+          g_guiFont.drawString(cx, cy, "Command Settings", applyAlpha(0xFFFFFFFF, alpha));
+          cy += 30;
+          bool cmdEnabled = Config::isCommandsEnabled();
+          bool hCmdCard = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 60);
+          glDisable(GL_TEXTURE_2D);
+          DWORD cmdCol = hCmdCard ? 0xFF222226 : THEME_CARD;
+          RenderUtils::drawRoundedRect(mainX + 190, cy - 10, g_w - 210, 60, 6.0f, cmdCol, 0.6f * alpha);
+          if (hCmdCard) RenderUtils::drawRect(mainX + 190, cy - 10, 3, 60, THEME_NAVY, alpha);
+          glEnable(GL_TEXTURE_2D);
+          g_guiFont.drawString(cx, cy, "Command Interception", applyAlpha(0xFFFFFFFF, alpha));
+          g_guiFont.drawString(cx, cy + 18, "Enable client commands starting with '.'", applyAlpha(0xFFA0A0A5, alpha));
+          glDisable(GL_TEXTURE_2D);
+          drawSwitch(4, mainX + g_w - 65, cy, cmdEnabled, hCmdCard, alpha);
+          glEnable(GL_TEXTURE_2D);
+          if (clickEvent && hCmdCard) {
+              Config::setCommandsEnabled(!cmdEnabled);
+              NotificationManager::getInstance()->add("Settings", !cmdEnabled ? "Commands Enabled" : "Commands Disabled", !cmdEnabled ? NotificationType::Success : NotificationType::Warning);
+          }
+          cy += 75;
+          
           g_guiFont.drawString(cx, cy, "Discord Rich Presence", applyAlpha(0xFFFFFFFF, alpha));
           cy += 30;
           bool discordEnabled = Config::isDiscordRpcEnabled();

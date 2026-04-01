@@ -8,6 +8,7 @@ namespace ChatSDK {
 	std::string formatPrefix();
 	bool showPrefixed(const std::string& message);
 	bool showPrefixedf(const char* fmt, ...);
+	void initialize();
 }
 
 

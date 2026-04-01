@@ -10,7 +10,7 @@ namespace ThreadTracker {
     
     inline void waitForAll() {
         int retries = 0;
-        while (g_activeThreads > 0 && retries < 150) {
+        while (g_activeThreads > 0 && retries < 500) {
             Sleep(10);
             retries++;
         }

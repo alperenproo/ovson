@@ -27,7 +27,7 @@ bool ChatHook::install()
 		Logger::error("EntityPlayerSP not found");
 		return false;
 	}
-	g_sendChatMessage = env->GetMethodID(playerCls, "sendChatMessage", "(Ljava/lang/String;)V");
+	g_sendChatMessage = lc->GetMethodID(playerCls, "sendChatMessage", "(Ljava/lang/String;)V", "func_71165_d", "e");
 	if (!g_sendChatMessage){
 		Logger::error("sendChatMessage method not found");
 		return false;

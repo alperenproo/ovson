@@ -92,7 +92,7 @@ namespace Render {
 
         // GL setup
         glPushMatrix();
-        glPushAttrib(GL_ALL_ATTRIB_BITS);
+        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_SCISSOR_BIT);
         
         glDisable(GL_TEXTURE_2D);
         glDisable(GL_LIGHTING);

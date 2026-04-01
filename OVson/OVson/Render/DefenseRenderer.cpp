@@ -43,54 +43,53 @@ void DefenseRenderer::initIds(void* envPtr)
 
     try {
         jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
-        m_ids.mc_theMc = (void*)env->GetStaticFieldID(mcCls, "theMinecraft", "Lnet/minecraft/client/Minecraft;");
-        if (!m_ids.mc_theMc) m_ids.mc_theMc = (void*)env->GetStaticFieldID(mcCls, "field_71432_P", "Lnet/minecraft/client/Minecraft;");
+        if (!mcCls) return;
+        m_ids.mc_theMc = (void*)lc->GetStaticFieldID(mcCls, "theMinecraft", "Lnet/minecraft/client/Minecraft;", "field_71432_P", "S", "Lave;");
         
-        m_ids.mc_renderViewEntity = (void*)env->GetFieldID(mcCls, "renderViewEntity", "Lnet/minecraft/entity/Entity;");
-        if (!m_ids.mc_renderViewEntity) m_ids.mc_renderViewEntity = (void*)env->GetFieldID(mcCls, "field_175622_Z", "Lnet/minecraft/entity/Entity;");
+        m_ids.mc_renderViewEntity = (void*)lc->GetFieldID(mcCls, "renderViewEntity", "Lnet/minecraft/entity/Entity;", "field_175622_Z", "ad", "Lpk;");
 
-        m_ids.mc_gameSettings = (void*)env->GetFieldID(mcCls, "gameSettings", "Lnet/minecraft/client/settings/GameSettings;");
-        if (!m_ids.mc_gameSettings) m_ids.mc_gameSettings = (void*)env->GetFieldID(mcCls, "field_71474_y", "Lnet/minecraft/client/settings/GameSettings;");
+        m_ids.mc_gameSettings = (void*)lc->GetFieldID(mcCls, "gameSettings", "Lnet/minecraft/client/settings/GameSettings;", "field_71474_y", "t", "Lavh;");
 
-        m_ids.mc_timer = (void*)env->GetFieldID(mcCls, "timer", "Lnet/minecraft/util/Timer;");
-        if (!m_ids.mc_timer) m_ids.mc_timer = (void*)env->GetFieldID(mcCls, "field_71428_T", "Lnet/minecraft/util/Timer;");
+        m_ids.mc_timer = (void*)lc->GetFieldID(mcCls, "timer", "Lnet/minecraft/util/Timer;", "field_71428_T", "Y", "Lavl;");
 
-        m_ids.mc_renderManager = (void*)env->GetFieldID(mcCls, "renderManager", "Lnet/minecraft/client/renderer/entity/RenderManager;");
-        if (!m_ids.mc_renderManager) m_ids.mc_renderManager = (void*)env->GetFieldID(mcCls, "field_71463_am", "Lnet/minecraft/client/renderer/entity/RenderManager;");
+        m_ids.mc_renderManager = (void*)lc->GetFieldID(mcCls, "renderManager", "Lnet/minecraft/client/renderer/entity/RenderManager;", "field_175616_W", "aa", "Lbiu;");
 
-        m_ids.mc_getTextureManager = (void*)env->GetMethodID(mcCls, "getTextureManager", "()Lnet/minecraft/client/renderer/texture/TextureManager;");
-        if (!m_ids.mc_getTextureManager) m_ids.mc_getTextureManager = (void*)env->GetMethodID(mcCls, "func_110434_K", "()Lnet/minecraft/client/renderer/texture/TextureManager;");
+        m_ids.mc_getTextureManager = (void*)lc->GetMethodID(mcCls, "getTextureManager", "()Lnet/minecraft/client/renderer/texture/TextureManager;", "func_110434_K", "P", "()Lbmj;");
 
         jclass rmCls = lc->GetClass("net.minecraft.client.renderer.entity.RenderManager");
-        m_ids.rm_viewerPosX = (void*)env->GetFieldID(rmCls, "viewerPosX", "D"); if (!m_ids.rm_viewerPosX) m_ids.rm_viewerPosX = (void*)env->GetFieldID(rmCls, "field_78725_b", "D");
-        m_ids.rm_viewerPosY = (void*)env->GetFieldID(rmCls, "viewerPosY", "D"); if (!m_ids.rm_viewerPosY) m_ids.rm_viewerPosY = (void*)env->GetFieldID(rmCls, "field_78726_c", "D");
-        m_ids.rm_viewerPosZ = (void*)env->GetFieldID(rmCls, "viewerPosZ", "D"); if (!m_ids.rm_viewerPosZ) m_ids.rm_viewerPosZ = (void*)env->GetFieldID(rmCls, "field_78723_d", "D");
-        m_ids.rm_playerViewX = (void*)env->GetFieldID(rmCls, "playerViewX", "F"); if (!m_ids.rm_playerViewX) m_ids.rm_playerViewX = (void*)env->GetFieldID(rmCls, "field_78732_j", "F");
-        m_ids.rm_playerViewY = (void*)env->GetFieldID(rmCls, "playerViewY", "F"); if (!m_ids.rm_playerViewY) m_ids.rm_playerViewY = (void*)env->GetFieldID(rmCls, "field_78735_i", "F");
+        if (!rmCls) return;
+        m_ids.rm_viewerPosX = (void*)lc->GetFieldID(rmCls, "viewerPosX", "D", "field_78725_b", "o");
+        m_ids.rm_viewerPosY = (void*)lc->GetFieldID(rmCls, "viewerPosY", "D", "field_78726_c", "p");
+        m_ids.rm_viewerPosZ = (void*)lc->GetFieldID(rmCls, "viewerPosZ", "D", "field_78723_d", "q");
+        m_ids.rm_playerViewX = (void*)lc->GetFieldID(rmCls, "playerViewX", "F", "field_78732_j", "f");
+        m_ids.rm_playerViewY = (void*)lc->GetFieldID(rmCls, "playerViewY", "F", "field_78735_i", "e");
 
         jclass entCls = lc->GetClass("net.minecraft.entity.Entity");
-        m_ids.ent_posX = (void*)env->GetFieldID(entCls, "posX", "D"); if (!m_ids.ent_posX) m_ids.ent_posX = (void*)env->GetFieldID(entCls, "field_70165_t", "D");
-        m_ids.ent_posY = (void*)env->GetFieldID(entCls, "posY", "D"); if (!m_ids.ent_posY) m_ids.ent_posY = (void*)env->GetFieldID(entCls, "field_70163_u", "D");
-        m_ids.ent_posZ = (void*)env->GetFieldID(entCls, "posZ", "D"); if (!m_ids.ent_posZ) m_ids.ent_posZ = (void*)env->GetFieldID(entCls, "field_70161_v", "D");
-        m_ids.ent_prevX = (void*)env->GetFieldID(entCls, "prevPosX", "D"); if (!m_ids.ent_prevX) m_ids.ent_prevX = (void*)env->GetFieldID(entCls, "field_70169_q", "D");
-        m_ids.ent_prevY = (void*)env->GetFieldID(entCls, "prevPosY", "D"); if (!m_ids.ent_prevY) m_ids.ent_prevY = (void*)env->GetFieldID(entCls, "field_70167_r", "D");
-        m_ids.ent_prevZ = (void*)env->GetFieldID(entCls, "prevPosZ", "D"); if (!m_ids.ent_prevZ) m_ids.ent_prevZ = (void*)env->GetFieldID(entCls, "field_70166_s", "D");
-        m_ids.ent_yaw = (void*)env->GetFieldID(entCls, "rotationYaw", "F"); if (!m_ids.ent_yaw) m_ids.ent_yaw = (void*)env->GetFieldID(entCls, "field_70177_z", "F");
-        m_ids.ent_pitch = (void*)env->GetFieldID(entCls, "rotationPitch", "F"); if (!m_ids.ent_pitch) m_ids.ent_pitch = (void*)env->GetFieldID(entCls, "field_70125_A", "F");
+        if (!entCls) return;
+        m_ids.ent_posX = (void*)lc->GetFieldID(entCls, "posX", "D", "field_70165_t", "s");
+        m_ids.ent_posY = (void*)lc->GetFieldID(entCls, "posY", "D", "field_70163_u", "t");
+        m_ids.ent_posZ = (void*)lc->GetFieldID(entCls, "posZ", "D", "field_70161_v", "u");
+        m_ids.ent_prevX = (void*)lc->GetFieldID(entCls, "prevPosX", "D", "field_70169_q", "p");
+        m_ids.ent_prevY = (void*)lc->GetFieldID(entCls, "prevPosY", "D", "field_70167_r", "q");
+        m_ids.ent_prevZ = (void*)lc->GetFieldID(entCls, "prevPosZ", "D", "field_70166_s", "r");
+        m_ids.ent_yaw = (void*)lc->GetFieldID(entCls, "rotationYaw", "F", "field_70177_z", "y");
+        m_ids.ent_pitch = (void*)lc->GetFieldID(entCls, "rotationPitch", "F", "field_70125_A", "z");
 
         jclass gsCls = lc->GetClass("net.minecraft.client.settings.GameSettings");
-        m_ids.gs_fovSetting = (void*)env->GetFieldID(gsCls, "fovSetting", "F"); if (!m_ids.gs_fovSetting) m_ids.gs_fovSetting = (void*)env->GetFieldID(gsCls, "field_74334_X", "F");
+        if (!gsCls) return;
+        m_ids.gs_fovSetting = (void*)lc->GetFieldID(gsCls, "fovSetting", "F", "field_74334_X", "aI");
 
         jclass timerCls = lc->GetClass("net.minecraft.util.Timer");
-        m_ids.timer_partialTicks = (void*)env->GetFieldID(timerCls, "renderPartialTicks", "F"); if (!m_ids.timer_partialTicks) m_ids.timer_partialTicks = (void*)env->GetFieldID(timerCls, "field_74281_c", "F");
+        if (!timerCls) return;
+        m_ids.timer_partialTicks = (void*)lc->GetFieldID(timerCls, "renderPartialTicks", "F", "field_74281_c", "c");
 
         jclass texMapCls = lc->GetClass("net.minecraft.client.renderer.texture.TextureMap");
-        m_ids.texMap_locationBlocksTexture = (void*)env->GetStaticFieldID(texMapCls, "locationBlocksTexture", "Lnet/minecraft/util/ResourceLocation;");
-        if (!m_ids.texMap_locationBlocksTexture) m_ids.texMap_locationBlocksTexture = (void*)env->GetStaticFieldID(texMapCls, "field_110575_b", "Lnet/minecraft/util/ResourceLocation;");
+        if (!texMapCls) return;
+        m_ids.texMap_locationBlocksTexture = (void*)lc->GetStaticFieldID(texMapCls, "locationBlocksTexture", "Lnet/minecraft/util/ResourceLocation;", "field_110575_b", "g", "Ljy;");
 
         jclass texManCls = lc->GetClass("net.minecraft.client.renderer.texture.TextureManager");
-        m_ids.texMan_bindTexture = (void*)env->GetMethodID(texManCls, "bindTexture", "(Lnet/minecraft/util/ResourceLocation;)V");
-        if (!m_ids.texMan_bindTexture) m_ids.texMan_bindTexture = (void*)env->GetMethodID(texManCls, "func_110577_a", "(Lnet/minecraft/util/ResourceLocation;)V");
+        if (!texManCls) return;
+        m_ids.texMan_bindTexture = (void*)lc->GetMethodID(texManCls, "bindTexture", "(Lnet/minecraft/util/ResourceLocation;)V", "func_110577_a", "a", "(Ljy;)V");
 
         m_ids.initialized = true;
     } catch (...) {
@@ -462,3 +461,4 @@ void DefenseRenderer::render(void* hdcPtr, double partialTicksManual)
     glPopMatrix();
 }
 } // namespace BedDefense
+

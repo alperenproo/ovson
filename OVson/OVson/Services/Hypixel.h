@@ -18,6 +18,12 @@ namespace Hypixel {
 		std::string teamColor;
 		bool isNicked = false;
         std::vector<std::string> rawTags;
+        
+        std::string prefix;
+        std::string rank;
+        std::string monthlyPackageRank;
+        std::string newPackageRank;
+        std::string rankPlusColor;
 	};
 
 	std::optional<std::string> getUuidByName(const std::string& name);

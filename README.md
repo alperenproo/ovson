@@ -8,6 +8,7 @@
 - Inject `ovson.dll` into Minecraft yourself  
 **or**  
 - Run `OVsonLoader.exe` when Minecraft is fully loaded
+- You DON'T need to download both of the files
 
 ## Toggle Key
 - Default: `Insert`

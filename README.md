@@ -9,6 +9,7 @@
 **or**  
 - Run `OVsonLoader.exe` when Minecraft is fully loaded
 - You DON'T need to download both of the files
+- If you're stuck with chat stats do .ovmode gui
 
 ## Toggle Key
 - Default: `Insert`

@@ -78,6 +78,11 @@ static std::mutex g_queueMutex;
 static std::unordered_set<std::string> g_activeFetches;
 static std::mutex g_activeFetchesMutex;
 static bool g_inHypixelGame = false;
+static bool g_inPreGameLobby = false;
+static std::vector<std::string> g_manualPushedPlayers;
+static std::unordered_set<std::string> g_forceChatOutputPlayers;
+static std::unordered_set<std::string> g_chatPrintedPlayers;
+static ULONGLONG g_preGameDetectTick = 0;
 static std::unordered_map<std::string, Hypixel::PlayerStats> g_pendingStatsMap;
 static std::mutex g_pendingStatsMutex;
 static std::unordered_map<std::string, ULONGLONG> g_retryUntil;
@@ -106,6 +111,164 @@ static const ULONGLONG STATS_CACHE_EXPIRY_MS = 600000;
 
 static std::unordered_map<std::string, std::string> g_playerUuidMap;
 static std::mutex g_uuidMapMutex;
+static bool g_teamReportSent = false;
+
+static const char *colorForFkdr(double fkdr) {
+  if (fkdr < 1.0)
+    return "\xC2\xA7"
+           "7";
+  if (fkdr < 2.0)
+    return "\xC2\xA7"
+           "f";
+  if (fkdr < 3.0)
+    return "\xC2\xA7"
+           "6";
+  if (fkdr < 4.0)
+    return "\xC2\xA7"
+           "b";
+  if (fkdr < 5.0)
+    return "\xC2\xA7"
+           "a";
+  if (fkdr < 6.0)
+    return "\xC2\xA7"
+           "5";
+  return "\xC2\xA7"
+         "4";
+}
+
+static const char *colorForWlr(double wlr) {
+  if (wlr < 1.0)
+    return "\xC2\xA7"
+           "f";
+  if (wlr < 3.0)
+    return "\xC2\xA7"
+           "6";
+  if (wlr < 5.0)
+    return "\xC2\xA7"
+           "4";
+  return "\xC2\xA7"
+         "4";
+}
+
+static const char *colorForWins(int wins) {
+  if (wins < 500)
+    return "\xC2\xA7"
+           "7";
+  if (wins < 1000)
+    return "\xC2\xA7"
+           "f";
+  if (wins < 2000)
+    return "\xC2\xA7"
+           "e";
+  if (wins < 4000)
+    return "\xC2\xA7"
+           "4";
+  return "\xC2\xA7"
+         "4";
+}
+
+static const char *colorForFinalKills(int fk) {
+  if (fk < 1000)
+    return "\xC2\xA7"
+           "7";
+  if (fk < 2000)
+    return "\xC2\xA7"
+           "f";
+  if (fk < 4000)
+    return "\xC2\xA7"
+           "6";
+  if (fk < 5000)
+    return "\xC2\xA7"
+           "b";
+  if (fk < 10000)
+    return "\xC2\xA7"
+           "4";
+  return "\xC2\xA7"
+         "4";
+}
+
+static const char *colorForStar(int star) {
+  if (star < 100)
+    return "\xC2\xA7"
+           "7";
+  if (star < 200)
+    return "\xC2\xA7"
+           "f";
+  if (star < 300)
+    return "\xC2\xA7"
+           "6";
+  if (star < 400)
+    return "\xC2\xA7"
+           "b";
+  if (star < 500)
+    return "\xC2\xA7"
+           "a";
+  if (star < 600)
+    return "\xC2\xA7"
+           "b";
+  return "\xC2\xA7"
+         "4";
+}
+
+static void sendTeamStatsReport() {
+  if (g_teamReportSent || !Config::isTeamReportEnabled() || g_localTeam.empty())
+    return;
+
+  std::vector<Hypixel::PlayerStats> teammates;
+  {
+    std::lock_guard<std::mutex> lock(ChatInterceptor::g_statsMutex);
+    for (const auto &pair : ChatInterceptor::g_playerStatsMap) {
+      auto it = g_playerTeamColor.find(pair.first);
+      if (it != g_playerTeamColor.end() && it->second == g_localTeam) {
+        teammates.push_back(pair.second);
+      }
+    }
+  }
+
+  if (teammates.empty())
+    return;
+
+  int totalStars = 0;
+  int totalWins = 0;
+  int totalFK = 0;
+  int totalFD = 0;
+  for (const auto &s : teammates) {
+    totalStars += s.bedwarsStar;
+    totalWins += s.bedwarsWins;
+    totalFK += s.bedwarsFinalKills;
+    totalFD += s.bedwarsFinalDeaths;
+  }
+
+  int count = (int)teammates.size();
+  double avgStar = (double)totalStars / count;
+  double avgWins = (double)totalWins / count;
+  double teamFkdr =
+      (totalFD == 0) ? (double)totalFK : (double)totalFK / totalFD;
+
+  std::string channel = Config::getTeamReportChannel();
+  if (channel != "/shout" && channel != "/pc" && channel != "/ac")
+    channel = "/pc";
+
+  const char *s = "\xC2\xA7"; // § symbol
+  const char *f = "\xC2\xA7"
+                  "f"; // Reset/White
+  const char *g = "\xC2\xA7"
+                  "7"; // Gray
+
+  char buf[512];
+  // format
+  snprintf(buf, sizeof(buf),
+           "%s %sTeam Average %s| %s%.0f* %s| %s%.0f Wins %s| %s%.2f FKDR",
+           channel.c_str(), f, g, colorForStar((int)avgStar), avgStar, g,
+           colorForWins((int)avgWins), avgWins, g, colorForFkdr(teamFkdr),
+           teamFkdr);
+
+  ChatSDK::sendClientChat(buf);
+
+  g_teamReportSent = true;
+  Logger::info("Automated Team Average Stats Report sent to %s",
+               channel.c_str());
+}
 
 static void pruneStatsCache() {
   std::lock_guard<std::mutex> lock(g_cacheMutex);
@@ -454,102 +617,7 @@ static std::string resolveTeamForNameEx(JNIEnv *env, const std::string &name,
                                         jmethodID m_getPlayersTeam,
                                         jclass teamCls, jmethodID m_getPrefix);
 
-static const char *colorForFkdr(double fkdr) {
-  if (fkdr < 1.0)
-    return "\xC2\xA7"
-           "7";
-  if (fkdr < 2.0)
-    return "\xC2\xA7"
-           "f";
-  if (fkdr < 3.0)
-    return "\xC2\xA7"
-           "6";
-  if (fkdr < 4.0)
-    return "\xC2\xA7"
-           "b";
-  if (fkdr < 5.0)
-    return "\xC2\xA7"
-           "a";
-  if (fkdr < 6.0)
-    return "\xC2\xA7"
-           "5";
-  return "\xC2\xA7"
-         "4";
-}
-// im gonna change these colors when im available
-static const char *colorForWlr(double wlr) {
-  if (wlr < 1.0)
-    return "\xC2\xA7"
-           "f";
-  if (wlr < 3.0)
-    return "\xC2\xA7"
-           "6";
-  if (wlr < 5.0)
-    return "\xC2\xA7"
-           "4";
-  return "\xC2\xA7"
-         "4";
-}
-
-static const char *colorForWins(int wins) {
-  if (wins < 500)
-    return "\xC2\xA7"
-           "7";
-  if (wins < 1000)
-    return "\xC2\xA7"
-           "f";
-  if (wins < 2000)
-    return "\xC2\xA7"
-           "e";
-  if (wins < 4000)
-    return "\xC2\xA7"
-           "4";
-  return "\xC2\xA7"
-         "4";
-}
-
-static const char *colorForFinalKills(int fk) {
-  if (fk < 1000)
-    return "\xC2\xA7"
-           "7";
-  if (fk < 2000)
-    return "\xC2\xA7"
-           "f";
-  if (fk < 4000)
-    return "\xC2\xA7"
-           "6";
-  if (fk < 5000)
-    return "\xC2\xA7"
-           "b";
-  if (fk < 10000)
-    return "\xC2\xA7"
-           "4";
-  return "\xC2\xA7"
-         "4";
-}
-
-static const char *colorForStar(int star) {
-  if (star < 100)
-    return "\xC2\xA7"
-           "7";
-  if (star < 200)
-    return "\xC2\xA7"
-           "f";
-  if (star < 300)
-    return "\xC2\xA7"
-           "6";
-  if (star < 400)
-    return "\xC2\xA7"
-           "b";
-  if (star < 500)
-    return "\xC2\xA7"
-           "a";
-  if (star < 600)
-    return "\xC2\xA7"
-           "b";
-  return "\xC2\xA7"
-         "4";
-}
+// moved
 
 static const char *teamInitial(const std::string &team) {
   if (team == "Red")
@@ -582,6 +650,7 @@ static void detectTeamsFromLine(const std::string &chat) {
       if (!g_localName.empty() && !g_localTeam.empty()) {
         g_playerTeamColor[g_localName] = g_localTeam;
       }
+      sendTeamStatsReport();
     }
     std::string needle2 = std::string(" joined (") + t + ")";
     auto p2 = chat.find(needle2);
@@ -1799,13 +1868,42 @@ static void updateTabListStats() {
   }
 
   if (shouldBeInGame != g_inHypixelGame) {
+    bool transitionToGame = shouldBeInGame && !g_inHypixelGame;
     g_inHypixelGame = shouldBeInGame;
     if (g_inHypixelGame) {
       Logger::log(Config::DebugCategory::GameDetection,
-                  "Detected Hypixel GAME session (Confirmed)");
+                  "Detected Hypixel GAME session (Confirmed) - RESETTING FOR "
+                  "FRESH START");
+
+      {
+        std::lock_guard<std::mutex> lock(ChatInterceptor::g_statsMutex);
+        ChatInterceptor::g_playerStatsMap.clear();
+      }
+      {
+        std::lock_guard<std::mutex> lock(g_cacheMutex);
+        g_persistentStatsCache.clear();
+      }
+      {
+        std::lock_guard<std::mutex> lock(g_uuidMapMutex);
+        g_playerUuidMap.clear();
+      }
+
+      g_processedPlayers.clear();
+      {
+        std::lock_guard<std::mutex> lock(g_alertedMutex);
+        g_alertedPlayers.clear();
+      }
+      g_chatPrintedPlayers.clear();
+      g_manualPushedPlayers.clear();
+      g_forceChatOutputPlayers.clear();
+
+      // clear caches mmm
+      Urchin::clearCache();
+      Seraph::clearCache();
+
       if (Config::isGlobalDebugEnabled()) {
         Render::NotificationManager::getInstance()->add(
-            "System", "Game Session Detected",
+            "System", "Game Started: Stats Reset",
             Render::NotificationType::Success);
       }
       syncTeamColors();
@@ -1933,6 +2031,7 @@ static void updateTabListStats() {
             if (jname) {
               const char *nameUtf = env->GetStringUTFChars(jname, 0);
               std::string name(nameUtf);
+              bool isObfuscated = (name.find("\xC2\xA7k") != std::string::npos);
               while (true) {
                 size_t pos = name.find("\xC2\xA7");
                 if (pos == std::string::npos)
@@ -1944,7 +2043,9 @@ static void updateTabListStats() {
                   break;
                 }
               }
-              currentNames.push_back(name);
+              if (!isObfuscated) {
+                currentNames.push_back(name);
+              }
               env->ReleaseStringUTFChars(jname, nameUtf);
 
               if (Config::isNickedBypass() && extractionsThisFrame < 4) {
@@ -1999,7 +2100,9 @@ static void updateTabListStats() {
         }
       }
 
-      g_onlinePlayers = currentNames;
+      if (!g_inPreGameLobby) {
+        g_onlinePlayers = currentNames;
+      }
 
       if (needsImmediateTeamSync && g_inHypixelGame) {
         // better team sync
@@ -2410,6 +2513,15 @@ static void updateTabListStats() {
       env->DeleteLocalRef(tabObj);
 
     if (!currentNames.empty() && g_inHypixelGame) {
+      if (!g_manualPushedPlayers.empty()) {
+        for (const auto &mName : g_manualPushedPlayers) {
+          if (std::find(currentNames.begin(), currentNames.end(), mName) ==
+              currentNames.end()) {
+            currentNames.push_back(mName);
+          }
+        }
+      }
+
       bool changed = false;
       if (currentNames.size() != g_onlinePlayers.size()) {
         changed = true;
@@ -2426,10 +2538,6 @@ static void updateTabListStats() {
         g_nextFetchIdx = 0;
       }
     }
-
-    if (processedTab > 0)
-      Logger::log(Config::DebugCategory::General, "Tab: Updated %d players",
-                  processedTab);
   }
 
   if (iter)
@@ -2438,6 +2546,443 @@ static void updateTabListStats() {
   env->DeleteLocalRef(nh);
   if (world)
     env->DeleteLocalRef(world);
+  env->DeleteLocalRef(mcObj);
+}
+
+static void detectPreGameLobby() {
+  JNIEnv *env = lc->getEnv();
+  if (!env || !g_initialized)
+    return;
+
+  ULONGLONG now = GetTickCount64();
+  if (now - g_preGameDetectTick < 500)
+    return;
+  g_preGameDetectTick = now;
+
+  if (g_inHypixelGame) {
+    if (g_inPreGameLobby) {
+      g_inPreGameLobby = false;
+      Logger::log(Config::DebugCategory::GameDetection,
+                  "Pre-game lobby ended (game started)");
+      sendTeamStatsReport();
+    }
+    return;
+  }
+
+  jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
+  if (!mcCls)
+    return;
+
+  jfieldID theMc = env->GetStaticFieldID(mcCls, "theMinecraft",
+                                         "Lnet/minecraft/client/Minecraft;");
+  if (!theMc) {
+    if (env->ExceptionCheck())
+      env->ExceptionClear();
+    theMc = env->GetStaticFieldID(mcCls, "field_71432_P",
+                                  "Lnet/minecraft/client/Minecraft;");
+  }
+  if (!theMc) {
+    if (env->ExceptionCheck())
+      env->ExceptionClear();
+    theMc = env->GetStaticFieldID(mcCls, "S", "Lave;");
+  }
+  if (!theMc) {
+    if (env->ExceptionCheck())
+      env->ExceptionClear();
+    return;
+  }
+
+  jobject mcObj = env->GetStaticObjectField(mcCls, theMc);
+  if (!mcObj)
+    return;
+
+  jfieldID f_world = env->GetFieldID(
+      mcCls, "theWorld", "Lnet/minecraft/client/multiplayer/WorldClient;");
+  if (!f_world) {
+    if (env->ExceptionCheck())
+      env->ExceptionClear();
+    f_world = env->GetFieldID(mcCls, "field_71441_e",
+                              "Lnet/minecraft/client/multiplayer/WorldClient;");
+  }
+  if (!f_world) {
+    if (env->ExceptionCheck())
+      env->ExceptionClear();
+    f_world = env->GetFieldID(mcCls, "f", "Lbdb;");
+  }
+  if (!f_world) {
+    if (env->ExceptionCheck())
+      env->ExceptionClear();
+    env->DeleteLocalRef(mcObj);
+    return;
+  }
+
+  jobject world = env->GetObjectField(mcObj, f_world);
+  if (!world) {
+    env->DeleteLocalRef(mcObj);
+    return;
+  }
+
+  g_jCache.init(env);
+  jmethodID m_getSB = g_jCache.m_getScoreboard;
+  if (!m_getSB) {
+    env->DeleteLocalRef(world);
+    env->DeleteLocalRef(mcObj);
+    return;
+  }
+
+  jobject scoreboard = env->CallObjectMethod(world, m_getSB);
+  if (env->ExceptionCheck())
+    env->ExceptionClear();
+  if (!scoreboard) {
+    env->DeleteLocalRef(world);
+    env->DeleteLocalRef(mcObj);
+    return;
+  }
+
+  jmethodID m_getObj = g_jCache.m_getObjectiveInDisplaySlot;
+  if (!m_getObj) {
+    env->DeleteLocalRef(scoreboard);
+    env->DeleteLocalRef(world);
+    env->DeleteLocalRef(mcObj);
+    return;
+  }
+
+  jobject sidebarObj = env->CallObjectMethod(scoreboard, m_getObj, 1);
+  if (env->ExceptionCheck())
+    env->ExceptionClear();
+  if (!sidebarObj) {
+    if (Config::isDebugging()) {
+      static ULONGLONG lastSbDbg = 0;
+      if (now - lastSbDbg > 3000) {
+        ChatSDK::showClientMessage(
+            ChatSDK::formatPrefix() + "\xC2\xA7" +
+            "7[DEBUG] detectPreGameLobby: Sidebar is NULL");
+        lastSbDbg = now;
+      }
+    }
+    if (g_inPreGameLobby) {
+      g_inPreGameLobby = false;
+      Logger::log(Config::DebugCategory::GameDetection,
+                  "Pre-game lobby ended (no sidebar)");
+    }
+    env->DeleteLocalRef(scoreboard);
+    env->DeleteLocalRef(world);
+    env->DeleteLocalRef(mcObj);
+    return;
+  }
+
+  static jmethodID s_m_getSorted = nullptr;
+  static jmethodID s_m_getPlayerName = nullptr;
+  static bool s_resolved = false;
+  static std::string s_objClassName;
+
+  if (!s_resolved) {
+    jclass sbCls = g_jCache.sbCls;
+    jclass scoreCls = g_jCache.scoreCls;
+
+    jclass objRealCls = env->GetObjectClass(sidebarObj);
+    if (objRealCls) {
+      jclass classCls = env->FindClass("java/lang/Class");
+      jmethodID m_getName =
+          env->GetMethodID(classCls, "getName", "()Ljava/lang/String;");
+      if (m_getName) {
+        jstring nameJ = (jstring)env->CallObjectMethod(objRealCls, m_getName);
+        if (nameJ) {
+          const char *nameUtf = env->GetStringUTFChars(nameJ, 0);
+          if (nameUtf) {
+            s_objClassName = nameUtf;
+            for (auto &ch : s_objClassName) {
+              if (ch == '.')
+                ch = '/';
+            }
+            env->ReleaseStringUTFChars(nameJ, nameUtf);
+          }
+          env->DeleteLocalRef(nameJ);
+        }
+      }
+      env->DeleteLocalRef(classCls);
+      env->DeleteLocalRef(objRealCls);
+    }
+
+    if (sbCls && !s_objClassName.empty()) {
+      std::string dynSig = "(L" + s_objClassName + ";)Ljava/util/Collection;";
+
+      const char *knownNames[] = {"getSortedScores", "func_96534_i", nullptr};
+      const char *sigs[] = {
+          "(Lnet/minecraft/scoreboard/ScoreObjective;)Ljava/util/Collection;",
+          dynSig.c_str(), nullptr};
+
+      for (int s = 0; sigs[s] && !s_m_getSorted; s++) {
+        for (int n = 0; knownNames[n] && !s_m_getSorted; n++) {
+          s_m_getSorted = env->GetMethodID(sbCls, knownNames[n], sigs[s]);
+          if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            s_m_getSorted = nullptr;
+          }
+        }
+      }
+
+      if (!s_m_getSorted) {
+        for (char c = 'a'; c <= 'z' && !s_m_getSorted; c++) {
+          char name[2] = {c, 0};
+          s_m_getSorted = env->GetMethodID(sbCls, name, dynSig.c_str());
+          if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            s_m_getSorted = nullptr;
+          }
+        }
+      }
+    }
+
+    if (scoreCls) {
+      const char *scoreNames[] = {"getPlayerName", "func_96653_e", nullptr};
+      for (int n = 0; scoreNames[n] && !s_m_getPlayerName; n++) {
+        s_m_getPlayerName =
+            env->GetMethodID(scoreCls, scoreNames[n], "()Ljava/lang/String;");
+        if (env->ExceptionCheck()) {
+          env->ExceptionClear();
+          s_m_getPlayerName = nullptr;
+        }
+      }
+
+      if (!s_m_getPlayerName) {
+        for (char c = 'a'; c <= 'z' && !s_m_getPlayerName; c++) {
+          char name[2] = {c, 0};
+          s_m_getPlayerName =
+              env->GetMethodID(scoreCls, name, "()Ljava/lang/String;");
+          if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            s_m_getPlayerName = nullptr;
+          }
+        }
+      }
+    }
+
+    s_resolved = true;
+  }
+
+  static jmethodID s_m_getPlayersTeam = nullptr;
+  static jmethodID s_m_getPrefix = nullptr;
+  static jmethodID s_m_getSuffix = nullptr;
+  static bool s_teamRes = false;
+
+  if (!s_teamRes) {
+    jclass sbCls = g_jCache.sbCls;
+    if (sbCls) {
+      const char *names[] = {"getPlayersTeam", "func_96509_i", "h", nullptr};
+      const char *sigs[] = {
+          "(Ljava/lang/String;)Lnet/minecraft/scoreboard/ScorePlayerTeam;",
+          "(Ljava/lang/String;)Lauq;", nullptr};
+      for (int s = 0; sigs[s] && !s_m_getPlayersTeam; s++) {
+        for (int n = 0; names[n] && !s_m_getPlayersTeam; n++) {
+          s_m_getPlayersTeam = env->GetMethodID(sbCls, names[n], sigs[s]);
+          if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            s_m_getPlayersTeam = nullptr;
+          }
+        }
+      }
+    }
+
+    jclass ptCls = lc->GetClass("net.minecraft.scoreboard.ScorePlayerTeam");
+    if (!ptCls) {
+      ptCls = env->FindClass("auq");
+      if (env->ExceptionCheck())
+        env->ExceptionClear();
+    }
+
+    if (ptCls) {
+      const char *prefNames[] = {"getColorPrefix", "func_96668_e", "e",
+                                 nullptr};
+      const char *sufNames[] = {"getColorSuffix", "func_96663_f", "f", nullptr};
+
+      for (int i = 0; prefNames[i] && !s_m_getPrefix; i++) {
+        s_m_getPrefix =
+            env->GetMethodID(ptCls, prefNames[i], "()Ljava/lang/String;");
+        if (env->ExceptionCheck()) {
+          env->ExceptionClear();
+          s_m_getPrefix = nullptr;
+        }
+      }
+
+      for (int i = 0; sufNames[i] && !s_m_getSuffix; i++) {
+        s_m_getSuffix =
+            env->GetMethodID(ptCls, sufNames[i], "()Ljava/lang/String;");
+        if (env->ExceptionCheck()) {
+          env->ExceptionClear();
+          s_m_getSuffix = nullptr;
+        }
+      }
+    }
+    s_teamRes = true;
+  }
+
+  bool wasPreGame = g_inPreGameLobby;
+  bool foundMap = false, foundPlayers = false, foundMode = false;
+
+  if (s_m_getSorted && s_m_getPlayerName) {
+    jobject scoresCollection =
+        env->CallObjectMethod(scoreboard, s_m_getSorted, sidebarObj);
+    if (env->ExceptionCheck()) {
+      env->ExceptionClear();
+      scoresCollection = nullptr;
+    }
+
+    if (scoresCollection) {
+      jclass collCls = env->FindClass("java/util/Collection");
+      jmethodID m_iterator =
+          env->GetMethodID(collCls, "iterator", "()Ljava/util/Iterator;");
+      jclass iterCls = env->FindClass("java/util/Iterator");
+      jmethodID m_hasNext = env->GetMethodID(iterCls, "hasNext", "()Z");
+      jmethodID m_next =
+          env->GetMethodID(iterCls, "next", "()Ljava/lang/Object;");
+
+      if (m_iterator && m_hasNext && m_next) {
+        jobject iter = env->CallObjectMethod(scoresCollection, m_iterator);
+        int lineCount = 0;
+        while (iter && env->CallBooleanMethod(iter, m_hasNext) &&
+               lineCount < 20) {
+          jobject scoreObj = env->CallObjectMethod(iter, m_next);
+          if (scoreObj) {
+            jstring pnJ =
+                (jstring)env->CallObjectMethod(scoreObj, s_m_getPlayerName);
+            if (env->ExceptionCheck()) {
+              env->ExceptionClear();
+              pnJ = nullptr;
+            }
+
+            if (pnJ) {
+              std::string rawLine = "";
+              std::string prefRaw = "", nameRaw = "", suffRaw = "";
+
+              const char *pnUtf = env->GetStringUTFChars(pnJ, 0);
+              if (pnUtf) {
+                nameRaw = pnUtf;
+                env->ReleaseStringUTFChars(pnJ, pnUtf);
+              }
+
+              if (s_m_getPlayersTeam && s_m_getPrefix && s_m_getSuffix) {
+                jobject teamObj =
+                    env->CallObjectMethod(scoreboard, s_m_getPlayersTeam, pnJ);
+                if (env->ExceptionCheck())
+                  env->ExceptionClear();
+
+                if (teamObj) {
+                  jstring prefJ =
+                      (jstring)env->CallObjectMethod(teamObj, s_m_getPrefix);
+                  if (env->ExceptionCheck())
+                    env->ExceptionClear();
+                  if (prefJ) {
+                    const char *prefUtf = env->GetStringUTFChars(prefJ, 0);
+                    if (prefUtf) {
+                      prefRaw = prefUtf;
+                      env->ReleaseStringUTFChars(prefJ, prefUtf);
+                    }
+                    env->DeleteLocalRef(prefJ);
+                  }
+
+                  jstring suffJ =
+                      (jstring)env->CallObjectMethod(teamObj, s_m_getSuffix);
+                  if (env->ExceptionCheck())
+                    env->ExceptionClear();
+                  if (suffJ) {
+                    const char *suffUtf = env->GetStringUTFChars(suffJ, 0);
+                    if (suffUtf) {
+                      suffRaw = suffUtf;
+                      env->ReleaseStringUTFChars(suffJ, suffUtf);
+                    }
+                    env->DeleteLocalRef(suffJ);
+                  }
+                  env->DeleteLocalRef(teamObj);
+                }
+              }
+
+              rawLine = prefRaw + nameRaw + suffRaw;
+
+              std::string clean;
+              for (size_t i = 0; i < rawLine.length(); ++i) {
+                unsigned char c = (unsigned char)rawLine[i];
+                if (c == 0xC2 && i + 1 < rawLine.length() &&
+                    (unsigned char)rawLine[i + 1] == 0xA7) {
+                  i += 2;
+                  continue;
+                }
+                if (c == 0xA7) {
+                  i += 1;
+                  continue;
+                }
+                clean += (char)c;
+              }
+
+              if (clean.find("Map:") != std::string::npos)
+                foundMap = true;
+              if (clean.find("Players:") != std::string::npos)
+                foundPlayers = true;
+              if (clean.find("Mode:") != std::string::npos)
+                foundMode = true;
+
+              if (clean.length() >= 8 && isdigit((unsigned char)clean[0]) &&
+                  isdigit((unsigned char)clean[1]) && clean[2] == '/' &&
+                  isdigit((unsigned char)clean[3]) &&
+                  isdigit((unsigned char)clean[4]) && clean[5] == '/') {
+                static std::string lastServerLine = "";
+                if (clean != lastServerLine) {
+                  lastServerLine = clean;
+                  g_chatPrintedPlayers.clear();
+                }
+              }
+
+              env->DeleteLocalRef(pnJ);
+            }
+            env->DeleteLocalRef(scoreObj);
+          }
+          lineCount++;
+        }
+        if (iter)
+          env->DeleteLocalRef(iter);
+      }
+      if (collCls)
+        env->DeleteLocalRef(collCls);
+      if (iterCls)
+        env->DeleteLocalRef(iterCls);
+      env->DeleteLocalRef(scoresCollection);
+    }
+  }
+
+  bool isPreGame = (foundMap && foundPlayers && foundMode);
+
+  if (Config::isDebugging()) {
+    static ULONGLONG lastPreDbg = 0;
+    if (now - lastPreDbg > 5000) {
+      ChatSDK::showClientMessage(
+          ChatSDK::formatPrefix() + "\xC2\xA7" +
+          "e[DEBUG] PreGame Detection Results: Map=" +
+          (foundMap ? "Yes" : "No") +
+          " Players=" + (foundPlayers ? "Yes" : "No") +
+          " Mode=" + (foundMode ? "Yes" : "No") +
+          " Result=" + (isPreGame ? "PreGame" : "NotPreGame"));
+      lastPreDbg = now;
+    }
+  }
+
+  if (isPreGame && !wasPreGame) {
+    g_inPreGameLobby = true;
+    ChatInterceptor::clearAllCaches();
+    Logger::log(Config::DebugCategory::GameDetection,
+                "Pre-game lobby DETECTED (sidebar has Map/Players/Mode)");
+    Render::NotificationManager::getInstance()->add(
+        "System", "Pre-Game Lobby Detected", Render::NotificationType::Success);
+  } else if (!isPreGame && wasPreGame) {
+    g_inPreGameLobby = false;
+    ChatInterceptor::clearAllCaches();
+    Logger::log(Config::DebugCategory::GameDetection, "Pre-game lobby ended");
+  }
+
+  g_inPreGameLobby = isPreGame;
+
+  env->DeleteLocalRef(sidebarObj);
+  env->DeleteLocalRef(scoreboard);
+  env->DeleteLocalRef(world);
   env->DeleteLocalRef(mcObj);
 }
 
@@ -2583,7 +3128,7 @@ static bool ensureLogOpen() {
 }
 
 static void parsePlayersFromOnlineLine(const std::string &joined) {
-  if (!g_inHypixelGame) {
+  if (!g_inHypixelGame && !g_inPreGameLobby) {
     g_onlinePlayers.clear();
     return;
   }
@@ -2636,6 +3181,8 @@ static void resetGameCache() {
   }
   g_processedPlayers.clear();
   g_onlinePlayers.clear();
+  g_teamReportSent = false;
+  g_playerTeamColor.clear();
   g_playerFetchRetries.clear();
   {
     std::lock_guard<std::mutex> lock(g_alertedMutex);
@@ -2674,23 +3221,40 @@ void ChatInterceptor::clearAllCaches() {
     g_playerUuidMap.clear();
   }
 
-  g_playerTeamColor.clear();
-  g_processedPlayers.clear();
-  g_onlinePlayers.clear();
-  g_playerFetchRetries.clear();
+  {
+    std::lock_guard<std::mutex> qlock(g_queueMutex);
+    g_onlinePlayers.clear();
+    g_processedPlayers.clear();
+    g_queuedPlayers.clear();
+  }
+
+  {
+    std::lock_guard<std::mutex> aLock(g_activeFetchesMutex);
+    g_activeFetches.clear();
+  }
+
+  {
+    std::lock_guard<std::mutex> pLock(g_pendingStatsMutex);
+    g_pendingStatsMap.clear();
+  }
+
+  {
+    std::lock_guard<std::mutex> rLock(g_retryMutex);
+    g_retryUntil.clear();
+    g_playerFetchRetries.clear();
+  }
 
   {
     std::lock_guard<std::mutex> lock(g_alertedMutex);
     g_alertedPlayers.clear();
   }
-  {
-    std::lock_guard<std::mutex> qlock(g_queueMutex);
-    g_queuedPlayers.clear();
-  }
-  {
-    std::lock_guard<std::mutex> aLock(g_activeFetchesMutex);
-    g_activeFetches.clear();
-  }
+
+  g_playerTeamColor.clear();
+  g_manualPushedPlayers.clear();
+  g_forceChatOutputPlayers.clear();
+  g_chatPrintedPlayers.clear();
+  g_stableRankMap.clear();
+
   {
     std::lock_guard<std::mutex> lockE(g_eliminatedMutex);
     g_eliminatedPlayers.clear();
@@ -2699,7 +3263,8 @@ void ChatInterceptor::clearAllCaches() {
   Urchin::clearCache();
   Seraph::clearCache();
 
-  Logger::log(Config::DebugCategory::General, "All caches cleared!");
+  Logger::log(Config::DebugCategory::General,
+              "All player caches cleared via ChatInterceptor::clearAllCaches.");
 }
 
 static void cleanupStaleStats() {
@@ -2729,7 +3294,6 @@ static void cleanupStaleStats() {
       }
     }
 
-    // Erase from map
     for (const auto &name : toPrune) {
       ChatInterceptor::g_playerStatsMap.erase(name);
     }
@@ -2899,9 +3463,9 @@ static void syncTags() {
       bool needsSeraph = (activeS == "Seraph" || activeS == "Both");
 
       for (const auto &rt : pair.second.rawTags) {
-        if (rt.find("URCHIN:") == 0)
+        if (rt.find("URCHIN") == 0)
           needsUrchin = false;
-        if (rt.find("SERAPH:") == 0)
+        if (rt.find("SERAPH") == 0)
           needsSeraph = false;
       }
 
@@ -2921,28 +3485,49 @@ static void syncTags() {
     std::vector<std::string> rTags;
     bool foundAny = false;
 
+    bool needsUrchin = (activeS == "Urchin" || activeS == "Both");
+    bool needsSeraph = (activeS == "Seraph" || activeS == "Both");
+    {
+      std::lock_guard<std::mutex> lock(ChatInterceptor::g_statsMutex);
+      auto itS = ChatInterceptor::g_playerStatsMap.find(p.first);
+      if (itS != ChatInterceptor::g_playerStatsMap.end()) {
+        for (const auto &rt : itS->second.rawTags) {
+          if (rt.find("URCHIN") == 0)
+            needsUrchin = false;
+          if (rt.find("SERAPH") == 0)
+            needsSeraph = false;
+        }
+      }
+    }
+
     if (activeS == "Urchin" || activeS == "Both") {
-      auto uT = Urchin::getPlayerTags(p.first);
-      if (uT && !uT->tags.empty()) {
-        std::string a = getAbbr(uT->tags[0].type);
-        tagStr += " " + (a.empty() ? "\xC2\xA7"
-                                     "4[U]"
-                                   : a);
-        for (const auto &t : uT->tags)
-          rTags.push_back("URCHIN:" + t.type);
+      if (needsUrchin) {
+        auto uT = Urchin::getPlayerTags(p.first);
+        rTags.push_back("URCHIN_CHECKED");
         foundAny = true;
+        if (uT && !uT->tags.empty()) {
+          std::string a = getAbbr(uT->tags[0].type);
+          tagStr += " " + (a.empty() ? "\xC2\xA7"
+                                       "4[U]"
+                                     : a);
+          for (const auto &t : uT->tags)
+            rTags.push_back("URCHIN:" + t.type);
+        }
       }
     }
     if ((activeS == "Seraph" || activeS == "Both") && !p.second.empty()) {
-      auto sT = Seraph::getPlayerTags(p.first, p.second);
-      if (sT && !sT->tags.empty()) {
-        std::string a = getAbbr(sT->tags[0].type);
-        tagStr += " " + (a.empty() ? "\xC2\xA7"
-                                     "4[S]"
-                                   : a);
-        for (const auto &t : sT->tags)
-          rTags.push_back("SERAPH:" + t.type);
+      if (needsSeraph) {
+        auto sT = Seraph::getPlayerTags(p.first, p.second);
+        rTags.push_back("SERAPH_CHECKED");
         foundAny = true;
+        if (sT && !sT->tags.empty()) {
+          std::string a = getAbbr(sT->tags[0].type);
+          tagStr += " " + (a.empty() ? "\xC2\xA7"
+                                       "4[S]"
+                                     : a);
+          for (const auto &t : sT->tags)
+            rTags.push_back("SERAPH:" + t.type);
+        }
       }
     }
 
@@ -2999,6 +3584,8 @@ static void syncTags() {
 }
 #pragma warning(pop)
 
+static void fetchWorker(std::string name, std::string forcedUuid);
+
 static void tailLogOnce() {
   if (!ensureLogOpen())
     return;
@@ -3023,6 +3610,153 @@ static void tailLogOnce() {
       continue;
     size_t p = line.find("[CHAT]");
     std::string chat = (p != std::string::npos) ? line.substr(p + 6) : line;
+
+    if (Config::isPreGameChatStatsEnabled()) {
+      if (g_inPreGameLobby) {
+        std::string cleanChat;
+        for (size_t i = 0; i < chat.length(); ++i) {
+          unsigned char c = (unsigned char)chat[i];
+          if (c == 0xC2 && i + 1 < chat.length() &&
+              (unsigned char)chat[i + 1] == 0xA7) {
+            i += 2;
+            continue;
+          }
+          if (c == 0xA7) {
+            i += 1;
+            continue;
+          }
+          cleanChat += (char)c;
+        }
+
+        ULONGLONG nowDbg = GetTickCount64();
+
+        if (Config::isDebugging()) {
+          static ULONGLONG lastParseCheck = 0;
+          if (nowDbg - lastParseCheck >
+              100) { // log frequently but with caution
+            bool isOVson = (cleanChat.find("[OVson]") != std::string::npos);
+            bool isTo = (cleanChat.find("To ") == 0);
+            bool isFrom = (cleanChat.find("From ") == 0);
+            if (isOVson || isTo || isFrom) {
+              ChatSDK::showClientMessage(
+                  ChatSDK::formatPrefix() + "\xC2\xA7" +
+                  "7[DEBUG] Skipped Line (is DM/Internal): " +
+                  cleanChat.substr(0, (std::min)((int)cleanChat.size(), 20)));
+            }
+          }
+        }
+        // another ignore check
+        if (cleanChat.find("[OVson]") == std::string::npos &&
+            cleanChat.find("To ") != 0 && cleanChat.find("From ") != 0) {
+          size_t firstColon = cleanChat.find(": ");
+          if (firstColon != std::string::npos && firstColon > 0) {
+            std::string prefix = cleanChat.substr(0, firstColon);
+
+            size_t pStart = prefix.find_first_not_of(' ');
+            size_t pEnd = prefix.find_last_not_of(' ');
+            if (pStart == std::string::npos)
+              continue;
+            prefix = prefix.substr(pStart, pEnd - pStart + 1);
+
+            std::string username;
+            size_t firstBracket = prefix.find('[');
+
+            if (firstBracket != std::string::npos) {
+              if (firstBracket > 0) {
+                continue;
+              }
+
+              size_t lastBracket = prefix.find_last_of(']');
+              if (lastBracket == std::string::npos)
+                continue;
+
+              username = prefix.substr(lastBracket + 1);
+              size_t uStart = username.find_first_not_of(' ');
+              if (uStart != std::string::npos) {
+                username = username.substr(uStart);
+              }
+
+              if (username.find(' ') != std::string::npos || username.empty()) {
+                continue;
+              }
+            } else {
+              if (prefix.find(' ') != std::string::npos) {
+                continue;
+              }
+              username = prefix;
+            }
+
+            bool valid = (username.length() >= 3 && username.length() <= 16);
+            for (char c : username) {
+              if (!isalnum((unsigned char)c) && c != '_') {
+                valid = false;
+                break;
+              }
+            }
+
+            static ULONGLONG lastParseDbg = 0;
+            if (Config::isDebugging() && (nowDbg - lastParseDbg > 1000)) {
+              ChatSDK::showClientMessage(
+                  ChatSDK::formatPrefix() + "\xC2\xA7" +
+                  "e[DEBUG] PreGame Chat Parsed. User: " + username +
+                  " Valid: " + (valid ? "Yes" : "No"));
+              lastParseDbg = nowDbg;
+            }
+
+            if (valid) {
+              if (g_chatPrintedPlayers.find(username) ==
+                  g_chatPrintedPlayers.end()) {
+                g_chatPrintedPlayers.insert(username);
+
+                if (std::find(g_manualPushedPlayers.begin(),
+                              g_manualPushedPlayers.end(),
+                              username) == g_manualPushedPlayers.end()) {
+                  g_manualPushedPlayers.push_back(username);
+                }
+                if (std::find(g_onlinePlayers.begin(), g_onlinePlayers.end(),
+                              username) == g_onlinePlayers.end()) {
+                  g_onlinePlayers.push_back(username);
+                }
+
+                g_forceChatOutputPlayers.insert(username);
+
+                {
+                  std::lock_guard<std::mutex> lockA(g_activeFetchesMutex);
+                  if (g_activeFetches.find(username) == g_activeFetches.end()) {
+                    g_activeFetches.insert(username);
+                    std::thread(fetchWorker, username, "").detach();
+                  }
+                }
+              } else {
+                static ULONGLONG lastAlreadyDbg = 0;
+                if (Config::isDebugging() && (nowDbg - lastAlreadyDbg > 2000)) {
+                  ChatSDK::showClientMessage(
+                      ChatSDK::formatPrefix() + "\xC2\xA7" +
+                      "7[DEBUG] Chat Processed Already: " + username);
+                  lastAlreadyDbg = nowDbg;
+                }
+              }
+            } else if (Config::isDebugging()) {
+              static ULONGLONG lastInvalidDbg = 0;
+              if (nowDbg - lastInvalidDbg > 3000) {
+                ChatSDK::showClientMessage(
+                    ChatSDK::formatPrefix() + "\xC2\xA7" +
+                    "c[DEBUG] Invalid Username Parsed: " + username);
+                lastInvalidDbg = nowDbg;
+              }
+            }
+          }
+        }
+      } else if (Config::isDebugging()) {
+        static ULONGLONG lastLobbyWarn = 0;
+        if (GetTickCount64() - lastLobbyWarn > 10000) {
+          ChatSDK::showClientMessage(
+              ChatSDK::formatPrefix() + "\xC2\xA7" +
+              "7[DEBUG] Chat skipped: g_inPreGameLobby is FALSE");
+          lastLobbyWarn = GetTickCount64();
+        }
+      }
+    }
 
     detectTeamsFromLine(chat);
     detectFinalKillsFromLine(chat);
@@ -3174,7 +3908,8 @@ static void fetchWorker(std::string name, std::string forcedUuid = "") {
     };
 
     if (activeS == "Urchin" || activeS == "Both") {
-      auto uT = Urchin::getPlayerTags(name);
+      auto uT = Urchin::getPlayerTags(name, true);
+      rTags.push_back("URCHIN_CHECKED");
       if (uT && !uT->tags.empty()) {
         std::string a = getAbbr(uT->tags[0].type);
         tagStr += " " + (a.empty() ? "\xC2\xA7"
@@ -3185,7 +3920,8 @@ static void fetchWorker(std::string name, std::string forcedUuid = "") {
       }
     }
     if ((activeS == "Seraph" || activeS == "Both") && !currentUuid.empty()) {
-      auto sT = Seraph::getPlayerTags(name, currentUuid);
+      auto sT = Seraph::getPlayerTags(name, currentUuid, true);
+      rTags.push_back("SERAPH_CHECKED");
       if (sT && !sT->tags.empty()) {
         std::string a = getAbbr(sT->tags[0].type);
         tagStr += " " + (a.empty() ? "\xC2\xA7"
@@ -3284,7 +4020,9 @@ static const int MAX_CONCURRENT_FETCHES = 15;
 
 static void queuePlayersForFetching() {
   ULONGLONG now = GetTickCount64();
-  if (!g_inHypixelGame || g_lobbyGraceTicks > 0)
+  if (!g_inHypixelGame && !g_inPreGameLobby)
+    return;
+  if (g_inHypixelGame && g_lobbyGraceTicks > 0)
     return;
   if (g_onlinePlayers.empty())
     return;
@@ -3346,6 +4084,15 @@ static void processPendingStats() {
   }
 
   if (found) {
+    bool forceOutput = false;
+    {
+      auto itForce = g_forceChatOutputPlayers.find(name);
+      if (itForce != g_forceChatOutputPlayers.end()) {
+        forceOutput = true;
+        g_forceChatOutputPlayers.erase(itForce);
+      }
+    }
+
     bool online = false;
     for (const auto &p : g_onlinePlayers) {
       if (p == name) {
@@ -3353,7 +4100,7 @@ static void processPendingStats() {
         break;
       }
     }
-    if (!online)
+    if (!online && !forceOutput)
       return;
 
     double fkdr =
@@ -3397,30 +4144,162 @@ static void processPendingStats() {
       msg += BedwarsStars::GetFormattedLevel(stats.bedwarsStar);
       msg += " ";
 
-      const char *tInit = teamInitial(team);
-      if (!team.empty()) {
-        msg +=
-            black + std::string("[") + tcol + tInit + black + std::string("] ");
-      }
+      if (forceOutput || g_inPreGameLobby) {
+        auto getRankColor = [](const std::string &col) {
+          if (col == "RED")
+            return "\xC2\xA7"
+                   "c";
+          if (col == "GOLD")
+            return "\xC2\xA7"
+                   "6";
+          if (col == "GREEN")
+            return "\xC2\xA7"
+                   "a";
+          if (col == "YELLOW")
+            return "\xC2\xA7"
+                   "e";
+          if (col == "LIGHT_PURPLE")
+            return "\xC2\xA7"
+                   "d";
+          if (col == "WHITE")
+            return "\xC2\xA7"
+                   "f";
+          if (col == "BLUE")
+            return "\xC2\xA7"
+                   "9";
+          if (col == "DARK_GREEN")
+            return "\xC2\xA7"
+                   "2";
+          if (col == "DARK_RED")
+            return "\xC2\xA7"
+                   "4";
+          if (col == "DARK_AQUA")
+            return "\xC2\xA7"
+                   "3";
+          if (col == "DARK_PURPLE")
+            return "\xC2\xA7"
+                   "5";
+          if (col == "DARK_GRAY")
+            return "\xC2\xA7"
+                   "8";
+          if (col == "BLACK")
+            return "\xC2\xA7"
+                   "0";
+          if (col == "DARK_BLUE")
+            return "\xC2\xA7"
+                   "1";
+          return "\xC2\xA7"
+                 "c";
+        };
 
-      const char *nameColor = (team == "Gray") ? "\xC2\xA7"
-                                                 "8"
-                                               : (team.empty() ? white : tcol);
-      msg += nameColor + name;
+        std::string rankDisplay = "\xC2\xA7"
+                                  "7";
+        if (!stats.prefix.empty()) {
+          rankDisplay = stats.prefix + " ";
+        } else if (!stats.rank.empty() && stats.rank != "NORMAL") {
+          if (stats.rank == "ADMIN")
+            rankDisplay = "\xC2\xA7"
+                          "c[ADMIN] ";
+          else if (stats.rank == "YOUTUBER")
+            rankDisplay = "\xC2\xA7"
+                          "c[\xC2\xA7"
+                          "fYOUTUBE\xC2\xA7"
+                          "c] ";
+          else if (stats.rank == "MOD")
+            rankDisplay = "\xC2\xA7"
+                          "2[MOD] ";
+          else if (stats.rank == "HELPER")
+            rankDisplay = "\xC2\xA7"
+                          "9[HELPER] ";
+          else
+            rankDisplay = "\xC2\xA7"
+                          "7[" +
+                          stats.rank + "] ";
+        } else if (stats.monthlyPackageRank == "SUPERSTAR") {
+          std::string pc = getRankColor(stats.rankPlusColor);
+          rankDisplay = "\xC2\xA7"
+                        "6[MVP" +
+                        pc +
+                        "++\xC2\xA7"
+                        "6] ";
+        } else if (stats.newPackageRank == "MVP_PLUS") {
+          std::string pc = getRankColor(stats.rankPlusColor);
+          rankDisplay = "\xC2\xA7"
+                        "b[MVP" +
+                        pc +
+                        "+\xC2\xA7"
+                        "b] ";
+        } else if (stats.newPackageRank == "MVP") {
+          rankDisplay = "\xC2\xA7"
+                        "b[MVP] ";
+        } else if (stats.newPackageRank == "VIP_PLUS") {
+          rankDisplay = "\xC2\xA7"
+                        "a[VIP\xC2\xA7"
+                        "6+\xC2\xA7"
+                        "a] ";
+        } else if (stats.newPackageRank == "VIP") {
+          rankDisplay = "\xC2\xA7"
+                        "a[VIP] ";
+        }
 
-      if (g_mode == 0) {
-        msg += std::string(" ") + black + "[" + white + "FKDR" + black + "] " +
-               colorForFkdr(fkdr) + fkdrSs.str();
-        msg += std::string(" ") + black + "[" + white + "FK" + black + "] " +
-               colorForFinalKills(stats.bedwarsFinalKills) +
-               std::to_string(stats.bedwarsFinalKills);
-        msg += std::string(" ") + black + "[" + white + "W" + black + "] " +
-               colorForWins(stats.bedwarsWins) +
-               std::to_string(stats.bedwarsWins);
-        msg += std::string(" ") + black + "[" + white + "WLR" + black + "] " +
-               colorForWlr(wlr) + wlrSs.str();
+        msg += rankDisplay + name;
+        if (!stats.tagsDisplay.empty()) {
+          msg += stats.tagsDisplay;
+        }
+
+        if (g_mode == 0) {
+          msg += std::string(" \xC2\xA7"
+                             "7[\xC2\xA7"
+                             "fFKDR\xC2\xA7"
+                             "7] ") +
+                 colorForFkdr(fkdr) + fkdrSs.str();
+          msg += std::string(" \xC2\xA7"
+                             "7[\xC2\xA7"
+                             "fFK\xC2\xA7"
+                             "7] ") +
+                 colorForFinalKills(stats.bedwarsFinalKills) +
+                 std::to_string(stats.bedwarsFinalKills);
+          msg += std::string(" \xC2\xA7"
+                             "7[\xC2\xA7"
+                             "fWins\xC2\xA7"
+                             "7] ") +
+                 colorForWins(stats.bedwarsWins) +
+                 std::to_string(stats.bedwarsWins);
+          msg += std::string(" \xC2\xA7"
+                             "7[\xC2\xA7"
+                             "fWLR\xC2\xA7"
+                             "7] ") +
+                 colorForWlr(wlr) + wlrSs.str();
+        } else {
+          msg += " STATS FOUND";
+        }
       } else {
-        msg += " STATS FOUND";
+        const char *tInit = teamInitial(team);
+        if (!team.empty()) {
+          msg += black + std::string("[") + tcol + tInit + black +
+                 std::string("] ");
+        }
+
+        const char *nameColor = (team == "Gray")
+                                    ? "\xC2\xA7"
+                                      "8"
+                                    : (team.empty() ? white : tcol);
+        msg += nameColor + name;
+
+        if (g_mode == 0) {
+          msg += std::string(" ") + black + "[" + white + "FKDR" + black +
+                 "] " + colorForFkdr(fkdr) + fkdrSs.str();
+          msg += std::string(" ") + black + "[" + white + "FK" + black + "] " +
+                 colorForFinalKills(stats.bedwarsFinalKills) +
+                 std::to_string(stats.bedwarsFinalKills);
+          msg += std::string(" ") + black + "[" + white + "W" + black + "] " +
+                 colorForWins(stats.bedwarsWins) +
+                 std::to_string(stats.bedwarsWins);
+          msg += std::string(" ") + black + "[" + white + "WLR" + black + "] " +
+                 colorForWlr(wlr) + wlrSs.str();
+        } else {
+          msg += " STATS FOUND";
+        }
       }
     }
 
@@ -3435,7 +4314,7 @@ static void processPendingStats() {
       ChatInterceptor::g_playerStatsMap[name] = stats;
     }
 
-    if (Config::getOverlayMode() == "chat") {
+    if (forceOutput || Config::getOverlayMode() == "chat") {
       ChatSDK::showClientMessage(ChatSDK::formatPrefix() + msg);
     }
 
@@ -3501,6 +4380,7 @@ void ChatInterceptor::poll() {
     tailLogOnce();
 
     updateTabListStats();
+    detectPreGameLobby();
 
     if (g_lastTeamScanTick == 0 ||
         (now - g_lastTeamScanTick) >=
@@ -3537,12 +4417,6 @@ void ChatInterceptor::poll() {
   }
 
   double startTime = TimeUtil::getTime();
-
-  SHORT enterState = GetAsyncKeyState(VK_RETURN);
-  static bool wasEnterDown = false;
-  bool isEnterDown = (enterState & 0x8000) != 0;
-  bool enterJustPressed = (!wasEnterDown && isEnterDown);
-  wasEnterDown = isEnterDown;
 
   jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
   if (!mcCls)
@@ -3589,160 +4463,6 @@ void ChatInterceptor::poll() {
     return;
   }
 
-  jclass screenCls = env->GetObjectClass(screen);
-  jclass clsCls = env->FindClass("java/lang/Class");
-  jmethodID mGetName =
-      env->GetMethodID(clsCls, "getName", "()Ljava/lang/String;");
-  jstring jClassName = (jstring)env->CallObjectMethod(screenCls, mGetName);
-  const char *classChars = env->GetStringUTFChars(jClassName, 0);
-  std::string currentClassName = classChars ? classChars : "unknown";
-  env->ReleaseStringUTFChars(jClassName, classChars);
-  env->DeleteLocalRef(jClassName);
-  env->DeleteLocalRef(clsCls);
-
-  static std::string lastScreen = "";
-  if (currentClassName != lastScreen && currentClassName != "unknown") {
-    lastScreen = currentClassName;
-  }
-
-  bool isChat = false;
-  jclass guiChatCls = lc->GetClass("net.minecraft.client.gui.GuiChat");
-  if (guiChatCls && env->IsInstanceOf(screen, guiChatCls))
-    isChat = true;
-  if (!isChat && (currentClassName.find("GuiChat") != std::string::npos ||
-                  currentClassName.find("awv") != std::string::npos))
-    isChat = true;
-
-  if (isChat) {
-    jfieldID f_input = lc->GetFieldID(screenCls, "inputField",
-                                      "Lnet/minecraft/client/gui/GuiTextField;",
-                                      "field_146415_a", "a", "Lavw;");
-    if (f_input) {
-      jobject input = env->GetObjectField(screen, f_input);
-      if (input) {
-        jclass tfCls = env->GetObjectClass(input);
-        jmethodID getText = lc->GetMethodID(
-            tfCls, "getText", "()Ljava/lang/String;", "func_146179_b", "b");
-
-        jstring jtxt = nullptr;
-        if (getText) {
-          jtxt = (jstring)env->CallObjectMethod(input, getText);
-          if (env->ExceptionCheck())
-            env->ExceptionClear();
-        }
-        if (jtxt) {
-          const char *utf = env->GetStringUTFChars(jtxt, 0);
-          std::string text = utf ? utf : "";
-          if (utf)
-            env->ReleaseStringUTFChars(jtxt, utf);
-
-          if (enterJustPressed && !text.empty()) {
-            size_t pos = 0;
-            while (pos < text.size()) {
-              unsigned char c = (unsigned char)text[pos];
-              if (c <= 32) {
-                pos++;
-                continue;
-              }
-              if (c == 0xA7) {
-                pos += 2;
-                continue;
-              }
-              if (c == 0xC2 && pos + 1 < text.size() &&
-                  (unsigned char)text[pos + 1] == 0xA7) {
-                pos += 3;
-                continue;
-              }
-              break;
-            }
-
-            if (pos < text.size() && text[pos] == '.' &&
-                Config::isCommandsEnabled()) {
-              std::string cmdText = text.substr(pos);
-
-              jmethodID mSetText =
-                  lc->GetMethodID(tfCls, "setText", "(Ljava/lang/String;)V",
-                                  "func_146180_a", "a");
-
-              if (mSetText) {
-                jstring empty = env->NewStringUTF("");
-                env->CallVoidMethod(input, mSetText, empty);
-                if (env->ExceptionCheck())
-                  env->ExceptionClear();
-                env->DeleteLocalRef(empty);
-              }
-
-              CommandRegistry::instance().tryDispatch(cmdText);
-
-              jmethodID mDisplay =
-                  lc->GetMethodID(mcCls, "displayGuiScreen",
-                                  "(Lnet/minecraft/client/gui/GuiScreen;)V",
-                                  "func_147108_a", "a", "(Laxu;)V");
-              if (mDisplay) {
-                env->CallVoidMethod(mcObj, mDisplay, nullptr);
-                if (env->ExceptionCheck())
-                  env->ExceptionClear();
-              }
-            } else if (pos < text.size() && text[pos] == '.' &&
-                       !Config::isCommandsEnabled()) {
-            } else if (Config::isChatBypasserEnabled()) {
-              std::string bypassed = ChatBypasser::process(text);
-
-              jmethodID setText =
-                  env->GetMethodID(tfCls, "setText", "(Ljava/lang/String;)V");
-              if (!setText) {
-                if (env->ExceptionCheck())
-                  env->ExceptionClear();
-                setText = env->GetMethodID(tfCls, "func_146180_a",
-                                           "(Ljava/lang/String;)V");
-              }
-              if (!setText) {
-                if (env->ExceptionCheck())
-                  env->ExceptionClear();
-                setText = env->GetMethodID(tfCls, "a", "(Ljava/lang/String;)V");
-              }
-              if (!setText) {
-                if (env->ExceptionCheck())
-                  env->ExceptionClear();
-              }
-
-              if (setText) {
-                jstring empty = env->NewStringUTF("");
-                env->CallVoidMethod(input, setText, empty);
-                env->DeleteLocalRef(empty);
-
-                ChatSDK::sendClientChat(bypassed);
-
-                jmethodID m_display =
-                    env->GetMethodID(mcCls, "displayGuiScreen",
-                                     "(Lnet/minecraft/client/gui/GuiScreen;)V");
-                if (!m_display) {
-                  if (env->ExceptionCheck())
-                    env->ExceptionClear();
-                  m_display = env->GetMethodID(
-                      mcCls, "func_147108_a",
-                      "(Lnet/minecraft/client/gui/GuiScreen;)V");
-                }
-                if (!m_display) {
-                  if (env->ExceptionCheck())
-                    env->ExceptionClear();
-                  m_display = env->GetMethodID(mcCls, "a", "(Laxu;)V");
-                }
-                if (m_display)
-                  env->CallVoidMethod(mcObj, m_display, nullptr);
-              }
-            }
-          }
-          if (jtxt)
-            env->DeleteLocalRef(jtxt);
-        }
-        env->DeleteLocalRef(tfCls);
-        env->DeleteLocalRef(input);
-      }
-    }
-    env->DeleteLocalRef(screenCls);
-  }
-
   env->DeleteLocalRef(mcObj);
   env->DeleteLocalRef(screen);
 
@@ -3772,6 +4492,7 @@ bool ChatInterceptor::shouldAlert(const std::string &name) {
   return true;
 }
 bool ChatInterceptor::isInHypixelGame() { return g_inHypixelGame; }
+bool ChatInterceptor::isInPreGameLobby() { return g_inPreGameLobby; }
 
 int ChatInterceptor::getGameMode() { return g_mode; }
 
@@ -3788,3 +4509,219 @@ int ChatInterceptor::getPendingStatsCount() {
 }
 float ChatInterceptor::getApiLatency() { return g_apiLatency; }
 float ChatInterceptor::getScanSpeed() { return g_scanSpeed; }
+
+bool ChatInterceptor::handleEnterKeyPress() {
+  JNIEnv *env = lc->getEnv();
+  if (!env)
+    return false;
+
+  jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
+  if (!mcCls)
+    return false;
+
+  jobject mcObj = lc->GetStaticObjectField(mcCls, "theMinecraft",
+                                           "Lnet/minecraft/client/Minecraft;",
+                                           "field_71432_P", "S", "Lave;");
+  if (!mcObj)
+    return false;
+
+  jobject screen = lc->GetObjectField(mcObj, "currentScreen",
+                                      "Lnet/minecraft/client/gui/GuiScreen;",
+                                      "field_71462_r", "m", "Laxu;");
+  if (!screen) {
+    env->DeleteLocalRef(mcObj);
+    return false;
+  }
+
+  bool isChat = false;
+  jclass guiChatCls = lc->GetClass("net.minecraft.client.gui.GuiChat");
+  if (guiChatCls && env->IsInstanceOf(screen, guiChatCls))
+    isChat = true;
+
+  if (!isChat) {
+    env->DeleteLocalRef(screen);
+    env->DeleteLocalRef(mcObj);
+    return false;
+  }
+
+  jclass screenCls = env->GetObjectClass(screen);
+  jfieldID f_input = lc->GetFieldID(screenCls, "inputField",
+                                    "Lnet/minecraft/client/gui/GuiTextField;",
+                                    "field_146415_a", "a", "Lavw;");
+  if (!f_input) {
+    env->DeleteLocalRef(screenCls);
+    env->DeleteLocalRef(screen);
+    env->DeleteLocalRef(mcObj);
+    return false;
+  }
+
+  jobject input = env->GetObjectField(screen, f_input);
+  if (!input) {
+    env->DeleteLocalRef(screenCls);
+    env->DeleteLocalRef(screen);
+    env->DeleteLocalRef(mcObj);
+    return false;
+  }
+
+  jclass tfCls = env->GetObjectClass(input);
+  jmethodID getText = lc->GetMethodID(tfCls, "getText", "()Ljava/lang/String;",
+                                      "func_146179_b", "b");
+  if (!getText) {
+    env->DeleteLocalRef(tfCls);
+    env->DeleteLocalRef(input);
+    env->DeleteLocalRef(screenCls);
+    env->DeleteLocalRef(screen);
+    env->DeleteLocalRef(mcObj);
+    return false;
+  }
+
+  jstring jtxt = (jstring)env->CallObjectMethod(input, getText);
+  if (!jtxt) {
+    env->DeleteLocalRef(tfCls);
+    env->DeleteLocalRef(input);
+    env->DeleteLocalRef(screenCls);
+    env->DeleteLocalRef(screen);
+    env->DeleteLocalRef(mcObj);
+    return false;
+  }
+
+  const char *utf = env->GetStringUTFChars(jtxt, 0);
+  std::string text = utf ? utf : "";
+  if (utf)
+    env->ReleaseStringUTFChars(jtxt, utf);
+
+  if (text.empty()) {
+    env->DeleteLocalRef(jtxt);
+    env->DeleteLocalRef(tfCls);
+    env->DeleteLocalRef(input);
+    env->DeleteLocalRef(screenCls);
+    env->DeleteLocalRef(screen);
+    env->DeleteLocalRef(mcObj);
+    return false;
+  }
+
+  size_t pos = 0;
+  while (pos < text.size()) {
+    unsigned char c = (unsigned char)text[pos];
+    if (c <= 32) {
+      pos++;
+      continue;
+    }
+    if (c == 0xA7) {
+      pos += 2;
+      continue;
+    }
+    break;
+  }
+
+  if (pos < text.size() && text[pos] == '.' && Config::isCommandsEnabled()) {
+    std::string cmdText = text.substr(pos);
+
+    jmethodID mSetText = lc->GetMethodID(
+        tfCls, "setText", "(Ljava/lang/String;)V", "func_146180_a", "a");
+    if (mSetText) {
+      jstring empty = env->NewStringUTF("");
+      env->CallVoidMethod(input, mSetText, empty);
+      env->DeleteLocalRef(empty);
+    }
+
+    CommandRegistry::instance().tryDispatch(cmdText);
+
+    jmethodID mDisplay = lc->GetMethodID(
+        mcCls, "displayGuiScreen", "(Lnet/minecraft/client/gui/GuiScreen;)V",
+        "func_147108_a", "a", "(Laxu;)V");
+    if (mDisplay)
+      env->CallVoidMethod(mcObj, mDisplay, nullptr);
+
+    env->DeleteLocalRef(jtxt);
+    env->DeleteLocalRef(tfCls);
+    env->DeleteLocalRef(input);
+    env->DeleteLocalRef(screenCls);
+    env->DeleteLocalRef(screen);
+    env->DeleteLocalRef(mcObj);
+    return true;
+  }
+
+  if (Config::isChatBypasserEnabled()) {
+    std::string textFromPos = text.substr(pos);
+    static const std::vector<std::pair<std::string, int>> bypassableCommands = {
+        {"/shout ", 1}, {"/ac ", 1}, {"/pc ", 1},  {"/msg ", 2},
+        {"/r ", 1},     {"/w ", 2},  {"/tell ", 2}};
+
+    bool handledAsBypass = false;
+    std::string bypassedText;
+
+    if (!textFromPos.empty() && textFromPos[0] == '/') {
+      for (const auto &cmdPair : bypassableCommands) {
+        if (textFromPos.size() >= cmdPair.first.size()) {
+          std::string lower = textFromPos.substr(0, cmdPair.first.size());
+          for (auto &ch : lower)
+            ch = (char)tolower((unsigned char)ch);
+
+          if (lower == cmdPair.first) {
+            size_t currentPos = 0;
+            for (int i = 0; i < cmdPair.second; ++i) {
+              currentPos = textFromPos.find_first_not_of(" ", currentPos);
+              if (currentPos == std::string::npos)
+                break;
+              currentPos = textFromPos.find_first_of(" ", currentPos);
+              if (currentPos == std::string::npos)
+                break;
+            }
+
+            std::string prefix =
+                text.substr(0, pos) + textFromPos.substr(0, currentPos);
+            std::string msgPart = (currentPos != std::string::npos)
+                                      ? textFromPos.substr(currentPos)
+                                      : "";
+            bypassedText = prefix + (Config::isSmartChatBypassEnabled()
+                                         ? ChatBypasser::smartProcess(msgPart)
+                                         : ChatBypasser::process(msgPart));
+            handledAsBypass = true;
+            break;
+          }
+        }
+      }
+    } else {
+      bypassedText = Config::isSmartChatBypassEnabled()
+                         ? ChatBypasser::smartProcess(text)
+                         : ChatBypasser::process(text);
+      handledAsBypass = true;
+    }
+
+    if (handledAsBypass) {
+      jmethodID mSetText = lc->GetMethodID(
+          tfCls, "setText", "(Ljava/lang/String;)V", "func_146180_a", "a");
+      if (mSetText) {
+        jstring empty = env->NewStringUTF("");
+        env->CallVoidMethod(input, mSetText, empty);
+        env->DeleteLocalRef(empty);
+
+        ChatSDK::sendClientChat(bypassedText);
+
+        jmethodID mDisplay =
+            lc->GetMethodID(mcCls, "displayGuiScreen",
+                            "(Lnet/minecraft/client/gui/GuiScreen;)V",
+                            "func_147108_a", "a", "(Laxu;)V");
+        if (mDisplay)
+          env->CallVoidMethod(mcObj, mDisplay, nullptr);
+
+        env->DeleteLocalRef(jtxt);
+        env->DeleteLocalRef(tfCls);
+        env->DeleteLocalRef(input);
+        env->DeleteLocalRef(screenCls);
+        env->DeleteLocalRef(screen);
+        env->DeleteLocalRef(mcObj);
+        return true;
+      }
+    }
+  }
+
+  env->DeleteLocalRef(jtxt);
+  env->DeleteLocalRef(tfCls);
+  env->DeleteLocalRef(input);
+  env->DeleteLocalRef(screenCls);
+  env->DeleteLocalRef(screen);
+  env->DeleteLocalRef(mcObj);
+  return false;
+}

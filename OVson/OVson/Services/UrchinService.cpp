@@ -10,7 +10,6 @@
 #include <mutex>
 #include <unordered_map>
 
-
 namespace Urchin {
 struct CachedTags {
   PlayerTags data;
@@ -111,8 +110,11 @@ static std::unordered_map<std::string, std::chrono::steady_clock::time_point>
     g_pendingFetches;
 static std::mutex g_pendingMutex;
 
-std::optional<PlayerTags> getPlayerTags(const std::string &username) {
+std::optional<PlayerTags> getPlayerTags(const std::string &username,
+                                        bool wait) {
   if (!Config::isTagsEnabled())
+    return std::nullopt;
+  if (ChatInterceptor::isInPreGameLobby())
     return std::nullopt;
   if (Config::getActiveTagService() != "Urchin" &&
       Config::getActiveTagService() != "Both")
@@ -133,6 +135,40 @@ std::optional<PlayerTags> getPlayerTags(const std::string &username) {
         return it->second.data;
       }
     }
+  }
+
+  if (wait) {
+    std::string url =
+        "https://urchin.ws/player/" + username + "?sources=MANUAL";
+    std::string apiKey = Config::getUrchinApiKey();
+    if (!apiKey.empty()) {
+      url += "&key=" + apiKey;
+    }
+
+    std::string body;
+    Logger::log(Config::DebugCategory::Urchin,
+                "=== Urchin Sync Fetching: %s ===", username.c_str());
+    bool ok = Http::get(url, body);
+
+    PlayerTags result;
+    if (ok && !body.empty() && body.find("\"error\"") == std::string::npos) {
+      findJsonString(body, "uuid", result.uuid);
+      size_t arrStart, arrEnd;
+      if (findJsonArray(body, "tags", arrStart, arrEnd)) {
+        std::string arrJson = body.substr(arrStart, arrEnd - arrStart);
+        result.tags = parseTags(arrJson);
+      }
+      {
+        std::lock_guard<std::mutex> lock(g_cacheMutex);
+        pruneCacheLocked();
+        g_cache[username] = {result, std::chrono::steady_clock::now()};
+      }
+      Logger::log(Config::DebugCategory::Urchin,
+                  ">>> Urchin Sync Success: %s Found %d tags <<<",
+                  username.c_str(), (int)result.tags.size());
+      return result;
+    }
+    return std::nullopt;
   }
 
   {
@@ -207,32 +243,6 @@ std::optional<PlayerTags> getPlayerTags(const std::string &username) {
                   ">>> Urchin Success: %s Found %d tags <<<", username.c_str(),
                   (int)result.tags.size());
 
-      if (!result.tags.empty() && ChatInterceptor::shouldAlert(username)) {
-        for (const auto &t : result.tags) {
-          std::string type = t.type;
-          for (auto &c : type)
-            c = toupper(c);
-          if (type.find("BLATANT") != std::string::npos ||
-              type.find("SNIPER") != std::string::npos ||
-              type.find("CHEATER") != std::string::npos) {
-            std::string alert = ChatSDK::formatPrefix() +
-                                "\xC2\xA7"
-                                "cALERT: \xC2\xA7"
-                                "f" +
-                                username +
-                                " is tagged as \xC2\xA7"
-                                "l" +
-                                t.type +
-                                "\xC2\xA7"
-                                "r!";
-            ChatSDK::showClientMessage(alert);
-            Render::NotificationManager::getInstance()->add(
-                "Urchin Alert", username + " is a " + t.type,
-                Render::NotificationType::Warning);
-            break;
-          }
-        }
-      }
     } else {
       if (Config::isGlobalDebugEnabled()) {
         Logger::log(Config::DebugCategory::Urchin,

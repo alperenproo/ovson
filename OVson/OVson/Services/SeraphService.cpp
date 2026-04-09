@@ -4,11 +4,11 @@
 #include "../Config/Config.h"
 #include "../Net/Http.h"
 #include "../Render/NotificationManager.h"
+#include "../Utils/Logger.h"
 #include "../Utils/ThreadTracker.h"
 #include <chrono>
 #include <mutex>
 #include <unordered_map>
-
 
 namespace Seraph {
 struct CachedTags {
@@ -64,7 +64,7 @@ static std::unordered_map<std::string, std::chrono::steady_clock::time_point>
 static std::mutex g_pendingMutex;
 
 std::optional<PlayerTags> getPlayerTags(const std::string &username,
-                                        const std::string &uuid) {
+                                        const std::string &uuid, bool wait) {
   if (!Config::isTagsEnabled())
     return std::nullopt;
   if (Config::getActiveTagService() != "Seraph" &&
@@ -85,6 +85,60 @@ std::optional<PlayerTags> getPlayerTags(const std::string &username,
       if (age < CACHE_EXPIRY_SECONDS)
         return it->second.data;
     }
+  }
+
+  if (wait) {
+    std::string url = "https://api.seraph.si/" + uuid + "/blacklist";
+    std::string apiKey = Config::getSeraphApiKey();
+    if (apiKey.empty())
+      return std::nullopt;
+
+    std::string body;
+    Logger::log(Config::DebugCategory::Seraph,
+                "=== Seraph Sync Fetching: %s ===", username.c_str());
+    bool ok = Http::get(url, body, "seraph-api-key", apiKey);
+
+    PlayerTags result;
+    result.uuid = uuid;
+
+    if (ok && !body.empty() &&
+        body.find("\"success\":true") != std::string::npos) {
+      size_t blacklistPos = body.find("\"blacklist\"");
+      if (blacklistPos != std::string::npos) {
+        std::string blacklistSection = body.substr(blacklistPos);
+        size_t endPos = blacklistSection.find("},");
+        if (endPos == std::string::npos)
+          endPos = blacklistSection.find("}");
+        if (endPos != std::string::npos) {
+          blacklistSection = blacklistSection.substr(0, endPos + 1);
+        }
+
+        if (blacklistSection.find("\"tagged\":true") != std::string::npos) {
+          std::string reportType, tooltip;
+          findJsonString(blacklistSection, "report_type", reportType);
+          findJsonString(blacklistSection, "tooltip", tooltip);
+
+          size_t parenPos = tooltip.rfind('(');
+          if (parenPos != std::string::npos &&
+              tooltip.find("by", parenPos) != std::string::npos) {
+            tooltip = tooltip.substr(0, parenPos);
+            while (!tooltip.empty() && isspace(tooltip.back()))
+              tooltip.pop_back();
+          }
+
+          if (reportType.empty())
+            reportType = "Seraph Blacklist";
+          result.tags.push_back({reportType, tooltip});
+        }
+      }
+      {
+        std::lock_guard<std::mutex> lock(g_cacheMutex);
+        pruneCacheLocked();
+        g_cache[uuid] = {result, std::chrono::steady_clock::now()};
+      }
+      return result;
+    }
+    return std::nullopt;
   }
 
   {
@@ -157,24 +211,6 @@ std::optional<PlayerTags> getPlayerTags(const std::string &username,
       std::lock_guard<std::mutex> lock(g_cacheMutex);
       pruneCacheLocked();
       g_cache[uuid] = {result, std::chrono::steady_clock::now()};
-    }
-
-    if (!result.tags.empty() && ChatInterceptor::shouldAlert(username)) {
-      std::string type = result.tags[0].type;
-      std::string alert = ChatSDK::formatPrefix() +
-                          "\xC2\xA7"
-                          "4SERAPH ALERT: \xC2\xA7"
-                          "f" +
-                          username +
-                          " is blacklisted: \xC2\xA7"
-                          "l" +
-                          type +
-                          "\xC2\xA7"
-                          "r!";
-      ChatSDK::showClientMessage(alert);
-      Render::NotificationManager::getInstance()->add(
-          "Seraph Alert", username + " is blacklisted (" + type + ")",
-          Render::NotificationType::Error);
     }
 
     {

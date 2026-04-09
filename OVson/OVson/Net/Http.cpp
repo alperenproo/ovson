@@ -1,9 +1,8 @@
+#define WIN32_LEAN_AND_MEAN
 #include "Http.h"
 #include <Windows.h>
 #include <mutex>
 #include <winhttp.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
 
 #pragma comment(lib, "winhttp.lib")
 
@@ -53,7 +52,7 @@ bool Http::get(const std::string &url, std::string &responseBody,
     std::lock_guard<std::mutex> lock(g_sessionMutex);
     if (!g_hSession) {
       g_hSession =
-          WinHttpOpen(L"OVson/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+          WinHttpOpen(L"OVson HTTP Client", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                       WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
       if (g_hSession) {
         DWORD connectTimeout = 5000;
@@ -160,7 +159,7 @@ bool Http::postJson(const std::string &url, const std::string &jsonBody,
     std::lock_guard<std::mutex> lock(g_sessionMutex);
     if (!g_hSession) {
       g_hSession =
-          WinHttpOpen(L"OVson/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+          WinHttpOpen(L"OVson HTTP Client", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                       WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
       if (g_hSession) {
         DWORD connectTimeout = 5000;

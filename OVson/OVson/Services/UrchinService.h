@@ -1,24 +1,26 @@
 #pragma once
-#include <string>
-#include <vector>
-#include <optional>
-#include <unordered_map>
-#include <mutex>
-#include <thread>
 #include <chrono>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+
 
 namespace Urchin {
-    struct Tag {
-        std::string type;        // e.g., "closet_cheater", "blatant_cheater"
-        std::string reason;
-    };
+struct Tag {
+  std::string type; // e.g., "closet_cheater", "blatant_cheater"
+  std::string reason;
+};
 
-    struct PlayerTags {
-        std::string uuid;
-        std::vector<Tag> tags;
-    };
+struct PlayerTags {
+  std::string uuid;
+  std::vector<Tag> tags;
+};
 
-    std::optional<PlayerTags> getPlayerTags(const std::string& username);
-    void clearCache();
-    bool hasAnyTags(const std::string& username);
-}
+std::optional<PlayerTags> getPlayerTags(const std::string &username,
+                                        bool wait = false);
+void clearCache();
+bool hasAnyTags(const std::string &username);
+} // namespace Urchin

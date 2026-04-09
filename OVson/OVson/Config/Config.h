@@ -22,6 +22,9 @@ void setAutoGGMessage(const std::string &msg);
 
 bool isTabEnabled();
 void setTabEnabled(bool enabled);
+
+bool isPreGameChatStatsEnabled();
+void setPreGameChatStatsEnabled(bool enabled);
 const std::string &getSortMode(); // General sort metric (Stars, FKDR, etc.)
 void setSortMode(const std::string &mode);
 
@@ -73,6 +76,9 @@ void setActiveTagService(const std::string &service);
 
 bool isChatBypasserEnabled();
 void setChatBypasserEnabled(bool enabled);
+
+bool isSmartChatBypassEnabled();
+void setSmartChatBypassEnabled(bool enabled);
 
 // overlay category visibility
 bool isShowStar();
@@ -127,6 +133,12 @@ float getTechX();
 void setTechX(float x);
 float getTechY();
 void setTechY(float y);
+
+// Team Stats Report
+bool isTeamReportEnabled();
+void setTeamReportEnabled(bool enabled);
+const std::string &getTeamReportChannel();
+void setTeamReportChannel(const std::string &channel);
 
 bool isForgeEnvironment();
 } // namespace Config

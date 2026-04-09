@@ -18,7 +18,7 @@ namespace Seraph {
         std::vector<Tag> tags;
     };
 
-    std::optional<PlayerTags> getPlayerTags(const std::string& username, const std::string& uuid);
+    std::optional<PlayerTags> getPlayerTags(const std::string& username, const std::string& uuid, bool wait = false);
 
     void clearCache();
 

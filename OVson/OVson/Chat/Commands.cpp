@@ -14,7 +14,9 @@
 #include <algorithm>
 #include <iomanip>
 #include <jni.h>
+#include <mutex>
 #include <sstream>
+#include <unordered_map>
 
 CommandRegistry &CommandRegistry::instance() {
   static CommandRegistry inst;
@@ -232,235 +234,237 @@ void cmd_stats(const std::string &args) {
     return;
   }
 
-  ChatSDK::showPrefixed("§7Fetching stats for §f" + playerName + "§7...");
-
-  auto uuidOpt = Hypixel::getUuidByName(playerName);
-  if (!uuidOpt.has_value()) {
-    ChatSDK::showPrefixed("§cPlayer not found: §f" + playerName);
-    return;
-  }
-
   std::string apiKey = Config::getApiKey();
   if (apiKey.empty()) {
     ChatSDK::showPrefixed("§cNo API key set. Use §f.api new <key>");
     return;
   }
 
-  auto statsOpt = Hypixel::getPlayerStats(apiKey, uuidOpt.value());
-  if (!statsOpt.has_value()) {
-    ChatSDK::showPrefixed("§cFailed to fetch stats for §f" + playerName);
-    return;
-  }
+  ChatSDK::showPrefixed("§7Fetching stats for §f" + playerName + "§7...");
 
-  Hypixel::PlayerStats stats = statsOpt.value();
-  std::string realName =
-      stats.displayName.empty() ? playerName : stats.displayName;
+  std::thread([playerName, apiKey]() {
+    auto uuidOpt = Hypixel::getUuidByName(playerName);
+    if (!uuidOpt.has_value()) {
+      ChatSDK::showPrefixed("§cPlayer not found: §f" + playerName);
+      return;
+    }
 
-  double fkdr =
-      (stats.bedwarsFinalDeaths == 0)
-          ? (double)stats.bedwarsFinalKills
-          : (double)stats.bedwarsFinalKills / stats.bedwarsFinalDeaths;
-  double wlr = (stats.bedwarsLosses == 0)
-                   ? (double)stats.bedwarsWins
-                   : (double)stats.bedwarsWins / stats.bedwarsLosses;
+    auto statsOpt = Hypixel::getPlayerStats(apiKey, uuidOpt.value());
+    if (!statsOpt.has_value()) {
+      ChatSDK::showPrefixed("§cFailed to fetch stats for §f" + playerName);
+      return;
+    }
 
-  auto colorFkdr = [](double val) -> std::string {
-    if (val < 1.0)
-      return "§7";
-    if (val < 2.0)
-      return "§f";
-    if (val < 4.0)
-      return "§6";
-    if (val < 5.0)
-      return "§b";
-    if (val < 10.0)
-      return "§d";
-    return "§c";
-  };
+    Hypixel::PlayerStats stats = statsOpt.value();
+    std::string realName =
+        stats.displayName.empty() ? playerName : stats.displayName;
 
-  auto colorWlr = [](double val) -> std::string {
-    if (val < 1.0)
-      return "§7";
-    if (val < 2.0)
-      return "§f";
-    if (val < 4.0)
-      return "§6";
-    if (val < 5.0)
-      return "§b";
-    if (val < 10.0)
-      return "§d";
-    return "§c";
-  };
+    double fkdr =
+        (stats.bedwarsFinalDeaths == 0)
+            ? (double)stats.bedwarsFinalKills
+            : (double)stats.bedwarsFinalKills / stats.bedwarsFinalDeaths;
+    double wlr = (stats.bedwarsLosses == 0)
+                     ? (double)stats.bedwarsWins
+                     : (double)stats.bedwarsWins / stats.bedwarsLosses;
 
-  auto colorKills = [](int fk) -> std::string {
-    if (fk < 1000)
-      return "§7";
-    if (fk < 2000)
-      return "§f";
-    if (fk < 4000)
-      return "§6";
-    if (fk < 5000)
-      return "§b";
-    if (fk < 10000)
-      return "§d";
-    return "§c";
-  };
-
-  auto colorWins = [](int w) -> std::string {
-    if (w < 500)
-      return "§7";
-    if (w < 1000)
-      return "§f";
-    if (w < 2000)
-      return "§6";
-    if (w < 4000)
-      return "§b";
-    if (w < 5000)
-      return "§d";
-    return "§c";
-  };
-
-  std::ostringstream fkdrSs, wlrSs;
-  fkdrSs << std::fixed << std::setprecision(2) << fkdr;
-  wlrSs << std::fixed << std::setprecision(2) << wlr;
-
-  std::string msg = ChatSDK::formatPrefix();
-  msg += BedwarsStars::GetFormattedLevel(stats.bedwarsStar) + " ";
-
-  auto getRankColor = [](const std::string &col) -> std::string {
-    if (col == "RED")
+    auto colorFkdr = [](double val) -> std::string {
+      if (val < 1.0)
+        return "§7";
+      if (val < 2.0)
+        return "§f";
+      if (val < 4.0)
+        return "§6";
+      if (val < 5.0)
+        return "§b";
+      if (val < 10.0)
+        return "§d";
       return "§c";
-    if (col == "GOLD")
-      return "§6";
-    if (col == "GREEN")
-      return "§a";
-    if (col == "YELLOW")
-      return "§e";
-    if (col == "LIGHT_PURPLE")
-      return "§d";
-    if (col == "WHITE")
-      return "§f";
-    if (col == "BLUE")
-      return "§9";
-    if (col == "DARK_GREEN")
-      return "§2";
-    if (col == "DARK_RED")
-      return "§4";
-    if (col == "DARK_AQUA")
-      return "§3";
-    if (col == "DARK_PURPLE")
-      return "§5";
-    if (col == "DARK_GRAY")
-      return "§8";
-    if (col == "BLACK")
-      return "§0";
-    if (col == "DARK_BLUE")
-      return "§1";
-    return "§c"; // default plus color
-  };
-
-  std::string rankDisplay = "§7"; // default gray name
-  if (!stats.prefix.empty()) {
-    rankDisplay = stats.prefix + " ";
-  } else if (!stats.rank.empty() && stats.rank != "NORMAL") {
-    if (stats.rank == "ADMIN")
-      rankDisplay = "§c[ADMIN] ";
-    else if (stats.rank == "YOUTUBER")
-      rankDisplay = "§c[§fYOUTUBE§c] ";
-    else if (stats.rank == "MOD")
-      rankDisplay = "§2[MOD] ";
-    else if (stats.rank == "HELPER")
-      rankDisplay = "§9[HELPER] ";
-    else
-      rankDisplay = "§7[" + stats.rank + "] ";
-  } else if (stats.monthlyPackageRank == "SUPERSTAR") {
-    std::string pc = getRankColor(stats.rankPlusColor);
-    rankDisplay = "§6[MVP" + pc + "++§6] ";
-  } else if (stats.newPackageRank == "MVP_PLUS") {
-    std::string pc = getRankColor(stats.rankPlusColor);
-    rankDisplay = "§b[MVP" + pc + "+§b] ";
-  } else if (stats.newPackageRank == "MVP") {
-    rankDisplay = "§b[MVP] ";
-  } else if (stats.newPackageRank == "VIP_PLUS") {
-    rankDisplay = "§a[VIP§6+§a] ";
-  } else if (stats.newPackageRank == "VIP") {
-    rankDisplay = "§a[VIP] ";
-  }
-
-  msg += rankDisplay + realName + " §7- ";
-
-  msg += "§7[§fFKDR§7] " + colorFkdr(fkdr) + fkdrSs.str() + " ";
-  msg += "§7[§fFK§7] " + colorKills(stats.bedwarsFinalKills) +
-         std::to_string(stats.bedwarsFinalKills) + " ";
-  msg += "§7[§fWins§7] " + colorWins(stats.bedwarsWins) +
-         std::to_string(stats.bedwarsWins) + " ";
-  msg += "§7[§fWLR§7] " + colorWlr(wlr) + wlrSs.str();
-
-  std::string tagsStr = "";
-  {
-    std::lock_guard<std::mutex> lock(ChatInterceptor::g_statsMutex);
-    auto it = ChatInterceptor::g_playerStatsMap.find(realName);
-    if (it == ChatInterceptor::g_playerStatsMap.end()) {
-      it = ChatInterceptor::g_playerStatsMap.find(playerName);
-    }
-
-    if (it != ChatInterceptor::g_playerStatsMap.end() &&
-        !it->second.tagsDisplay.empty()) {
-      tagsStr = it->second.tagsDisplay;
-    }
-  }
-
-  if (tagsStr.empty()) {
-    auto getAbbr = [](const std::string &raw) -> std::string {
-      std::string t = raw;
-      for (auto &c : t)
-        c = toupper(c);
-      if (t.find("BLATANT") != std::string::npos)
-        return "§4[BC]";
-      if (t.find("CLOSET") != std::string::npos)
-        return "§4[CC]";
-      if (t.find("CONFIRMED") != std::string::npos)
-        return "§5[C]";
-      if (t.find("CAUTION") != std::string::npos)
-        return "§e[!]";
-      if (t.find("SUSPICIOUS") != std::string::npos)
-        return "§6[?]";
-      if (t.find("SNIPER") != std::string::npos)
-        return "§6[S]";
-      return "";
     };
-    std::string activeS = Config::getActiveTagService();
-    if (activeS == "Urchin" || activeS == "Both") {
-      auto uT = Urchin::getPlayerTags(realName);
-      if (uT && !uT->tags.empty()) {
-        std::string abbr = getAbbr(uT->tags[0].type);
-        tagsStr += " " + (abbr.empty() ? "§4[U]" : abbr);
+
+    auto colorWlr = [](double val) -> std::string {
+      if (val < 1.0)
+        return "§7";
+      if (val < 2.0)
+        return "§f";
+      if (val < 4.0)
+        return "§6";
+      if (val < 5.0)
+        return "§b";
+      if (val < 10.0)
+        return "§d";
+      return "§c";
+    };
+
+    auto colorKills = [](int fk) -> std::string {
+      if (fk < 1000)
+        return "§7";
+      if (fk < 2000)
+        return "§f";
+      if (fk < 4000)
+        return "§6";
+      if (fk < 5000)
+        return "§b";
+      if (fk < 10000)
+        return "§d";
+      return "§c";
+    };
+
+    auto colorWins = [](int w) -> std::string {
+      if (w < 500)
+        return "§7";
+      if (w < 1000)
+        return "§f";
+      if (w < 2000)
+        return "§6";
+      if (w < 4000)
+        return "§b";
+      if (w < 5000)
+        return "§d";
+      return "§c";
+    };
+
+    std::ostringstream fkdrSs, wlrSs;
+    fkdrSs << std::fixed << std::setprecision(2) << fkdr;
+    wlrSs << std::fixed << std::setprecision(2) << wlr;
+
+    std::string msg = ChatSDK::formatPrefix();
+    msg += BedwarsStars::GetFormattedLevel(stats.bedwarsStar) + " ";
+
+    auto getRankColor = [](const std::string &col) -> std::string {
+      if (col == "RED")
+        return "§c";
+      if (col == "GOLD")
+        return "§6";
+      if (col == "GREEN")
+        return "§a";
+      if (col == "YELLOW")
+        return "§e";
+      if (col == "LIGHT_PURPLE")
+        return "§d";
+      if (col == "WHITE")
+        return "§f";
+      if (col == "BLUE")
+        return "§9";
+      if (col == "DARK_GREEN")
+        return "§2";
+      if (col == "DARK_RED")
+        return "§4";
+      if (col == "DARK_AQUA")
+        return "§3";
+      if (col == "DARK_PURPLE")
+        return "§5";
+      if (col == "DARK_GRAY")
+        return "§8";
+      if (col == "BLACK")
+        return "§0";
+      if (col == "DARK_BLUE")
+        return "§1";
+      return "§c"; // default plus color
+    };
+
+    std::string rankDisplay = "§7"; // default gray name
+    if (!stats.prefix.empty()) {
+      rankDisplay = stats.prefix + " ";
+    } else if (!stats.rank.empty() && stats.rank != "NORMAL") {
+      if (stats.rank == "ADMIN")
+        rankDisplay = "§c[ADMIN] ";
+      else if (stats.rank == "YOUTUBER")
+        rankDisplay = "§c[§fYOUTUBE§c] ";
+      else if (stats.rank == "MOD")
+        rankDisplay = "§2[MOD] ";
+      else if (stats.rank == "HELPER")
+        rankDisplay = "§9[HELPER] ";
+      else
+        rankDisplay = "§7[" + stats.rank + "] ";
+    } else if (stats.monthlyPackageRank == "SUPERSTAR") {
+      std::string pc = getRankColor(stats.rankPlusColor);
+      rankDisplay = "§6[MVP" + pc + "++§6] ";
+    } else if (stats.newPackageRank == "MVP_PLUS") {
+      std::string pc = getRankColor(stats.rankPlusColor);
+      rankDisplay = "§b[MVP" + pc + "+§b] ";
+    } else if (stats.newPackageRank == "MVP") {
+      rankDisplay = "§b[MVP] ";
+    } else if (stats.newPackageRank == "VIP_PLUS") {
+      rankDisplay = "§a[VIP§6+§a] ";
+    } else if (stats.newPackageRank == "VIP") {
+      rankDisplay = "§a[VIP] ";
+    }
+
+    msg += rankDisplay + realName + " §7- ";
+
+    msg += "§7[§fFKDR§7] " + colorFkdr(fkdr) + fkdrSs.str() + " ";
+    msg += "§7[§fFK§7] " + colorKills(stats.bedwarsFinalKills) +
+           std::to_string(stats.bedwarsFinalKills) + " ";
+    msg += "§7[§fWins§7] " + colorWins(stats.bedwarsWins) +
+           std::to_string(stats.bedwarsWins) + " ";
+    msg += "§7[§fWLR§7] " + colorWlr(wlr) + wlrSs.str();
+
+    std::string tagsStr = "";
+    {
+      std::lock_guard<std::mutex> lock(ChatInterceptor::g_statsMutex);
+      auto it = ChatInterceptor::g_playerStatsMap.find(realName);
+      if (it == ChatInterceptor::g_playerStatsMap.end()) {
+        it = ChatInterceptor::g_playerStatsMap.find(playerName);
+      }
+
+      if (it != ChatInterceptor::g_playerStatsMap.end() &&
+          !it->second.tagsDisplay.empty()) {
+        tagsStr = it->second.tagsDisplay;
       }
     }
-    if (activeS == "Seraph" || activeS == "Both") {
-      std::string uuid = stats.uuid;
-      if (uuid.empty()) {
-        auto uOpt = Hypixel::getUuidByName(realName);
-        if (uOpt)
-          uuid = *uOpt;
+
+    if (tagsStr.empty()) {
+      auto getAbbr = [](const std::string &raw) -> std::string {
+        std::string t = raw;
+        for (auto &c : t)
+          c = toupper(c);
+        if (t.find("BLATANT") != std::string::npos)
+          return "§4[BC]";
+        if (t.find("CLOSET") != std::string::npos)
+          return "§4[CC]";
+        if (t.find("CONFIRMED") != std::string::npos)
+          return "§5[C]";
+        if (t.find("CAUTION") != std::string::npos)
+          return "§e[!]";
+        if (t.find("SUSPICIOUS") != std::string::npos)
+          return "§6[?]";
+        if (t.find("SNIPER") != std::string::npos)
+          return "§6[S]";
+        return "";
+      };
+      std::string activeS = Config::getActiveTagService();
+      if (activeS == "Urchin" || activeS == "Both") {
+        auto uT = Urchin::getPlayerTags(realName, true);
+        if (uT && !uT->tags.empty()) {
+          std::string abbr = getAbbr(uT->tags[0].type);
+          tagsStr += " " + (abbr.empty() ? "§4[U]" : abbr);
+        }
       }
-      if (!uuid.empty()) {
-        auto sT = Seraph::getPlayerTags(realName, uuid);
-        if (sT && !sT->tags.empty()) {
-          std::string abbr = getAbbr(sT->tags[0].type);
-          tagsStr += " " + (abbr.empty() ? "§4[S]" : abbr);
+      if (activeS == "Seraph" || activeS == "Both") {
+        std::string uuid = stats.uuid;
+        if (uuid.empty()) {
+          auto uOpt = Hypixel::getUuidByName(realName);
+          if (uOpt)
+            uuid = *uOpt;
+        }
+        if (!uuid.empty()) {
+          auto sT = Seraph::getPlayerTags(realName, uuid, true);
+          if (sT && !sT->tags.empty()) {
+            std::string abbr = getAbbr(sT->tags[0].type);
+            tagsStr += " " + (abbr.empty() ? "§4[S]" : abbr);
+          }
         }
       }
     }
-  }
 
-  if (!tagsStr.empty()) {
-    while (!tagsStr.empty() && tagsStr[0] == ' ')
-      tagsStr.erase(0, 1);
-    msg += " §7[§fTags§7] §f" + tagsStr;
-  }
+    if (!tagsStr.empty()) {
+      while (!tagsStr.empty() && tagsStr[0] == ' ')
+        tagsStr.erase(0, 1);
+      msg += " §7[§fTags§7] §f" + tagsStr;
+    }
 
-  ChatSDK::showClientMessage(msg);
+    ChatSDK::showClientMessage(msg);
+  }).detach();
 }
 
 void cmd_clickgui(const std::string &args) {
@@ -826,6 +830,92 @@ void cmd_commands(const std::string &args) {
   }
 }
 
+void cmd_teamreport(const std::string &args) {
+  std::unordered_map<std::string, std::vector<Hypixel::PlayerStats>> teamGroups;
+  {
+    std::lock_guard<std::mutex> lock(ChatInterceptor::g_statsMutex);
+    for (const auto &pair : ChatInterceptor::g_playerStatsMap) {
+      const auto &st = pair.second;
+      std::string team = st.teamColor.empty() ? "Unknown" : st.teamColor;
+      teamGroups[team].push_back(st);
+    }
+  }
+
+  if (teamGroups.empty()) {
+    ChatSDK::showPrefixed("§cNo player stats available. Are you in a game?");
+    return;
+  }
+
+  std::string channel = Config::getTeamReportChannel();
+  if (!args.empty()) {
+    std::string argLower = args;
+    for (auto &c : argLower)
+      c = (char)tolower((unsigned char)c);
+    if (argLower == "pc" || argLower == "/pc")
+      channel = "/pc";
+    else if (argLower == "ac" || argLower == "/ac")
+      channel = "/ac";
+    else if (argLower == "shout" || argLower == "/shout")
+      channel = "/shout";
+  }
+
+  const char *S = "\xC2\xA7";
+  ChatSDK::showPrefixed(std::string("§aSending team report via §f") + channel +
+                        "§a...");
+
+  for (const auto &tg : teamGroups) {
+    const std::string &teamName = tg.first;
+    const auto &players = tg.second;
+
+    int totalFk = 0, totalFd = 0, totalWins = 0;
+    int count = (int)players.size();
+    for (const auto &p : players) {
+      totalFk += p.bedwarsFinalKills;
+      totalFd += p.bedwarsFinalDeaths;
+      totalWins += p.bedwarsWins;
+    }
+
+    float avgFkdr =
+        (totalFd > 0) ? (float)totalFk / (float)totalFd : (float)totalFk;
+    float avgWins = (count > 0) ? (float)totalWins / (float)count : 0.0f;
+    float avgFk = (count > 0) ? (float)totalFk / (float)count : 0.0f;
+
+    std::ostringstream oss;
+    oss << channel << " [" << teamName << "] "
+        << "FKDR: " << std::fixed << std::setprecision(2) << avgFkdr
+        << " | Wins: " << (int)avgWins << " | FK: " << (int)avgFk;
+
+    ChatSDK::sendClientChat(oss.str());
+    Sleep(600);
+  }
+}
+
+void cmd_play_eight_one(const std::string &args) {
+  (void)args;
+  ChatSDK::sendClientChat("/play bedwars_eight_one");
+}
+void cmd_play_eight_two(const std::string &args) {
+  (void)args;
+  ChatSDK::sendClientChat("/play bedwars_eight_two");
+}
+void cmd_play_four_three(const std::string &args) {
+  (void)args;
+  ChatSDK::sendClientChat("/play bedwars_four_three");
+}
+void cmd_play_four_four(const std::string &args) {
+  (void)args;
+  ChatSDK::sendClientChat("/play bedwars_four_four");
+}
+void cmd_play_four_four_rush(const std::string &args) {
+  (void)args;
+  ChatSDK::sendClientChat("/play bedwars_two_four");
+}
+
+void checkLobbyPatterns(const std::string &chatLine) {
+  // todo
+  (void)chatLine;
+}
+
 void RegisterDefaultCommands() {
   CommandRegistry::instance().registerCommand("echo", cmd_echo);
   CommandRegistry::instance().registerCommand("help", cmd_help);
@@ -843,4 +933,10 @@ void RegisterDefaultCommands() {
   CommandRegistry::instance().registerCommand("tech", cmd_tech);
   CommandRegistry::instance().registerCommand("reportspam", cmd_reportspam);
   CommandRegistry::instance().registerCommand("commands", cmd_commands);
+  CommandRegistry::instance().registerCommand("teamreport", cmd_teamreport);
+  CommandRegistry::instance().registerCommand("1s", cmd_play_eight_one);
+  CommandRegistry::instance().registerCommand("2s", cmd_play_eight_two);
+  CommandRegistry::instance().registerCommand("3s", cmd_play_four_three);
+  CommandRegistry::instance().registerCommand("4s", cmd_play_four_four);
+  CommandRegistry::instance().registerCommand("4v4", cmd_play_four_four_rush);
 }

@@ -10,8 +10,8 @@
 
 static std::string g_configPath;
 static std::string g_apiKey;
-static std::string g_overlayMode = "chat"; // default to chat mode
-static bool g_tabEnabled = false;
+static std::string g_overlayMode = "gui"; // default to gui mode
+static bool g_tabEnabled = true;
 static std::string g_tabDisplayMode = "fkdr";
 static bool g_tabSortDescending = true;
 static std::string g_sortMode = "Team";
@@ -45,6 +45,10 @@ static bool g_techEnabled = false;
 static float g_techX = 0.8f;
 static float g_techY = 0.02f;
 static bool g_commandsEnabled = true;
+static bool g_teamReportEnabled = false;
+static std::string g_teamReportChannel = "/pc";
+static bool g_preGameChatStatsEnabled = true;
+static bool g_smartChatBypassEnabled = false;
 static HMODULE g_hModule = nullptr;
 
 static bool g_debugGlobal = false;
@@ -159,8 +163,8 @@ bool Config::initialize(HMODULE self) {
   fopen_s(&f, g_configPath.c_str(), "r");
   if (!f) {
     g_apiKey.clear();
-    g_overlayMode = "chat";
-    g_tabEnabled = false;
+    g_overlayMode = "gui";
+    g_tabEnabled = true;
     g_tabDisplayMode = "fkdr";
     g_tabSortDescending = true;
     return save();
@@ -309,6 +313,18 @@ bool Config::initialize(HMODULE self) {
     g_techY = 0.02f;
   if (!parseJsonBool(all, "commandsEnabled", g_commandsEnabled))
     g_commandsEnabled = true;
+  if (!parseJsonBool(all, "teamReportEnabled", g_teamReportEnabled))
+    g_teamReportEnabled = false;
+  if (parseJsonLine(all, "teamReportChannel", val))
+    g_teamReportChannel = val;
+  else
+    g_teamReportChannel = "/pc";
+
+  if (!parseJsonBool(all, "preGameChatStatsEnabled", g_preGameChatStatsEnabled))
+    g_preGameChatStatsEnabled = true;
+
+  if (!parseJsonBool(all, "smartChatBypassEnabled", g_smartChatBypassEnabled))
+    g_smartChatBypassEnabled = false;
 
   return true;
 }
@@ -366,7 +382,11 @@ bool Config::save() {
       "  \"techEnabled\": %s,\n"
       "  \"techX\": %.4f,\n"
       "  \"techY\": %.4f,\n"
-      "  \"commandsEnabled\": %s\n"
+      "  \"commandsEnabled\": %s,\n"
+      "  \"teamReportEnabled\": %s,\n"
+      "  \"teamReportChannel\": \"%s\",\n"
+      "  \"preGameChatStatsEnabled\": %s,\n"
+      "  \"smartChatBypassEnabled\": %s\n"
       "}\n",
       g_apiKey.c_str(), g_overlayMode.c_str(), g_tabEnabled ? "true" : "false",
       g_debugging ? "true" : "false", g_bedDefenseEnabled ? "true" : "false",
@@ -389,7 +409,10 @@ bool Config::save() {
       g_showFkdr ? "true" : "false", g_showWins ? "true" : "false",
       g_showWlr ? "true" : "false", g_showWs ? "true" : "false",
       g_techEnabled ? "true" : "false", g_techX, g_techY,
-      g_commandsEnabled ? "true" : "false");
+      g_commandsEnabled ? "true" : "false",
+      g_teamReportEnabled ? "true" : "false", g_teamReportChannel.c_str(),
+      g_preGameChatStatsEnabled ? "true" : "false",
+      g_smartChatBypassEnabled ? "true" : "false");
   fclose(f);
   return true;
 }
@@ -645,6 +668,29 @@ void Config::setTechY(float y) {
 bool Config::isCommandsEnabled() { return g_commandsEnabled; }
 void Config::setCommandsEnabled(bool enabled) {
   g_commandsEnabled = enabled;
+  save();
+}
+
+bool Config::isTeamReportEnabled() { return g_teamReportEnabled; }
+void Config::setTeamReportEnabled(bool enabled) {
+  g_teamReportEnabled = enabled;
+  save();
+}
+const std::string &Config::getTeamReportChannel() { return g_teamReportChannel; }
+void Config::setTeamReportChannel(const std::string &channel) {
+  g_teamReportChannel = channel;
+  save();
+}
+
+bool Config::isPreGameChatStatsEnabled() { return g_preGameChatStatsEnabled; }
+void Config::setPreGameChatStatsEnabled(bool enabled) {
+  g_preGameChatStatsEnabled = enabled;
+  save();
+}
+
+bool Config::isSmartChatBypassEnabled() { return g_smartChatBypassEnabled; }
+void Config::setSmartChatBypassEnabled(bool enabled) {
+  g_smartChatBypassEnabled = enabled;
   save();
 }
 

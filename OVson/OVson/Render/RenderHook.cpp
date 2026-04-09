@@ -1,6 +1,7 @@
-#include <windows.h>
 #include "RenderHook.h"
+#include "../Chat/ChatInterceptor.h"
 #include "../Config/Config.h"
+#include "../Logic/BedDefense/BedDefenseManager.h"
 #include "../Utils/Logger.h"
 #include "../Utils/ReplaySpammer.h"
 #include "../Utils/SensitivityFix.h"
@@ -9,19 +10,17 @@
 #include "NotificationManager.h"
 #include "StatsOverlay.h"
 #include "TechOverlay.h"
-#include "../Logic/BedDefense/BedDefenseManager.h"
 #include <fstream>
 #include <functional>
 #include <gl/GL.h>
 #include <mutex>
-
+#include <windows.h>
 
 #include "../Utils/Timer.h"
 #include <algorithm>
 #include <functional>
 #include <mutex>
 #include <queue>
-
 
 static std::ofstream g_debugLog;
 static bool g_hookInstalled = false;
@@ -226,6 +225,13 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT uMsg, WPARAM wParam,
     }
   }
 
+  if (uMsg == WM_KEYDOWN && wParam == VK_RETURN) {
+    if (ChatInterceptor::handleEnterKeyPress()) {
+      g_threadsInHook--;
+      return 0;
+    }
+  }
+
   LRESULT res = CallWindowProc(originalWndProc, hwnd, uMsg, wParam, lParam);
   g_threadsInHook--;
   return res;
@@ -319,7 +325,7 @@ BOOL WINAPI hookedSwapBuffers(HDC hdc) {
   }
 
   BedDefense::BedDefenseManager::getInstance()->tick();
-  
+
   Utils::ReplaySpammer::getInstance().tick();
 
   {

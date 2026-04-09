@@ -2,10 +2,10 @@
 #include <functional>
 
 namespace RenderHook {
-	bool install();
-	void uninstall();
-	void poll();
+bool install();
+void uninstall();
+void poll();
 
-    void enqueueTask(std::function<void()> task);
-    float getDelta();
-}
+void enqueueTask(std::function<void()> task);
+float getDelta();
+} // namespace RenderHook

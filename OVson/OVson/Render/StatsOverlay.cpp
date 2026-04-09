@@ -19,7 +19,6 @@
 #include <string>
 #include <vector>
 
-
 static std::ofstream g_overlayDebugLog;
 
 static void writeOverlayLog(const char *msg) {
@@ -444,8 +443,14 @@ void StatsOverlay::render(void *hdcPtr) {
 
   std::vector<std::pair<std::string, Hypixel::PlayerStats>> statsData;
   {
+    bool activeMatch = ChatInterceptor::isInHypixelGame() &&
+                       !ChatInterceptor::isInPreGameLobby();
     std::lock_guard<std::mutex> lock(ChatInterceptor::g_statsMutex);
     for (const auto &pair : ChatInterceptor::g_playerStatsMap) {
+      // If we are in an active game, only show players who have a team
+      // assigned.
+      if (activeMatch && pair.second.teamColor.empty())
+        continue;
       statsData.push_back(pair);
     }
   }
@@ -779,7 +784,7 @@ void StatsOverlay::render(void *hdcPtr) {
               std::string t = type;
               for (auto &cc : t)
                 cc = toupper(cc);
-              if (t.find("Confirmed") != std::string::npos)
+              if (t.find("CONFIRMED") != std::string::npos)
                 c = colorFromRGB(211, 0, 148);
               drawTag(type, c);
             }

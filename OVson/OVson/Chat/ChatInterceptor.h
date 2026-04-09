@@ -9,6 +9,7 @@ namespace ChatInterceptor {
 	void initialize();
 	void poll();
 	void shutdown();
+    bool handleEnterKeyPress();
 
 	// 0 = bedwars, 1 = skywars, 2 = duels
 	void setMode(int mode);
@@ -20,6 +21,7 @@ namespace ChatInterceptor {
     bool isInGame(const std::string& name);
     bool shouldAlert(const std::string& name);
     bool isInHypixelGame();
+    bool isInPreGameLobby();
     int getGameMode();
     void clearAllCaches();
     extern float g_jniLatency;

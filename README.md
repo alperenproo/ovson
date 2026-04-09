@@ -1,15 +1,27 @@
-# Features
+# OVson
 
+## Features
 - Automatically gets players in your game and fetches stats (real fast)
 - Command Interception: Enable/disable client commands
+- Lobby Pre-Game Stat Checker (auto stats when someone chats)
+- Smart Chat Bypasser (does not break commands)
+- Quick Queue commands
+- Multiple tag detection (Seraph / Urchin)
+- GUI, Tab and Search stats
+- Bedplates detection
+- Replay report spammer
+- Debug system
+
+---
 
 ## Usage
-
 - Inject `ovson.dll` into Minecraft yourself  
 **or**  
-- Run `OVsonLoader.exe` when Minecraft is fully loaded
-- You DON'T need to download both of the files
-- If you're stuck with chat stats do .ovmode gui
+- Run `OVsonLoader.exe` when Minecraft is fully loaded  
+- You DON'T need to download both files  
+- If you're stuck with chat stats do `.ovmode gui`
+
+---
 
 ## Toggle Key
 - Default: `Insert`
@@ -17,15 +29,34 @@
 
 ---
 
-## Tab Stats
-- Sortable (**ascending / descending**)
-- Mode changeable  
+# Lobby Pre-Game Stat Checker
+- Automatically detects players chatting in lobby
+- Instantly fetches their Bedwars stats
+- Sends stats directly to chat
+- Works in pre-game phase
+
+### Preview
+![Lobby Pre Game Stats](https://nigga.tr/pre_game_stats.png)
+
+---
+
+# Chat Bypasser
+- Smart keyword-based bypass
+- Commands are no longer broken
+- Automatic handling
+- Safer chat sending
+
+---
+
+# Tab Stats
+- Sortable (ascending / descending)
+- Mode changeable
 - Sort by: `Team` · `Stars` · `FK` · `FKDR` · `Wins` · `WLR` · `WS`
 
 ### Multiple Tags
-- Supports displaying multiple tags at once (Seraph / Urchin)  
-- Fully toggleable/selectable in Tab  
-- Works together with stats display  
+- Supports displaying multiple tags at once (Seraph / Urchin)
+- Fully toggleable/selectable in Tab
+- Works together with stats display
 
 ### Previews
 **FKDR Sort (FK Mode)**  
@@ -39,9 +70,9 @@
 
 ---
 
-## GUI Stats
+# GUI Stats
 - Auto remove
-- Sortable (**ascending / descending**)
+- Sortable (ascending / descending)
 - Toggleable columns
 - Sort by: `Team` · `Stars` · `FK` · `FKDR` · `Wins` · `WLR` · `WS`
 
@@ -57,7 +88,7 @@
 
 ---
 
-## GUI Player Search
+# GUI Player Search
 - Player stats support
 - Urchin / Seraph tag detection
 
@@ -66,7 +97,7 @@
 
 ---
 
-## Click GUI
+# Click GUI
 - Toggleable
 - Clean layout
 - Customizable
@@ -76,35 +107,38 @@
 
 ---
 
-## Tags
+# Tags
 - Seraph & Urchin support
-- Can be displayed on **Tab** and **GUI**
+- Can be displayed on Tab, GUI and `.stats`
 - Fully toggleable / selectable
 - Notifies when a tagged player is in your game
 
 ---
 
-## Bedplates
+# Bedplates
 - Works on Lunar and Badlion
 - Currently disabled on Forge
 - Needs improvements (WIP)
 
-## Chat Bypasser
-- Basic implementation
-- Currently breaks commands (will be fixed)
+---
 
-## Replay Report Spammer
+# Replay Report Spammer
 - Functional but slow
 - Optimization planned
 
-## Debug
+---
+
+# Debug
 - Toggleable master debug switch
 - Debug sections available
 - Structure is temporary (will be cleaned up soon)
 
-## Command Interception
+---
+
+# Command Interception
 - Enable/disable client commands
-- Useful to prevent accidental execution or enforce specific behavior
+- Prevent accidental execution
+- Enforce custom behavior
 
 ---
 
@@ -115,9 +149,14 @@ All commands use the `.` prefix in-game.
 - `.api <key>` — Save your Hypixel API key  
 - `.stats <player>` — Show Bedwars stats for a player  
 
-### Preview
-![Stats Command Preview](https://nigga.tr/stats_command.png)
+### Quick Queue
+- `.1s` — Solo queue  
+- `.2s` — Doubles queue  
+- `.3s` — 3v3v3v3 queue  
+- `.4s` — 4v4v4v4 queue  
+- `.4v4` — 4v4 queue  
 
+### Other Commands
 - `.tab <setting>` — Configure tab list  
 - `.clearcache` — Clear cached player stats  
 - `.clickgui <on|off>` — Toggle ClickGUI  
@@ -133,27 +172,27 @@ All commands use the `.` prefix in-game.
 
 ---
 
-## Work In Progress
+# Work In Progress
 - Colors will be reworked
-- General UI improvements planned
 - Some modules still experimental
-- Tags will be shown on `.stats` command
 - Tab stats will be fully reworked
+- Changeable command prefix
 
 ---
 
-## Known Issues
-- On game start, the first second may cause lag due to rapid stat fetching  
-- Threading is currently optimized for speed; this can make stats load very fast initially  
-- Solutions for smoother initial performance are being worked on
+# Known Issues
+- Threading is optimized for speed, which may cause initial burst
+- Smoother loading improvements planned
 
 ---
 
-## Supported Clients
+# Supported Clients
 - Lunar — Tested  
 - Badlion — Beta  
 - Forge — Beta  
-- Vanilla — Beta
+- Vanilla — Beta  
 
-## Special Thanks
+---
+
+# Special Thanks
 - pree

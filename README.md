@@ -1,6 +1,7 @@
 # OVson
 
 ## Features
+- Api keyless stat fetching
 - Automatically gets players in your game and fetches stats (real fast)
 - Command Interception: Enable/disable client commands
 - Lobby Pre-Game Stat Checker (auto stats when someone chats)
@@ -176,19 +177,19 @@ All commands use the `.` prefix in-game.
 - Colors will be reworked
 - Some modules still experimental
 - Tab stats will be fully reworked
-- Changeable command prefix
 
 ---
 
 # Known Issues
 - Threading is optimized for speed, which may cause initial burst
 - Smoother loading improvements planned
+- Breaks Vape's antibot
 
 ---
 
 # Supported Clients
 - Lunar — Tested  
-- Badlion — Beta  
+- Badlion — Tested  
 - Forge — Beta  
 - Vanilla — Beta  
 

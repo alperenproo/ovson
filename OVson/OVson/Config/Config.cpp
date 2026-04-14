@@ -49,6 +49,8 @@ static bool g_teamReportEnabled = false;
 static std::string g_teamReportChannel = "/pc";
 static bool g_preGameChatStatsEnabled = true;
 static bool g_smartChatBypassEnabled = false;
+static bool g_keylessMode = false;
+static std::string g_commandPrefix = ".";
 static HMODULE g_hModule = nullptr;
 
 static bool g_debugGlobal = false;
@@ -323,8 +325,18 @@ bool Config::initialize(HMODULE self) {
   if (!parseJsonBool(all, "preGameChatStatsEnabled", g_preGameChatStatsEnabled))
     g_preGameChatStatsEnabled = true;
 
+  if (!parseJsonBool(all, "keylessMode", g_keylessMode)) {
+    // Default to keyless if no API key is specified
+    g_keylessMode = g_apiKey.empty();
+  }
+
   if (!parseJsonBool(all, "smartChatBypassEnabled", g_smartChatBypassEnabled))
     g_smartChatBypassEnabled = false;
+
+  if (parseJsonLine(all, "commandPrefix", val))
+    g_commandPrefix = val;
+  else
+    g_commandPrefix = ".";
 
   return true;
 }
@@ -386,7 +398,9 @@ bool Config::save() {
       "  \"teamReportEnabled\": %s,\n"
       "  \"teamReportChannel\": \"%s\",\n"
       "  \"preGameChatStatsEnabled\": %s,\n"
-      "  \"smartChatBypassEnabled\": %s\n"
+      "  \"smartChatBypassEnabled\": %s,\n"
+      "  \"keylessMode\": %s,\n"
+      "  \"commandPrefix\": \"%s\"\n"
       "}\n",
       g_apiKey.c_str(), g_overlayMode.c_str(), g_tabEnabled ? "true" : "false",
       g_debugging ? "true" : "false", g_bedDefenseEnabled ? "true" : "false",
@@ -412,7 +426,9 @@ bool Config::save() {
       g_commandsEnabled ? "true" : "false",
       g_teamReportEnabled ? "true" : "false", g_teamReportChannel.c_str(),
       g_preGameChatStatsEnabled ? "true" : "false",
-      g_smartChatBypassEnabled ? "true" : "false");
+      g_smartChatBypassEnabled ? "true" : "false",
+      g_keylessMode ? "true" : "false",
+      g_commandPrefix.c_str());
   fclose(f);
   return true;
 }
@@ -421,6 +437,12 @@ const std::string &Config::getApiKey() { return g_apiKey; }
 
 void Config::setApiKey(const std::string &key) {
   g_apiKey = key;
+  save();
+}
+
+bool Config::isKeylessModeEnabled() { return g_keylessMode; }
+void Config::setKeylessModeEnabled(bool enabled) {
+  g_keylessMode = enabled;
   save();
 }
 
@@ -691,6 +713,12 @@ void Config::setPreGameChatStatsEnabled(bool enabled) {
 bool Config::isSmartChatBypassEnabled() { return g_smartChatBypassEnabled; }
 void Config::setSmartChatBypassEnabled(bool enabled) {
   g_smartChatBypassEnabled = enabled;
+  save();
+}
+
+const std::string &Config::getCommandPrefix() { return g_commandPrefix; }
+void Config::setCommandPrefix(const std::string &prefix) {
+  g_commandPrefix = prefix;
   save();
 }
 

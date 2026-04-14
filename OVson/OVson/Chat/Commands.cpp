@@ -29,9 +29,13 @@ void CommandRegistry::registerCommand(const std::string &name,
 }
 
 bool CommandRegistry::tryDispatch(const std::string &message) {
-  if (message.empty() || message[0] != '.')
+  const std::string &prefix = Config::getCommandPrefix();
+  if (message.empty() || message.substr(0, prefix.length()) != prefix)
     return false;
-  std::string rest = message.substr(1);
+  if (message.length() >= prefix.length() * 2 &&
+      message.substr(prefix.length(), prefix.length()) == prefix)
+    return false;
+  std::string rest = message.substr(prefix.length());
   std::istringstream iss(rest);
   std::string cmd;
   iss >> cmd;
@@ -42,7 +46,7 @@ bool CommandRegistry::tryDispatch(const std::string &message) {
 
   auto it = nameToHandler.find(cmd);
   if (it == nameToHandler.end()) {
-    ChatSDK::showPrefixed(std::string("§cUnknown command: §f.") + cmd);
+    ChatSDK::showPrefixed(std::string("§cUnknown command: §f") + prefix + cmd);
     return true;
   }
   try {
@@ -71,7 +75,7 @@ void cmd_help(const std::string &args) {
   CommandRegistry::instance().forEachCommand([&](const std::string &name) {
     if (!list.empty())
       list += ", ";
-    list += "." + name;
+    list += Config::getCommandPrefix() + name;
   });
   if (list.empty())
     list = "(no commands)";
@@ -92,7 +96,8 @@ void cmd_api(const std::string &args) {
   }
   const std::string &key = Config::getApiKey();
   if (key.empty())
-    ChatSDK::showPrefixed("No API key set. Use .api new <key>");
+    ChatSDK::showPrefixed("No API key set. Use " + Config::getCommandPrefix() +
+                          "api new <key>");
   else
     ChatSDK::showPrefixed(std::string("API KEY: §f") + key);
 }
@@ -116,7 +121,8 @@ void cmd_mode(const std::string &args) {
     ChatSDK::showPrefixed("mode: duels");
     return;
   }
-  ChatSDK::showPrefixed("usage: .mode bedwars|skywars|duels");
+  ChatSDK::showPrefixed("usage: " + Config::getCommandPrefix() +
+                        "mode bedwars|skywars|duels");
 }
 void cmd_ovmode(const std::string &args) {
   std::string a = args;
@@ -139,7 +145,19 @@ void cmd_ovmode(const std::string &args) {
     ChatSDK::showPrefixed("§aOverlay mode: §fInvisible");
     return;
   }
-  ChatSDK::showPrefixed("§cusage: §f.ovmode gui|chat|invisible");
+  ChatSDK::showPrefixed("§cusage: §f" + Config::getCommandPrefix() +
+                        "ovmode gui|chat|invisible");
+}
+
+void cmd_noapikey(const std::string &args) {
+  (void)args;
+  bool current = Config::isKeylessModeEnabled();
+  Config::setKeylessModeEnabled(!current);
+  if (Config::isKeylessModeEnabled()) {
+    ChatSDK::showPrefixed("§aKeyless Mode (Abyss) ENABLED.");
+  } else {
+    ChatSDK::showPrefixed("§cKeyless Mode (Abyss) DISABLED. Using API Key.");
+  }
 }
 
 void cmd_tab(const std::string &args) {
@@ -193,13 +211,18 @@ void cmd_tab(const std::string &args) {
       Config::setTabSortDescending(true);
       ChatSDK::showPrefixed("§aSort Order: §fDescending");
     } else {
-      ChatSDK::showPrefixed("§cusage: §f.tab order asc|desc");
+      ChatSDK::showPrefixed("§cusage: §f" + Config::getCommandPrefix() +
+                            "tab order asc|desc");
     }
     return;
   }
 
-  ChatSDK::showPrefixed("§7Usage: §f.tab on|off§7, §f.tab display <metric>§7, "
-                        "§f.tab sort <metric>§7, §f.tab order asc|desc");
+  ChatSDK::showPrefixed("§7Usage: §f" + Config::getCommandPrefix() +
+                        "tab on|off§7, §f" + Config::getCommandPrefix() +
+                        "tab display <metric>§7, "
+                        "§f" +
+                        Config::getCommandPrefix() + "tab sort <metric>§7, §f" +
+                        Config::getCommandPrefix() + "tab order asc|desc");
 }
 
 void cmd_debugging(const std::string &args) {
@@ -219,7 +242,8 @@ void cmd_debugging(const std::string &args) {
     ChatSDK::showPrefixed("§cDebugging: §fDisabled");
     return;
   }
-  ChatSDK::showPrefixed("§cusage: §f.debugging on|off");
+  ChatSDK::showPrefixed("§cusage: §f" + Config::getCommandPrefix() +
+                        "debugging on|off");
 }
 
 void cmd_stats(const std::string &args) {
@@ -230,13 +254,15 @@ void cmd_stats(const std::string &args) {
     playerName.pop_back();
 
   if (playerName.empty()) {
-    ChatSDK::showPrefixed("§cusage: §f.stats <player>");
+    ChatSDK::showPrefixed("§cusage: §f" + Config::getCommandPrefix() +
+                          "stats <player>");
     return;
   }
 
   std::string apiKey = Config::getApiKey();
   if (apiKey.empty()) {
-    ChatSDK::showPrefixed("§cNo API key set. Use §f.api new <key>");
+    ChatSDK::showPrefixed("§cNo API key set. Use §f" +
+                          Config::getCommandPrefix() + "api new <key>");
     return;
   }
 
@@ -484,7 +510,8 @@ void cmd_clickgui(const std::string &args) {
                           " will open overlay)");
     return;
   }
-  ChatSDK::showPrefixed("usage: .clickgui on|off");
+  ChatSDK::showPrefixed("usage: " + Config::getCommandPrefix() +
+                        "clickgui on|off");
 }
 
 void cmd_tech(const std::string &args) {
@@ -551,7 +578,9 @@ void cmd_bedplates(const std::string &args) {
     bool current = Config::isBedDefenseEnabled();
     ChatSDK::showPrefixed(std::string("§7Bed Defense: ") +
                           (current ? "§aON" : "§cOFF"));
-    ChatSDK::showPrefixed("§7Usage: §f.bedplates on§7 or §f.bedplates off");
+    ChatSDK::showPrefixed("§7Usage: §f" + Config::getCommandPrefix() +
+                          "bedplates on§7 or §f" + Config::getCommandPrefix() +
+                          "bedplates off");
   }
 }
 
@@ -934,6 +963,7 @@ void RegisterDefaultCommands() {
   CommandRegistry::instance().registerCommand("reportspam", cmd_reportspam);
   CommandRegistry::instance().registerCommand("commands", cmd_commands);
   CommandRegistry::instance().registerCommand("teamreport", cmd_teamreport);
+  CommandRegistry::instance().registerCommand("noapikey", cmd_noapikey);
   CommandRegistry::instance().registerCommand("1s", cmd_play_eight_one);
   CommandRegistry::instance().registerCommand("2s", cmd_play_eight_two);
   CommandRegistry::instance().registerCommand("3s", cmd_play_four_three);

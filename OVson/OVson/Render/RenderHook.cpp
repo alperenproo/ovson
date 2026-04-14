@@ -12,9 +12,9 @@
 #include "TechOverlay.h"
 #include <fstream>
 #include <functional>
+#include <windows.h>
 #include <gl/GL.h>
 #include <mutex>
-#include <windows.h>
 
 #include "../Utils/Timer.h"
 #include <algorithm>

@@ -10,6 +10,9 @@ bool save();
 const std::string &getApiKey();
 void setApiKey(const std::string &key);
 
+bool isKeylessModeEnabled();
+void setKeylessModeEnabled(bool enabled);
+
 // overlay mode: "gui", "chat", "invisible"
 const std::string &getOverlayMode();
 void setOverlayMode(const std::string &mode);
@@ -139,6 +142,9 @@ bool isTeamReportEnabled();
 void setTeamReportEnabled(bool enabled);
 const std::string &getTeamReportChannel();
 void setTeamReportChannel(const std::string &channel);
+
+const std::string &getCommandPrefix();
+void setCommandPrefix(const std::string &prefix);
 
 bool isForgeEnvironment();
 } // namespace Config

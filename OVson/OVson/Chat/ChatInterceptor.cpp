@@ -5,6 +5,7 @@
 #include "../Logic/AutoGG.h"
 #include "../Logic/BedDefense/BedDefenseManager.h"
 #include "../Render/NotificationManager.h"
+#include "../Services/AbyssService.h"
 #include "../Services/DiscordManager.h"
 #include "../Services/Hypixel.h"
 #include "../Services/SeraphService.h"
@@ -2769,22 +2770,31 @@ static void detectPreGameLobby() {
   if (!s_teamRes) {
     jclass sbCls = g_jCache.sbCls;
     if (sbCls) {
-      const char *names[] = {"getPlayersTeam", "func_96509_i", "h", nullptr};
+      const char *names[] = {"getPlayersTeam", "func_96509_i", "h", "i",
+                             nullptr};
       const char *sigs[] = {
           "(Ljava/lang/String;)Lnet/minecraft/scoreboard/ScorePlayerTeam;",
-          "(Ljava/lang/String;)Lauq;", nullptr};
+          "(Ljava/lang/String;)Laul;", "(Ljava/lang/String;)Lauq;", nullptr};
       for (int s = 0; sigs[s] && !s_m_getPlayersTeam; s++) {
         for (int n = 0; names[n] && !s_m_getPlayersTeam; n++) {
           s_m_getPlayersTeam = env->GetMethodID(sbCls, names[n], sigs[s]);
           if (env->ExceptionCheck()) {
             env->ExceptionClear();
             s_m_getPlayersTeam = nullptr;
+          } else {
+            Logger::info("Resolved getPlayersTeam with %s %s", names[n],
+                         sigs[s]);
           }
         }
       }
     }
 
     jclass ptCls = lc->GetClass("net.minecraft.scoreboard.ScorePlayerTeam");
+    if (!ptCls) {
+      ptCls = env->FindClass("aul");
+      if (env->ExceptionCheck())
+        env->ExceptionClear();
+    }
     if (!ptCls) {
       ptCls = env->FindClass("auq");
       if (env->ExceptionCheck())
@@ -3797,7 +3807,9 @@ static void fetchWorker(std::string name, std::string forcedUuid = "") {
   }
 
   const std::string apiKey = Config::getApiKey();
-  if (apiKey.empty())
+  const bool keyless = Config::isKeylessModeEnabled();
+
+  if (apiKey.empty() && !keyless)
     return;
 
   bool cacheFound = false;
@@ -3832,7 +3844,29 @@ static void fetchWorker(std::string name, std::string forcedUuid = "") {
         forcedUuid.empty() ? Hypixel::getUuidByName(name)
                            : std::optional<std::string>(forcedUuid);
     if (uuid) {
-      auto statsOpt = Hypixel::getPlayerStats(apiKey, *uuid);
+      uuidToF = *uuid;
+      std::optional<Hypixel::PlayerStats> statsOpt;
+
+      if (keyless) {
+        static std::atomic<int> abyssFailCount{0};
+        static ULONGLONG lastAbyssSuggest = 0;
+
+        statsOpt = AbyssService::getPlayerStats(*uuid);
+
+        if (!statsOpt) {
+          int fails = ++abyssFailCount;
+          if (fails >= 5 &&
+              (GetTickCount64() - lastAbyssSuggest > 300000)) { // every 5 mins
+            ChatSDK::showPrefixed(
+                "§cAbyss API is failing. §eSuggestion: Use a personal Hypixel "
+                "API key (.api new <key>) for better reliability.");
+            lastAbyssSuggest = GetTickCount64();
+            abyssFailCount = 0;
+          }
+        }
+      } else {
+        statsOpt = Hypixel::getPlayerStats(apiKey, *uuid);
+      }
 
       double apiEnd = TimeUtil::getTime();
       float lastApiLat = (float)(apiEnd - apiStart) * 1000.0f;
@@ -4345,19 +4379,31 @@ static void processPendingStats() {
           }
         } else if (tag.find("SERAPH:") == 0) {
           std::string type = tag.substr(7);
-          ChatSDK::showClientMessage(ChatSDK::formatPrefix() +
-                                     "\xC2\xA7"
-                                     "4SERAPH ALERT: \xC2\xA7"
-                                     "f" +
-                                     name +
-                                     " is blacklisted: \xC2\xA7"
-                                     "l" +
-                                     type +
-                                     "\xC2\xA7"
-                                     "r!");
-          Render::NotificationManager::getInstance()->add(
-              "Seraph Alert", name + " is blacklisted (" + type + ")",
-              Render::NotificationType::Error);
+          std::string msg = ChatSDK::formatPrefix() + "\xC2\xA7" +
+                            "4SERAPH ALERT: \xC2\xA7" + "f" + name +
+                            " is blacklisted: \xC2\xA7" + "l" + type +
+                            "\xC2\xA7" + "r!";
+
+          if (name == "alperenyancar") {
+            msg +=
+                " \xC2\xA7"
+                "fThis player has been tagged as a sniper during overlay "
+                "debugging "
+                "due to Seraph mod Zifro's massive ego, terrible gameplay, and "
+                "retardedness. Seraph admins and mods are corrupt and abuse "
+                "their "
+                "power.";
+
+            Render::NotificationManager::getInstance()->add(
+                "Seraph Alert", "Player tagged by a corrupt Seraph mod",
+                Render::NotificationType::Error);
+          } else {
+            Render::NotificationManager::getInstance()->add(
+                "Seraph Alert", name + " is blacklisted (" + type + ")",
+                Render::NotificationType::Error);
+          }
+
+          ChatSDK::showClientMessage(msg);
         }
       }
     }
@@ -4533,21 +4579,18 @@ bool ChatInterceptor::handleEnterKeyPress() {
     return false;
   }
 
-  bool isChat = false;
-  jclass guiChatCls = lc->GetClass("net.minecraft.client.gui.GuiChat");
-  if (guiChatCls && env->IsInstanceOf(screen, guiChatCls))
-    isChat = true;
-
-  if (!isChat) {
-    env->DeleteLocalRef(screen);
-    env->DeleteLocalRef(mcObj);
-    return false;
-  }
-
   jclass screenCls = env->GetObjectClass(screen);
   jfieldID f_input = lc->GetFieldID(screenCls, "inputField",
                                     "Lnet/minecraft/client/gui/GuiTextField;",
                                     "field_146415_a", "a", "Lavw;");
+  if (!f_input) {
+    // try fallback signature search
+    f_input = lc->FindFieldBySignature(
+        screenCls, "Lnet/minecraft/client/gui/GuiTextField;");
+    if (!f_input)
+      f_input = lc->FindFieldBySignature(screenCls, "Lavw;");
+  }
+
   if (!f_input) {
     env->DeleteLocalRef(screenCls);
     env->DeleteLocalRef(screen);
@@ -4614,7 +4657,15 @@ bool ChatInterceptor::handleEnterKeyPress() {
     break;
   }
 
-  if (pos < text.size() && text[pos] == '.' && Config::isCommandsEnabled()) {
+  const std::string &cp = ::Config::getCommandPrefix();
+  bool isCommandPrefix = (!cp.empty() && text.substr(pos, cp.length()) == cp);
+
+  if (isCommandPrefix && pos + cp.length() < text.size() &&
+      text.substr(pos + cp.length(), cp.length()) == cp) {
+    isCommandPrefix = false;
+  }
+
+  if (pos < text.size() && isCommandPrefix && Config::isCommandsEnabled()) {
     std::string cmdText = text.substr(pos);
 
     jmethodID mSetText = lc->GetMethodID(

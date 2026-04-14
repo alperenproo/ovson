@@ -7,7 +7,6 @@
 #include <unordered_map>
 #include <vector>
 
-
 namespace Urchin {
 struct Tag {
   std::string type; // e.g., "closet_cheater", "blatant_cheater"

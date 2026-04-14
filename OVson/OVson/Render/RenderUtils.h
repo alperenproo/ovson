@@ -1,8 +1,8 @@
 #pragma once
+#include <windows.h>
+#include <gl/GL.h>
 #include <cmath>
 #include <cstdint>
-#include <gl/GL.h>
-#include <windows.h>
 
 
 namespace RenderUtils {

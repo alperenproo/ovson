@@ -162,9 +162,9 @@ void render(void *hdc, int screenWidth, int screenHeight) {
 
   float width = 140;
   float height = (float)lines.size() * 12 + 8;
-
-  RenderUtils::drawRect(x, y, width, height, 0xAA0F172A);
-  RenderUtils::drawRect(x, y, width, 1.5f, 0xFF6366F1);
+  // really unnecessary
+  // RenderUtils::drawRect(x, y, width, height, 0xAA0F172A);
+  // RenderUtils::drawRect(x, y, width, 1.5f, 0xFF6366F1);
 
   glEnable(GL_TEXTURE_2D);
   glColor4f(1.0f, 1.0f, 1.0f, 1.0f);

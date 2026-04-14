@@ -6,6 +6,7 @@
 #include "RenderUtils.h"
 #include <algorithm>
 #include <cmath>
+#include <Windows.h>
 #include <gl/GL.h>
 
 

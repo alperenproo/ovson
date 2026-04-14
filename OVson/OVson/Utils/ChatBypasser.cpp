@@ -30,19 +30,22 @@ std::string ChatBypasser::process(const std::string &input) {
 }
 
 std::string ChatBypasser::smartProcess(const std::string &input) {
+  // more words for e sexters
   static const std::vector<std::string> blacklist = {
-      "ez",   "kkk",  "nigga",  "retard", "fuck",   "hoe",  "whore",
-      "rape", "porn", "faggot", "kys",    "nigger", "bitch", "niga", "niger"};
+      "ez",    "kkk",    "nigga", "retard", "fuck",    "hoe",  "whore", "rape",
+      "porn",  "faggot", "kys",   "nigger", "bitch",   "niga", "niger", "gay",
+      "horny", "cum",    "cums",  "pussy",  "pussies", "cock", "cocks", "dick",
+      "slut",  "ass",    "boob",  "tits",   "anal"};
 
-  auto normalize = [](const std::string& s) {
-      std::string res;
-      for (char c : s) {
-          char cl = (char)std::tolower((unsigned char)c);
-          if (res.empty() || cl != res.back()) {
-              res += cl;
-          }
+  auto normalize = [](const std::string &s) {
+    std::string res;
+    for (char c : s) {
+      char cl = (char)std::tolower((unsigned char)c);
+      if (res.empty() || cl != res.back()) {
+        res += cl;
       }
-      return res;
+    }
+    return res;
   };
 
   std::string result;
@@ -59,11 +62,10 @@ std::string ChatBypasser::smartProcess(const std::string &input) {
 
       for (const auto &bl : blacklist) {
         std::string normalizedBL = normalize(bl);
-        // Short words like "ez", "kys", or normalized "kkk" ("k") require more precise matching
         if (normalizedBL.length() <= 2) {
           if (normalizedWord == normalizedBL) {
-              shouldBypass = true;
-              break;
+            shouldBypass = true;
+            break;
           }
         } else if (normalizedWord.find(normalizedBL) != std::string::npos) {
           shouldBypass = true;
@@ -73,9 +75,9 @@ std::string ChatBypasser::smartProcess(const std::string &input) {
 
       if (shouldBypass) {
         if (lower.find("kkk") != std::string::npos) {
-            result += (word[0] == 'K') ? "KK.K" : "kk.k";
+          result += (word[0] == 'K') ? "KK.K" : "kk.k";
         } else {
-            result += process(word);
+          result += process(word);
         }
       } else {
         result += word;

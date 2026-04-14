@@ -13,6 +13,7 @@
 #include "NotificationManager.h"
 #include "RenderUtils.h"
 #include "StatsOverlay.h"
+#include <Windows.h>
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -49,6 +50,8 @@ static bool s_typingApiKey = false;
 static bool s_typingAutoGG = false;
 static bool s_typingUrchinKey = false;
 static bool s_typingSeraphKey = false;
+static bool s_typingPrefix = false;
+static std::string s_prefixInput = ".";
 static float s_scrollOffset = 0.0f;
 static float s_targetScroll = 0.0f;
 static bool s_isDropdownOpen = false;
@@ -304,12 +307,15 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                              ? &s_apiKeyInput
                              : (s_typingAutoGG
                                     ? &s_autoGGInput
-                                    : (s_typingUrchinKey ? &s_urchinKeyInput
-                                                         : &s_seraphKeyInput)));
+                                    : (s_typingUrchinKey
+                                           ? &s_urchinKeyInput
+                                           : (s_typingSeraphKey
+                                                  ? &s_seraphKeyInput
+                                                  : &s_prefixInput))));
               int cap =
                   (s_typingAutoGG || s_typingUrchinKey || s_typingSeraphKey)
                       ? 100
-                      : 48;
+                      : (s_typingPrefix ? 1 : 48);
               if (target->length() + filtered.length() < cap) {
                 *target += filtered;
                 NotificationManager::getInstance()->add(
@@ -331,17 +337,21 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
   if (msg == WM_CHAR) {
     char c = (char)wParam;
     if (s_typingSearch || s_typingApiKey || s_typingAutoGG ||
-        s_typingUrchinKey || s_typingSeraphKey) {
+        s_typingUrchinKey || s_typingSeraphKey || s_typingPrefix) {
       std::string *target =
           s_typingSearch
               ? &s_playerSearch
-              : (s_typingApiKey ? &s_apiKeyInput
-                                : (s_typingAutoGG ? &s_autoGGInput
-                                                  : (s_typingUrchinKey
-                                                         ? &s_urchinKeyInput
-                                                         : &s_seraphKeyInput)));
-      int cap =
-          (s_typingAutoGG || s_typingUrchinKey || s_typingSeraphKey) ? 100 : 48;
+              : (s_typingApiKey
+                     ? &s_apiKeyInput
+                     : (s_typingAutoGG
+                            ? &s_autoGGInput
+                            : (s_typingUrchinKey
+                                   ? &s_urchinKeyInput
+                                   : (s_typingSeraphKey ? &s_seraphKeyInput
+                                                        : &s_prefixInput))));
+      int cap = (s_typingAutoGG || s_typingUrchinKey || s_typingSeraphKey)
+                    ? 100
+                    : (s_typingPrefix ? 1 : 48);
       if (c == 8) {
         if (!target->empty())
           target->pop_back();
@@ -410,6 +420,12 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
           NotificationManager::getInstance()->add("Seraph", "API Key Saved",
                                                   NotificationType::Success);
           s_typingSeraphKey = false;
+        }
+        if (s_typingPrefix) {
+          Config::setCommandPrefix(s_prefixInput);
+          NotificationManager::getInstance()->add("Settings", "Prefix Updated",
+                                                  NotificationType::Success);
+          s_typingPrefix = false;
         }
       } else if (c >= 32 && c <= 126) {
         if (target->length() < cap)
@@ -854,7 +870,7 @@ void ClickGUI::render(HDC hdc) {
           bx, cy - 5, 50, 25, 4.0f,
           sel ? THEME_NAVY : (hov ? 0xFF323236 : THEME_CARD), alpha);
       glEnable(GL_TEXTURE_2D);
-      g_guiFont.drawString(bx + 5, cy + 2, sModes[i],
+      g_guiFont.drawString(bx + 5, cy - 2, sModes[i],
                            applyAlpha(sel ? 0xFFFFFFFF : 0xFF808085, alpha),
                            0.45f);
       if (clickEvent && hov) {
@@ -882,7 +898,7 @@ void ClickGUI::render(HDC hdc) {
           sel ? THEME_NAVY : (hov ? 0xFF323236 : THEME_CARD), alpha);
       glEnable(GL_TEXTURE_2D);
       g_guiFont.drawString(
-          dbx + (strlen(dModes[i]) > 3 ? 2 : 10), cy + 2, dModes[i],
+          dbx + (strlen(dModes[i]) > 3 ? 2 : 10), cy - 2, dModes[i],
           applyAlpha(sel ? 0xFFFFFFFF : 0xFF808085, alpha), 0.4f);
       if (clickEvent && hov) {
         Config::setTabDisplayMode(dModes[i]);
@@ -920,7 +936,7 @@ void ClickGUI::render(HDC hdc) {
                                      0xFF808085, alpha);
       glEnable(GL_TEXTURE_2D);
 
-      g_guiFont.drawString(dropX + 10, cy + 10, currentOrder,
+      g_guiFont.drawString(dropX + 10, cy + 6, currentOrder,
                            applyAlpha(0xFFFFFFFF, alpha), 0.45f);
       g_guiFont.drawString(dropX + dropW - 18, cy + 10,
                            s_isSortOrderDropdownOpen ? "-" : "+",
@@ -946,7 +962,7 @@ void ClickGUI::render(HDC hdc) {
           glEnable(GL_TEXTURE_2D);
 
           g_guiFont.drawString(
-              dropX + 15, itemY + 10, orders[i],
+              dropX + 15, itemY + 12, orders[i],
               applyAlpha(currentOrder == orders[i] ? 0xFFFFFFFF : 0xFFA0A0A5,
                          alpha * s_sortOrderDropdownAnim),
               0.45f);
@@ -995,7 +1011,7 @@ void ClickGUI::render(HDC hdc) {
       glEnable(GL_TEXTURE_2D);
 
       g_guiFont.drawString(
-          tx + 12, cy + cardH / 2.0f - 6.0f, toggles[i].name,
+          tx + 12, cy + cardH / 2.0f - 9.0f, toggles[i].name,
           applyAlpha(toggles[i].enabled ? 0xFFFFFFFF : 0xFF808085, alpha),
           0.45f);
 
@@ -1328,7 +1344,7 @@ void ClickGUI::render(HDC hdc) {
                                      THEME_NAVY, alpha);
       glEnable(GL_TEXTURE_2D);
 
-      g_guiFont.drawString(cx + 10, cy + 10, currentService,
+      g_guiFont.drawString(cx + 10, cy + 6, currentService,
                            applyAlpha(0xFFFFFFFF, alpha));
       g_guiFont.drawString(cx + dropW - 20, cy + 10,
                            s_isTagsDropdownOpen ? "-" : "+",
@@ -1353,7 +1369,7 @@ void ClickGUI::render(HDC hdc) {
                                   alpha * s_tagsDropdownAnim);
           glEnable(GL_TEXTURE_2D);
 
-          g_guiFont.drawString(cx + 15, itemY + 10, services[i],
+          g_guiFont.drawString(cx + 15, itemY + 8, services[i],
                                applyAlpha(currentService == services[i]
                                               ? 0xFFFFFFFF
                                               : 0xFFA0A0A5,
@@ -1371,6 +1387,32 @@ void ClickGUI::render(HDC hdc) {
       }
       cy += 50;
 
+      g_guiFont.drawString(cx, cy, "Command Prefix",
+                           applyAlpha(0xFFA0A0A5, alpha));
+      cy += 20;
+      RenderUtils::drawRect(cx, cy, 100, 35, THEME_CARD, 0.6f * alpha);
+      if (s_typingPrefix)
+        RenderUtils::drawRect(cx, cy, 2, 35, THEME_NAVY, alpha);
+
+      std::string dispPrefix =
+          s_typingPrefix ? s_prefixInput : Config::getCommandPrefix();
+      if (s_typingPrefix && (GetTickCount64() / 500) % 2 == 0)
+        dispPrefix += "|";
+
+      g_guiFont.drawString(cx + 10, cy + 8, dispPrefix,
+                           applyAlpha(0xFFFFFFFF, alpha));
+
+      if (clickEvent && isHovered(mx, my, cx, cy, 100, 35)) {
+        s_typingPrefix = true;
+        s_typingSeraphKey = s_typingUrchinKey = s_typingSearch =
+            s_typingApiKey = s_typingAutoGG = false;
+        s_prefixInput = Config::getCommandPrefix();
+      } else if (clickEvent && s_typingPrefix) {
+        Config::setCommandPrefix(s_prefixInput);
+        s_typingPrefix = false;
+      }
+      cy += 50;
+
       g_guiFont.drawString(cx, cy, "Urchin API Key",
                            applyAlpha(0xFFA0A0A5, alpha));
       cy += 20;
@@ -1384,7 +1426,7 @@ void ClickGUI::render(HDC hdc) {
                                                    : "********************");
       if (s_typingUrchinKey && (GetTickCount64() / 500) % 2 == 0)
         dispUrchinKey += "|";
-      g_guiFont.drawString(cx + 10, cy + 10, dispUrchinKey,
+      g_guiFont.drawString(cx + 10, cy + 8, dispUrchinKey,
                            applyAlpha(0xFFFFFFFF, alpha));
       if (clickEvent && isHovered(mx, my, cx, cy, 350, 35)) {
         s_typingUrchinKey = true;
@@ -1410,7 +1452,7 @@ void ClickGUI::render(HDC hdc) {
                                                    : "********************");
       if (s_typingSeraphKey && (GetTickCount64() / 500) % 2 == 0)
         dispSeraphKey += "|";
-      g_guiFont.drawString(cx + 10, cy + 10, dispSeraphKey,
+      g_guiFont.drawString(cx + 10, cy + 8, dispSeraphKey,
                            applyAlpha(0xFFFFFFFF, alpha));
       if (clickEvent && isHovered(mx, my, cx, cy, 350, 35)) {
         s_typingSeraphKey = true;
@@ -1536,14 +1578,21 @@ void ClickGUI::render(HDC hdc) {
   } else if (s_activeTab == 3) {
     g_guiFont.drawString(cx, cy, "Configuration",
                          applyAlpha(0xFFFFFFFF, alpha));
-    cy += 40;
+    cy += 55;
 
     g_guiFont.drawString(cx, cy, "Hypixel API Key",
                          applyAlpha(0xFFA0A0A5, alpha));
-    cy += 20;
-    RenderUtils::drawRect(cx, cy, 350, 35, THEME_CARD, 0.6f * alpha);
+    cy += 25;
+    float keyW = g_w - 210;
+    float keyX = mainX + 190;
+    bool hKeyBox = isHovered(mx, my, keyX, cy, keyW, 35);
+
+    glDisable(GL_TEXTURE_2D);
+    RenderUtils::drawRoundedRect(keyX, cy, keyW, 35, 6.0f, THEME_CARD,
+                                 0.6f * alpha);
     if (s_typingApiKey)
-      RenderUtils::drawRect(cx, cy, 2, 35, THEME_NAVY, alpha);
+      RenderUtils::drawRect(keyX, cy, 2, 35, THEME_NAVY, alpha);
+    glEnable(GL_TEXTURE_2D);
 
     if (!s_typingApiKey)
       s_apiKeyInput = Config::getApiKey();
@@ -1555,10 +1604,10 @@ void ClickGUI::render(HDC hdc) {
     if (s_typingApiKey && (GetTickCount64() / 500) % 2 == 0)
       dispKey += "|";
 
-    g_guiFont.drawString(cx + 10, cy + 10, dispKey,
+    g_guiFont.drawString(keyX + 10, cy + 12, dispKey,
                          applyAlpha(0xFFFFFFFF, alpha));
 
-    if (clickEvent && isHovered(mx, my, cx, cy, 350, 35)) {
+    if (clickEvent && isHovered(mx, my, keyX, cy, keyW, 35)) {
       s_typingApiKey = true;
       s_typingSearch = s_typingAutoGG = s_typingUrchinKey = false;
       NotificationManager::getInstance()->add("Input", "API Key focused",
@@ -1572,10 +1621,36 @@ void ClickGUI::render(HDC hdc) {
       s_typingApiKey = false;
     }
 
-    cy += 60;
+    cy += 65;
+    bool keylessEnabled = Config::isKeylessModeEnabled();
+    bool hKeylessCard = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 60);
+    glDisable(GL_TEXTURE_2D);
+    DWORD keylessCol = hKeylessCard ? 0xFF222226 : THEME_CARD;
+    RenderUtils::drawRoundedRect(mainX + 190, cy - 10, g_w - 210, 60, 6.0f,
+                                 keylessCol, 0.6f * alpha);
+    if (hKeylessCard)
+      RenderUtils::drawRect(mainX + 190, cy - 10, 3, 60, THEME_NAVY, alpha);
+    glEnable(GL_TEXTURE_2D);
+    g_guiFont.drawString(cx, cy, "API Keyless Mode",
+                         applyAlpha(0xFFFFFFFF, alpha));
+    g_guiFont.drawString(cx, cy + 18, "Fetch stats without an API key",
+                         applyAlpha(0xFFA0A0A5, alpha));
+    glDisable(GL_TEXTURE_2D);
+    drawSwitch(11, mainX + g_w - 65, cy, keylessEnabled, hKeylessCard, alpha);
+    glEnable(GL_TEXTURE_2D);
+    if (clickEvent && hKeylessCard) {
+      Config::setKeylessModeEnabled(!keylessEnabled);
+      NotificationManager::getInstance()->add(
+          "Settings",
+          keylessEnabled ? "Keyless Mode Disabled" : "Keyless Mode Enabled",
+          !keylessEnabled ? NotificationType::Success
+                          : NotificationType::Warning);
+    }
+
+    cy += 85;
     g_guiFont.drawString(cx, cy, "AutoGG Settings",
                          applyAlpha(0xFFFFFFFF, alpha));
-    cy += 30;
+    cy += 35;
     bool aggEnabled = Config::isAutoGGEnabled();
     bool hAggCard = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 60);
     glDisable(GL_TEXTURE_2D);
@@ -1597,13 +1672,20 @@ void ClickGUI::render(HDC hdc) {
     if (clickEvent && hAggCard)
       Config::setAutoGGEnabled(!aggEnabled);
 
-    cy += 75;
+    cy += 85;
     g_guiFont.drawString(cx, cy, "Custom GG Message",
                          applyAlpha(0xFFA0A0A5, alpha));
-    cy += 20;
-    RenderUtils::drawRect(cx, cy, 350, 35, THEME_CARD, 0.6f * alpha);
+    cy += 25;
+    float ggW = g_w - 210;
+    float ggX = mainX + 190;
+    bool hGG = isHovered(mx, my, ggX, cy, ggW, 35);
+
+    glDisable(GL_TEXTURE_2D);
+    RenderUtils::drawRoundedRect(ggX, cy, ggW, 35, 6.0f, THEME_CARD,
+                                 0.6f * alpha);
     if (s_typingAutoGG)
-      RenderUtils::drawRect(cx, cy, 2, 35, THEME_NAVY, alpha);
+      RenderUtils::drawRect(ggX, cy, 2, 35, THEME_NAVY, alpha);
+    glEnable(GL_TEXTURE_2D);
 
     if (s_autoGGInput.empty() && !s_typingAutoGG)
       s_autoGGInput = Config::getAutoGGMessage();
@@ -1613,9 +1695,9 @@ void ClickGUI::render(HDC hdc) {
     if (dispGG.empty() && !s_typingAutoGG)
       dispGG = "Enter GG message...";
 
-    g_guiFont.drawString(cx + 10, cy + 10, dispGG,
+    g_guiFont.drawString(ggX + 10, cy + 4, dispGG,
                          applyAlpha(0xFFFFFFFF, alpha));
-    if (clickEvent && isHovered(mx, my, cx, cy, 350, 35)) {
+    if (clickEvent && hGG) {
       s_typingAutoGG = true;
       s_typingApiKey = s_typingSearch = s_typingUrchinKey = false;
       NotificationManager::getInstance()->add("Input", "AutoGG message focused",
@@ -1688,12 +1770,17 @@ void ClickGUI::render(HDC hdc) {
     }
 
     cy += 70;
-    bool hover = isHovered(mx, my, cx, cy, 140, 35);
+    float saveBtnW = 160.0f;
+    bool hover = isHovered(mx, my, cx, cy, saveBtnW, 35);
     glDisable(GL_TEXTURE_2D);
-    RenderUtils::drawRoundedRect(cx, cy, 140, 35, 6.0f,
+    RenderUtils::drawRoundedRect(cx, cy, saveBtnW, 35, 6.0f,
                                  hover ? THEME_NAVY : 0xFF2A2A2E, alpha);
     glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(cx + 20, cy + 10, "SAVE CONFIG",
+
+    std::string saveText = "SAVE CONFIG";
+    float saveTextX =
+        cx + (saveBtnW - g_guiFont.getStringWidth(saveText)) / 2.0f;
+    g_guiFont.drawString(saveTextX, cy + 4, saveText,
                          applyAlpha(0xFFFFFFFF, alpha));
     if (clickEvent && hover) {
       Config::save();
@@ -1842,7 +1929,10 @@ void ClickGUI::render(HDC hdc) {
     RenderUtils::drawRoundedRect(cx, cy, 200, 35, 6.0f,
                                  hTest ? THEME_NAVY : THEME_CARD, alpha);
     glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(cx + 30, cy + 10, "SEND TEST TOAST",
+
+    std::string testText = "SEND TEST TOAST";
+    float testTextX = cx + (200.0f - g_guiFont.getStringWidth(testText)) / 2.0f;
+    g_guiFont.drawString(testTextX, cy + 4, testText,
                          applyAlpha(0xFFFFFFFF, alpha));
     if (clickEvent && hTest) {
       NotificationManager::getInstance()->add(
@@ -1851,12 +1941,16 @@ void ClickGUI::render(HDC hdc) {
     }
     cy += 50;
 
-    bool hClear = isHovered(mx, my, cx, cy, 200, 35);
     glDisable(GL_TEXTURE_2D);
+    bool hClear = isHovered(mx, my, cx, cy, 200, 35);
     RenderUtils::drawRoundedRect(cx, cy, 200, 35, 6.0f,
                                  hClear ? 0xFF991111 : THEME_CARD, alpha);
     glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(cx + 35, cy + 10, "CLEAR CACHE",
+
+    std::string clearText = "CLEAR CACHE";
+    float clearTextX =
+        cx + (200.0f - g_guiFont.getStringWidth(clearText)) / 2.0f;
+    g_guiFont.drawString(clearTextX, cy + 4, clearText,
                          applyAlpha(0xFFFFFFFF, alpha));
     if (clickEvent && hClear) {
       ChatInterceptor::clearAllCaches();

@@ -41,7 +41,8 @@ static HINTERNET g_hSession = NULL;
 static std::mutex g_sessionMutex;
 
 bool Http::get(const std::string &url, std::string &responseBody,
-               const std::string &headerName, const std::string &headerValue) {
+               const std::string &headerName, const std::string &headerValue,
+               const std::string &userAgent) {
   std::wstring host, path;
   INTERNET_PORT port;
   bool https;
@@ -92,6 +93,14 @@ bool Http::get(const std::string &url, std::string &responseBody,
   if (!hRequest) {
     WinHttpCloseHandle(hConnect);
     return false;
+  }
+
+  if (!userAgent.empty()) {
+    std::wstring ua(userAgent.begin(), userAgent.end());
+    std::wstring header = L"User-Agent: " + ua + L"\r\n";
+    WinHttpAddRequestHeaders(hRequest, header.c_str(), (DWORD)-1L,
+                             WINHTTP_ADDREQ_FLAG_ADD |
+                                 WINHTTP_ADDREQ_FLAG_REPLACE);
   }
 
   if (!headerName.empty()) {

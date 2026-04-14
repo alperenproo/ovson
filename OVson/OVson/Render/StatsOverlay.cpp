@@ -299,101 +299,92 @@ void StatsOverlay::render(void *hdcPtr) {
 
         if (textJ) {
           const char *utf = env->GetStringUTFChars(textJ, 0);
-          if (utf && utf[0] == '.') {
-            jfieldID f_x =
-                lc->GetFieldID(tfCls, "xPosition", "I", "field_146209_f", "a");
-            if (!f_x) {
-              if (env->ExceptionCheck())
-                env->ExceptionClear();
-            }
-            jfieldID f_y =
-                lc->GetFieldID(tfCls, "yPosition", "I", "field_146210_g", "f");
-            if (!f_y) {
-              if (env->ExceptionCheck())
-                env->ExceptionClear();
-            }
-            jfieldID f_w =
-                lc->GetFieldID(tfCls, "width", "I", "field_146218_h", "i");
-            if (!f_w) {
-              if (env->ExceptionCheck())
-                env->ExceptionClear();
-            }
-            jfieldID f_h =
-                lc->GetFieldID(tfCls, "height", "I", "field_146219_i", "j");
-            if (!f_h) {
-              if (env->ExceptionCheck())
-                env->ExceptionClear();
-            }
+          if (utf) {
+            const std::string &cp = ::Config::getCommandPrefix();
+            bool isDoubled =
+                (strlen(utf) >= cp.length() * 2 &&
+                 strncmp(utf + cp.length(), cp.c_str(), cp.length()) == 0);
+            if (!cp.empty() && strncmp(utf, cp.c_str(), cp.length()) == 0 &&
+                !isDoubled) {
+              jfieldID f_x = lc->GetFieldID(tfCls, "xPosition", "I",
+                                            "field_146209_f", "a");
+              jfieldID f_y = lc->GetFieldID(tfCls, "yPosition", "I",
+                                            "field_146210_g", "f");
+              jfieldID f_w =
+                  lc->GetFieldID(tfCls, "width", "I", "field_146218_h", "i");
+              jfieldID f_h =
+                  lc->GetFieldID(tfCls, "height", "I", "field_146219_i", "j");
 
-            if (f_x && f_y && f_w && f_h) {
-              float x = (float)env->GetIntField(inputField, f_x);
-              float y = (float)env->GetIntField(inputField, f_y);
-              float w = (float)env->GetIntField(inputField, f_w);
-              float h = (float)env->GetIntField(inputField, f_h);
+              if (f_x && f_y && f_w && f_h) {
+                float x = (float)env->GetIntField(inputField, f_x);
+                float y = (float)env->GetIntField(inputField, f_y);
+                float w = (float)env->GetIntField(inputField, f_w);
+                float h = (float)env->GetIntField(inputField, f_h);
 
-              jclass screenCls =
-                  lc->GetClass("net.minecraft.client.gui.GuiScreen");
-              jfieldID f_sw = screenCls
-                                  ? lc->GetFieldID(screenCls, "width", "I",
-                                                   "field_146294_l", "l")
-                                  : nullptr;
-              jfieldID f_sh = screenCls
-                                  ? lc->GetFieldID(screenCls, "height", "I",
-                                                   "field_146295_m", "m")
-                                  : nullptr;
+                jclass screenCls =
+                    lc->GetClass("net.minecraft.client.gui.GuiScreen");
+                jfieldID f_sw = screenCls
+                                    ? lc->GetFieldID(screenCls, "width", "I",
+                                                     "field_146294_l", "l")
+                                    : nullptr;
+                jfieldID f_sh = screenCls
+                                    ? lc->GetFieldID(screenCls, "height", "I",
+                                                     "field_146295_m", "m")
+                                    : nullptr;
 
-              float sw =
-                  (f_sw) ? (float)env->GetIntField(screen, f_sw) : 427.0f;
-              float sh =
-                  (f_sh) ? (float)env->GetIntField(screen, f_sh) : 240.0f;
+                float sw =
+                    (f_sw) ? (float)env->GetIntField(screen, f_sw) : 427.0f;
+                float sh =
+                    (f_sh) ? (float)env->GetIntField(screen, f_sh) : 240.0f;
 
-              glMatrixMode(GL_PROJECTION);
-              glPushMatrix();
-              glLoadIdentity();
-              glOrtho(0, sw, sh, 0, -1, 1);
-              glMatrixMode(GL_MODELVIEW);
-              glPushMatrix();
-              glLoadIdentity();
-              glPushAttrib(GL_ALL_ATTRIB_BITS);
-              glDisable(GL_TEXTURE_2D);
-              glDisable(GL_DEPTH_TEST);
-              glEnable(GL_BLEND);
-              glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-              glEnable(GL_LINE_SMOOTH);
+                glMatrixMode(GL_PROJECTION);
+                glPushMatrix();
+                glLoadIdentity();
+                glOrtho(0, sw, sh, 0, -1, 1);
+                glMatrixMode(GL_MODELVIEW);
+                glPushMatrix();
+                glLoadIdentity();
+                glPushAttrib(GL_ALL_ATTRIB_BITS);
+                glDisable(GL_TEXTURE_2D);
+                glDisable(GL_DEPTH_TEST);
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glEnable(GL_LINE_SMOOTH);
 
-              float time = (float)(GetTickCount64() % 4000) / 4000.0f;
+                float time = (float)(GetTickCount64() % 4000) / 4000.0f;
 
-              for (int i = 0; i < 2; i++) {
-                glLineWidth(1.0f + (i * 1.0f));
-                glBegin(GL_LINE_LOOP);
-                for (int j = 0; j < 4; j++) {
-                  float shift = (float)j / 4.0f + time;
-                  uint32_t color = hsbToRgb(shift, 0.8f, 1.0f);
-                  float r = ((color >> 16) & 0xFF) / 255.0f;
-                  float g = ((color >> 8) & 0xFF) / 255.0f;
-                  float b = (color & 0xFF) / 255.0f;
-                  glColor4f(r, g, b, i == 0 ? 0.9f : 0.25f);
+                for (int i = 0; i < 2; i++) {
+                  glLineWidth(1.0f + (i * 1.0f));
+                  glBegin(GL_LINE_LOOP);
+                  for (int j = 0; j < 4; j++) {
+                    float shift = (float)j / 4.0f + time;
+                    uint32_t color = hsbToRgb(shift, 0.8f, 1.0f);
+                    float r = ((color >> 16) & 0xFF) / 255.0f;
+                    float g = ((color >> 8) & 0xFF) / 255.0f;
+                    float b = (color & 0xFF) / 255.0f;
+                    glColor4f(r, g, b, i == 0 ? 0.9f : 0.25f);
 
-                  if (j == 0)
-                    glVertex2f(x - 2.0f, y - 1.0f);
-                  if (j == 1)
-                    glVertex2f(x + w - 2.0f, y - 1.0f);
-                  if (j == 2)
-                    glVertex2f(x + w - 2.0f, y + h - 1.0f);
-                  if (j == 3)
-                    glVertex2f(x - 2.0f, y + h - 1.0f);
+                    if (j == 0)
+                      glVertex2f(x - 2.0f, y - 1.0f);
+                    if (j == 1)
+                      glVertex2f(x + w + 2.0f, y - 1.0f);
+                    if (j == 2)
+                      glVertex2f(x + w + 2.0f, y + h - 2.0f);
+                    if (j == 3)
+                      glVertex2f(x - 2.0f, y + h - 2.0f);
+                  }
+                  glEnd();
                 }
-                glEnd();
-              }
 
-              glPopAttrib();
-              glMatrixMode(GL_MODELVIEW);
-              glPopMatrix();
-              glMatrixMode(GL_PROJECTION);
-              glPopMatrix();
+                glPopAttrib();
+                glMatrixMode(GL_MODELVIEW);
+                glPopMatrix();
+                glMatrixMode(GL_PROJECTION);
+                glPopMatrix();
+              }
             }
+            env->ReleaseStringUTFChars(textJ, utf);
           }
-          env->ReleaseStringUTFChars(textJ, utf);
           env->DeleteLocalRef(textJ);
         }
         env->DeleteLocalRef(inputField);
@@ -447,8 +438,6 @@ void StatsOverlay::render(void *hdcPtr) {
                        !ChatInterceptor::isInPreGameLobby();
     std::lock_guard<std::mutex> lock(ChatInterceptor::g_statsMutex);
     for (const auto &pair : ChatInterceptor::g_playerStatsMap) {
-      // If we are in an active game, only show players who have a team
-      // assigned.
       if (activeMatch && pair.second.teamColor.empty())
         continue;
       statsData.push_back(pair);

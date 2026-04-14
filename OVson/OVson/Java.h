@@ -9,7 +9,6 @@
 #include <string>
 #include <unordered_map>
 
-
 class Lunar {
 public:
   static std::atomic<bool> &isCleaningUp() {

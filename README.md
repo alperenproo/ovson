@@ -1,5 +1,7 @@
 # OVson
 
+There is currently an issue with Badlion Client which causes a crash. Some functions need a rewrite so the fixes will be delayed a bit. Also will fix virustotal flags too.
+
 ## Features
 - Api keyless stat fetching
 - Automatically gets players in your game and fetches stats (real fast)

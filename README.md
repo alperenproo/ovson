@@ -1,6 +1,6 @@
 # OVson
 
-There is currently an issue with Badlion Client which causes a crash. Some functions need a rewrite so the fixes will be delayed a bit. Also will fix virustotal flags too.
+There is currently an issue with Badlion Client which causes a crash. Some functions need a rewrite so the fixes will be delayed a bit. Virustotal flagging will be fixed too.
 
 ## Features
 - Api keyless stat fetching

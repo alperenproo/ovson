@@ -192,7 +192,7 @@ All commands use the `.` prefix in-game.
 
 # Supported Clients
 - Lunar — Tested  
-- Badlion — Tested  
+- Badlion — WIP
 - Forge — Beta  
 - Vanilla — Beta  
 

@@ -798,6 +798,27 @@ static void drawHead(RenderCtx &ctx, jobject tm, jobject npi, GLuint glTexId,
                   s_directHits.exchange(0), s_fallbackHits.exchange(0));
   }
 
+  GLint texW = 0, texH = 0;
+  glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH,  &texW);
+  glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &texH);
+  if (texW <= 0 || texH <= 0 || texW != texH) {
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDisable(GL_TEXTURE_2D);
+    glColor4f(0.25f, 0.25f, 0.25f, 1.0f);
+    glBegin(GL_QUADS);
+    glVertex2f(x, y);
+    glVertex2f(x + size, y);
+    glVertex2f(x + size, y + size);
+    glVertex2f(x, y + size);
+    glEnd();
+    glEnable(GL_TEXTURE_2D);
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+    if (prevTex > 0) {
+      glBindTexture(GL_TEXTURE_2D, (GLuint)prevTex);
+    }
+    return;
+  }
+
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glColor4f(1, 1, 1, 1);

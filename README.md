@@ -1,6 +1,7 @@
 # OVson
 
 A lot changed but im too lazy to update this readme file just try it and see. Report bugs/crashes and make suggestions to alperen1912 on Discord.
+There is currently an issue with skin heads on bettertab. Will be fixed soon.
 
 ## Features
 - Api keyless stat fetching

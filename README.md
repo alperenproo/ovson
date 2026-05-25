@@ -1,8 +1,5 @@
 # OVson
 
-There is currently an issue with Badlion Client which causes a crash. Some functions need a rewrite so the fixes will be delayed a bit. Virustotal flagging will be fixed too. 
-Report bugs and crashes or suggest features to alperen1912 on Discord. BIG UPDATE IN A WEEK !!
-
 ## Features
 - Api keyless stat fetching
 - Automatically gets players in your game and fetches stats (real fast)
@@ -15,6 +12,10 @@ Report bugs and crashes or suggest features to alperen1912 on Discord. BIG UPDAT
 - Bedplates detection
 - Replay report spammer
 - Debug system
+- Anticheat
+- NumberDenicker
+- Changeable stat colors
+- NameTags
 
 ---
 

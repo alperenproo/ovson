@@ -41,7 +41,12 @@
 - Works in pre-game phase
 
 ### Preview
+<details>
+<summary>Open Preview</summary>
+
 ![Lobby Pre Game Stats](https://nigga.tr/pre_game_stats.png)
+
+</details>
 
 ---
 
@@ -64,14 +69,27 @@
 - Works together with stats display
 
 ### Previews
-**FKDR Sort (FK Mode)**  
+
+<details>
+<summary>FKDR Sort (FK Mode)</summary>
+
 ![Tab FKDR Sort](https://nigga.tr/tab_fkdr_sort.png)
 
-**Teams (Normal)**  
+</details>
+
+<details>
+<summary>Teams (Normal)</summary>
+
 ![Tab Teams Normal](https://nigga.tr/tab_teams_normal.png)
 
-**Multiple Tags Preview**  
+</details>
+
+<details>
+<summary>Multiple Tags Preview</summary>
+
 ![Tab Multiple Tags](https://nigga.tr/tab_multiple_tags.png)
+
+</details>
 
 ---
 
@@ -81,15 +99,28 @@
 - Toggleable columns
 - Sort by: `Team` · `Stars` · `FK` · `FKDR` · `Wins` · `WLR` · `WS`
 
-### Preview
-**FKDR Sort**  
+### Previews
+
+<details>
+<summary>FKDR Sort</summary>
+
 ![GUI FKDR Sort](https://nigga.tr/gui_fkdr_sort.png)
 
-**Stars Sort**  
+</details>
+
+<details>
+<summary>Stars Sort</summary>
+
 ![GUI Stars Sort](https://nigga.tr/gui_stars_sort.png)
 
-**Toggled Off Columns (Tags, Wins, WLR)**  
+</details>
+
+<details>
+<summary>Toggled Off Columns (Tags, Wins, WLR)</summary>
+
 ![GUI Toggled Off Columns](https://nigga.tr/gui_toggled_off.png)
+
+</details>
 
 ---
 
@@ -98,7 +129,13 @@
 - Urchin / Seraph tag detection
 
 ### Preview
+
+<details>
+<summary>Open Preview</summary>
+
 ![GUI Player Search](https://nigga.tr/gui_player_search.png)
+
+</details>
 
 ---
 
@@ -108,7 +145,13 @@
 - Customizable
 
 ### Preview
+
+<details>
+<summary>Open Preview</summary>
+
 ![Click GUI](https://nigga.tr/clickgui_normal.png)
+
+</details>
 
 ---
 
@@ -193,7 +236,7 @@ All commands use the `.` prefix in-game.
 
 # Supported Clients
 - Lunar — Tested  
-- Badlion — WIP
+- Badlion — Tested
 - Forge — Beta  
 - Vanilla — Beta  
 

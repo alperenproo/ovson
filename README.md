@@ -22,7 +22,7 @@
 ## Usage
 - Inject `ovson.dll` into Minecraft yourself  
 **or**  
-- Run `OVsonLoader.exe` when Minecraft is fully loaded  
+- Run `OVsonLoader.exe`  
 - You DON'T need to download both files  
 - If you're stuck with chat stats do `.ovmode gui`
 
@@ -221,16 +221,12 @@ All commands use the `.` prefix in-game.
 ---
 
 # Work In Progress
-- Colors will be reworked
 - Some modules still experimental
-- Tab stats will be fully reworked
 
 ---
 
 # Known Issues
-- Threading is optimized for speed, which may cause initial burst
-- Smoother loading improvements planned
-- Breaks Vape's antibot
+- Breaks antibot
 
 ---
 

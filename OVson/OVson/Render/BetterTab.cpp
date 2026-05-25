@@ -605,16 +605,27 @@ static inline void skinDiagOnce(int bit, const char *msg) {
 }
 
 GLuint resolveSkinTexId(JNIEnv *env, jobject tm, jobject npi) {
-  if (!env || !tm || !npi || !g_jc.f_locationSkin || !g_jc.m_tm_getTexture) {
+  if (!env || !tm || !npi || !g_jc.m_tm_getTexture ||
+      (!g_jc.m_getLocationSkin && !g_jc.f_locationSkin)) {
     skinDiagOnce(0, "resolveSkinTexId: preconditions failed "
-                    "(env/tm/npi/f_locationSkin/m_tm_getTexture missing)");
+                    "(env/tm/npi/m_tm_getTexture/getLocationSkin missing)");
     return 0;
   }
-  jobject rl = env->GetObjectField(npi, g_jc.f_locationSkin);
+  jobject rl = nullptr;
+  if (g_jc.m_getLocationSkin) {
+    rl = env->CallObjectMethod(npi, g_jc.m_getLocationSkin);
+    if (env->ExceptionCheck()) {
+      env->ExceptionClear();
+      rl = nullptr;
+    }
+  }
+  if (!rl && g_jc.f_locationSkin) {
+    rl = env->GetObjectField(npi, g_jc.f_locationSkin);
+  }
   if (!rl) {
     skinDiagOnce(
         1,
-        "resolveSkinTexId: locationSkin field is null (skin not loaded yet)");
+        "resolveSkinTexId: locationSkin is null (skin not loaded yet)");
     return 0;
   }
   jobject texObj = env->CallObjectMethod(tm, g_jc.m_tm_getTexture, rl);
@@ -796,27 +807,6 @@ static void drawHead(RenderCtx &ctx, jobject tm, jobject npi, GLuint glTexId,
     s_lastSummary.store(now);
     logDiagnostic("SKIN drawHead: direct=%ld fallback=%ld (5s rollup)",
                   s_directHits.exchange(0), s_fallbackHits.exchange(0));
-  }
-
-  GLint texW = 0, texH = 0;
-  glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH,  &texW);
-  glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &texH);
-  if (texW <= 0 || texH <= 0 || texW != texH) {
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glDisable(GL_TEXTURE_2D);
-    glColor4f(0.25f, 0.25f, 0.25f, 1.0f);
-    glBegin(GL_QUADS);
-    glVertex2f(x, y);
-    glVertex2f(x + size, y);
-    glVertex2f(x + size, y + size);
-    glVertex2f(x, y + size);
-    glEnd();
-    glEnable(GL_TEXTURE_2D);
-    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-    if (prevTex > 0) {
-      glBindTexture(GL_TEXTURE_2D, (GLuint)prevTex);
-    }
-    return;
   }
 
   glEnable(GL_BLEND);

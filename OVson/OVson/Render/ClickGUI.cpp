@@ -1,14 +1,21 @@
 #include "ClickGUI.h"
-#include "../Chat/ChatInterceptor.h"
 #include "../Config/Config.h"
+#include "../Config/StatColors.h"
 #include "../Java.h"
 #include "../Logic/BedDefense/BedDefenseManager.h"
+#include "../Logic/StatsTracker.h"
+#include "../Net/Http.h"
+#include "../Services/AbyssService.h"
 #include "../Services/Hypixel.h"
 #include "../Services/SeraphService.h"
 #include "../Services/UrchinService.h"
+#include "../Utils/BedwarsPrestiges.h"
+#include "../Utils/NumberDenicker.h"
 #include "../Utils/ReplaySpammer.h"
+#include "../Utils/SafeGuard.h"
 #include "../Utils/SensitivityFix.h"
 #include "../Utils/Timer.h"
+#include "../Utils/stb_image.h"
 #include "FontRenderer.h"
 #include "NotificationManager.h"
 #include "RenderUtils.h"
@@ -45,11 +52,13 @@ static std::string s_apiKeyInput = "";
 static std::string s_autoGGInput = "";
 static std::string s_urchinKeyInput = "";
 static std::string s_seraphKeyInput = "";
+static std::string s_auroraApiKeyInput = "";
 static bool s_typingSearch = false;
 static bool s_typingApiKey = false;
 static bool s_typingAutoGG = false;
 static bool s_typingUrchinKey = false;
 static bool s_typingSeraphKey = false;
+static bool s_typingAuroraApiKey = false;
 static bool s_typingPrefix = false;
 static std::string s_prefixInput = ".";
 static float s_scrollOffset = 0.0f;
@@ -60,10 +69,42 @@ static bool s_isTagsDropdownOpen = false;
 static float s_tagsDropdownAnim = 0.0f;
 static bool s_isSortOrderDropdownOpen = false;
 static float s_sortOrderDropdownAnim = 0.0f;
+static bool s_isPingModeDropdownOpen = false;
+static float s_pingModeDropdownAnim = 0.0f;
+
+// Colors tab state
+static int s_colorSelectedStat = 0;
+static bool s_colorPickerOpen = false;
+static float s_cpHue = 0.0f;
+static float s_cpSat = 1.0f;
+static float s_cpVal = 1.0f;
+static bool s_cpDraggingSV = false;
+static bool s_cpDraggingHue = false;
+static char s_cpMinBuf[16] = "0";
+static char s_cpMaxBuf[16] = "100";
+static int s_cpMinLen = 1;
+static int s_cpMaxLen = 3;
+static int s_cpEditingField = 0;  // 0=none, 1=min, 2=max
+static int s_cpEditRangeIdx = -1; // -1 = adding new, >=0 = editing existing
+
+static int s_columnTargetMode = 0; // 0 = Overlay, 1 = Better Tab
+static bool s_isColumnTargetDropdownOpen = false;
+static float s_columnTargetDropdownAnim = 0.0f;
 static Hypixel::PlayerStats s_lookupResult;
 static bool s_hasLookup = false;
 static bool s_searching = false;
 static std::string s_lookupName = "";
+
+static std::optional<Urchin::PlayerTags> s_lookupUrchinTags;
+static std::optional<Seraph::PlayerTags> s_lookupSeraphTags;
+static std::atomic<bool> s_tagsFetched{false};
+
+static GLuint s_lookupSkinTexId = 0;
+static std::string s_lookupSkinUuid = "";
+static std::atomic<bool> s_skinLoading{false};
+static std::vector<uint8_t> s_skinPendingData;
+static int s_skinPendingW = 0, s_skinPendingH = 0;
+static std::atomic<bool> s_skinPendingReady{false};
 static float g_x = 100.0f;
 static float g_y = 100.0f;
 static float g_w = 700.0f;
@@ -205,6 +246,7 @@ void ClickGUI::toggle() {
     s_autoGGInput = Config::getAutoGGMessage();
     s_urchinKeyInput = Config::getUrchinApiKey();
     s_seraphKeyInput = Config::getSeraphApiKey();
+    s_auroraApiKeyInput = Config::getAuroraApiKey();
     ShowCursor(TRUE);
     setMouseGrabbed(false);
     FocusFix::setIngameFocus(false);
@@ -288,7 +330,7 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     }
     if ((wParam == 'V') && (GetAsyncKeyState(VK_CONTROL) & 0x8000)) {
       if (s_typingSearch || s_typingApiKey || s_typingAutoGG ||
-          s_typingUrchinKey || s_typingSeraphKey) {
+          s_typingUrchinKey || s_typingSeraphKey || s_typingAuroraApiKey) {
         if (OpenClipboard(NULL)) {
           HANDLE hData = GetClipboardData(CF_TEXT);
           if (hData) {
@@ -311,11 +353,13 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                                            ? &s_urchinKeyInput
                                            : (s_typingSeraphKey
                                                   ? &s_seraphKeyInput
-                                                  : &s_prefixInput))));
-              int cap =
-                  (s_typingAutoGG || s_typingUrchinKey || s_typingSeraphKey)
-                      ? 100
-                      : (s_typingPrefix ? 1 : 48);
+                                                  : (s_typingAuroraApiKey
+                                                         ? &s_auroraApiKeyInput
+                                                         : &s_prefixInput)))));
+              int cap = (s_typingAutoGG || s_typingUrchinKey ||
+                         s_typingSeraphKey || s_typingAuroraApiKey)
+                            ? 100
+                            : (s_typingPrefix ? 1 : 48);
               if (target->length() + filtered.length() < cap) {
                 *target += filtered;
                 NotificationManager::getInstance()->add(
@@ -337,7 +381,8 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
   if (msg == WM_CHAR) {
     char c = (char)wParam;
     if (s_typingSearch || s_typingApiKey || s_typingAutoGG ||
-        s_typingUrchinKey || s_typingSeraphKey || s_typingPrefix) {
+        s_typingUrchinKey || s_typingSeraphKey || s_typingAuroraApiKey ||
+        s_typingPrefix) {
       std::string *target =
           s_typingSearch
               ? &s_playerSearch
@@ -345,11 +390,12 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                      ? &s_apiKeyInput
                      : (s_typingAutoGG
                             ? &s_autoGGInput
-                            : (s_typingUrchinKey
-                                   ? &s_urchinKeyInput
-                                   : (s_typingSeraphKey ? &s_seraphKeyInput
+                            : (s_typingSeraphKey ? &s_seraphKeyInput
+                                                 : (s_typingAuroraApiKey
+                                                        ? &s_auroraApiKeyInput
                                                         : &s_prefixInput))));
-      int cap = (s_typingAutoGG || s_typingUrchinKey || s_typingSeraphKey)
+      int cap = (s_typingAutoGG || s_typingUrchinKey || s_typingSeraphKey ||
+                 s_typingAuroraApiKey)
                     ? 100
                     : (s_typingPrefix ? 1 : 48);
       if (c == 8) {
@@ -360,10 +406,11 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
           std::string key = s_apiKeyInput;
           if (key.empty() || key == "None")
             key = Config::getApiKey();
+          bool keyless = Config::isKeylessModeEnabled();
 
-          if (key.empty() || key == "None") {
+          if ((key.empty() || key == "None") && !keyless) {
             NotificationManager::getInstance()->add(
-                "Hypixel", "Please set an API Key first!",
+                "Hypixel", "Set an API Key or enable Keyless Mode!",
                 NotificationType::Error);
           } else {
             s_searching = true;
@@ -372,26 +419,92 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             NotificationManager::getInstance()->add(
                 "Hypixel", "Fetching player ID...", NotificationType::Info);
 
-            std::thread([searchName, key]() {
-              auto uuidOpt = Hypixel::getUuidByName(searchName);
-              if (uuidOpt) {
-                NotificationManager::getInstance()->add(
-                    "Hypixel", "ID found, fetching stats...",
-                    NotificationType::Info);
-                auto statsOpt = Hypixel::getPlayerStats(key, *uuidOpt);
-                if (statsOpt) {
-                  s_lookupResult = *statsOpt;
-                  s_lookupName = searchName;
-                  s_hasLookup = true;
+            std::thread([searchName, key, keyless]() {
+              SafeGuard::installSehTranslator();
+              SafeGuard::run("ClickGUI::statsLookup", [&]() {
+                auto uuidOpt = Hypixel::getUuidByName(searchName);
+                if (uuidOpt) {
+                  NotificationManager::getInstance()->add(
+                      "Hypixel", "ID found, fetching stats...",
+                      NotificationType::Info);
+                  std::optional<Hypixel::PlayerStats> statsOpt;
+                  if (keyless) {
+                    statsOpt = AbyssService::getPlayerStats(*uuidOpt);
+                  } else {
+                    statsOpt = Hypixel::getPlayerStats(key, *uuidOpt);
+                  }
+                  if (statsOpt) {
+                    s_lookupResult = *statsOpt;
+                    s_lookupName = searchName;
+                    s_lookupUrchinTags = std::nullopt;
+                    s_lookupSeraphTags = std::nullopt;
+                    s_tagsFetched = false;
+                    s_hasLookup = true;
+
+                    if (Config::isTagsEnabled()) {
+                      std::string uuid = s_lookupResult.uuid;
+                      std::thread([searchName, uuid]() {
+                        SafeGuard::installSehTranslator();
+                        SafeGuard::run("ClickGUI::tagFetch", [&]() {
+                          std::string activeS = Config::getActiveTagService();
+                          if (activeS == "Urchin" || activeS == "Both") {
+                            auto ut = Urchin::getPlayerTags(searchName, true);
+                            if (ut)
+                              s_lookupUrchinTags = ut;
+                          }
+                          if (!uuid.empty() &&
+                              (activeS == "Seraph" || activeS == "Both")) {
+                            auto st =
+                                Seraph::getPlayerTags(searchName, uuid, true);
+                            if (st)
+                              s_lookupSeraphTags = st;
+                          }
+                          s_tagsFetched = true;
+                        });
+                      }).detach();
+                    }
+
+                    std::string uuid = s_lookupResult.uuid;
+                    if (!uuid.empty() && uuid != s_lookupSkinUuid) {
+                      s_skinLoading = true;
+                      s_skinPendingReady = false;
+                      std::thread([searchName, uuid]() {
+                        SafeGuard::installSehTranslator();
+                        SafeGuard::run("ClickGUI::skinHead", [&]() {
+                          std::string url = "https://api.mcheads.org/head/" +
+                                            searchName + "/64";
+                          std::string body;
+                          if (Http::get(url, body) && body.size() > 100) {
+                            int w, h, ch;
+                            unsigned char *px = stbi_load_from_memory(
+                                (const stbi_uc *)body.data(), (int)body.size(),
+                                &w, &h, &ch, STBI_rgb_alpha);
+                            if (px && w > 0 && h > 0) {
+                              s_skinPendingData.assign(px, px + w * h * 4);
+                              s_skinPendingW = w;
+                              s_skinPendingH = h;
+                              s_lookupSkinUuid = uuid;
+                              s_skinPendingReady = true;
+                            }
+                            if (px)
+                              stbi_image_free(px);
+                          }
+                          s_skinLoading = false;
+                        });
+                      }).detach();
+                    }
+                  } else {
+                    NotificationManager::getInstance()->add(
+                        "Hypixel",
+                        keyless ? "Abyss API failed"
+                                : "Check API-Key or Connectivity",
+                        NotificationType::Error);
+                  }
                 } else {
                   NotificationManager::getInstance()->add(
-                      "Hypixel", "Check API-Key or Connectivity",
-                      NotificationType::Error);
+                      "Hypixel", "Player not found", NotificationType::Warning);
                 }
-              } else {
-                NotificationManager::getInstance()->add(
-                    "Hypixel", "Player not found", NotificationType::Warning);
-              }
+              });
               s_searching = false;
             }).detach();
           }
@@ -421,6 +534,13 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                                                   NotificationType::Success);
           s_typingSeraphKey = false;
         }
+        if (s_typingAuroraApiKey) {
+          Config::setAuroraApiKey(s_auroraApiKeyInput);
+          Config::save();
+          NotificationManager::getInstance()->add(
+              "Settings", "Aurora Key Saved", NotificationType::Success);
+          s_typingAuroraApiKey = false;
+        }
         if (s_typingPrefix) {
           Config::setCommandPrefix(s_prefixInput);
           NotificationManager::getInstance()->add("Settings", "Prefix Updated",
@@ -437,6 +557,21 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                                                     NotificationType::Warning);
             lastWarn = GetTickCount64();
           }
+        }
+      }
+    }
+    if (s_cpEditingField > 0) {
+      char *buf = (s_cpEditingField == 1) ? s_cpMinBuf : s_cpMaxBuf;
+      int &len = (s_cpEditingField == 1) ? s_cpMinLen : s_cpMaxLen;
+      if (c == 8) {
+        if (len > 0) {
+          len--;
+          buf[len] = 0;
+        }
+      } else if ((c >= '0' && c <= '9') || c == '.') {
+        if (len < 7) {
+          buf[len++] = c;
+          buf[len] = 0;
         }
       }
     }
@@ -600,8 +735,8 @@ void ClickGUI::render(HDC hdc) {
 
   s_scrollOffset += (s_targetScroll - s_scrollOffset) * 0.15f;
 
-  const char *tabs[] = {"Visuals", "Players", "Tags", "Settings",
-                        "Debug",   "Utils",   nullptr};
+  const char *tabs[] = {"Visuals", "Players", "Tags",  "Settings",
+                        "Colors",  "Debug",   "Utils", nullptr};
   float ty = mainY + 85;
   for (int i = 0; tabs[i]; ++i) {
     bool hover = isHovered(mx, my, mainX + 15, ty - 12, 140, 40);
@@ -624,7 +759,7 @@ void ClickGUI::render(HDC hdc) {
   glScissor((int)(mainX + 170), (int)(sh - (mainY + g_h - 10)),
             (int)(g_w - 170), (int)(g_h - 60));
 
-  if (s_activeTab == 5) {
+  if (s_activeTab == 6) {
     g_guiFont.drawString(cx, cy, "Utilities", applyAlpha(0xFFFFFFFF, alpha));
     cy += 40;
     g_guiFont.drawString(cx, cy, "Bed Defense", applyAlpha(0xFFFFFFFF, alpha));
@@ -772,6 +907,111 @@ void ClickGUI::render(HDC hdc) {
       Utils::ReplaySpammer::getInstance().toggle();
     }
     cy += 110;
+
+    g_guiFont.drawString(cx, cy, "Aurora Denicker",
+                         applyAlpha(0xFFFFFFFF, alpha));
+    bool hDenick = isHovered(mx, my, mainX + 190, cy + 30, g_w - 210, 60);
+    glDisable(GL_TEXTURE_2D);
+    DWORD denickCol = hDenick ? 0xFF222226 : THEME_CARD;
+    RenderUtils::drawRoundedRect(mainX + 190, cy + 30, g_w - 210, 60, 6.0f,
+                                 denickCol, 0.6f * alpha);
+    if (hDenick)
+      RenderUtils::drawRect(mainX + 190, cy + 30, 3, 60, THEME_NAVY, alpha);
+
+    glEnable(GL_TEXTURE_2D);
+    g_guiFont.drawString(cx, cy + 40, "Number Denicker",
+                         applyAlpha(0xFFFFFFFF, alpha));
+    g_guiFont.drawString(cx, cy + 58,
+                         "Reveal nicks via game statistics (Powered by Aurora)",
+                         applyAlpha(0xFFA0A0A5, alpha));
+
+    bool denickEnabled = Config::isNumberDenickerEnabled();
+    glDisable(GL_TEXTURE_2D);
+    float denickSwX = mainX + g_w - 65;
+    drawSwitch(22, denickSwX, cy + 40, denickEnabled, hDenick, alpha);
+    glEnable(GL_TEXTURE_2D);
+
+    if (clickEvent && hDenick) {
+      Config::setNumberDenickerEnabled(!denickEnabled);
+      Config::save();
+      NotificationManager::getInstance()->add(
+          "Utils",
+          !denickEnabled ? "Number Denicker Enabled"
+                         : "Number Denicker Disabled",
+          !denickEnabled ? NotificationType::Success
+                         : NotificationType::Warning);
+    }
+    cy += 110;
+
+    g_guiFont.drawString(cx, cy, "Anticheat", applyAlpha(0xFFFFFFFF, alpha));
+    const float acCardH = 222.0f;
+    bool hAc = isHovered(mx, my, mainX + 190, cy + 30, g_w - 210, acCardH);
+    glDisable(GL_TEXTURE_2D);
+    DWORD acCol = hAc ? 0xFF222226 : THEME_CARD;
+    RenderUtils::drawRoundedRect(mainX + 190, cy + 30, g_w - 210, acCardH, 6.0f,
+                                 acCol, 0.6f * alpha);
+    if (hAc)
+      RenderUtils::drawRect(mainX + 190, cy + 30, 3, acCardH, THEME_NAVY,
+                            alpha);
+    glEnable(GL_TEXTURE_2D);
+
+    g_guiFont.drawString(cx, cy + 40, "Detect Cheaters (BETA)",
+                         applyAlpha(0xFFFFFFFF, alpha));
+    g_guiFont.drawString(
+        cx, cy + 58,
+        "Four client-side checks: NoSlow, AutoBlock, Eagle, Scaffold",
+        applyAlpha(0xFFA0A0A5, alpha), 0.45f);
+
+    bool acEnabled = Config::isAnticheatEnabled();
+    glDisable(GL_TEXTURE_2D);
+    float acSwX = mainX + g_w - 65;
+    bool hAcMaster = hAc && my < cy + 70;
+    drawSwitch(40, acSwX, cy + 40, acEnabled, hAcMaster, alpha);
+    glEnable(GL_TEXTURE_2D);
+    if (clickEvent && hAcMaster) {
+      Config::setAnticheatEnabled(!acEnabled);
+      NotificationManager::getInstance()->add(
+          "Utils", !acEnabled ? "Anticheat Enabled" : "Anticheat Disabled",
+          !acEnabled ? NotificationType::Success : NotificationType::Warning);
+    }
+
+    float rowAlpha = alpha * (acEnabled ? 1.0f : 0.45f);
+    struct AcSub {
+      const char *label;
+      bool (*get)();
+      void (*set)(bool);
+      int switchId;
+    };
+    static const AcSub kSubs[] = {
+        {"NoSlow", &Config::isAnticheatNoSlowEnabled,
+         &Config::setAnticheatNoSlowEnabled, 41},
+        {"AutoBlock", &Config::isAnticheatAutoBlockEnabled,
+         &Config::setAnticheatAutoBlockEnabled, 42},
+        {"Eagle", &Config::isAnticheatEagleEnabled,
+         &Config::setAnticheatEagleEnabled, 43},
+        {"Scaffold", &Config::isAnticheatScaffoldEnabled,
+         &Config::setAnticheatScaffoldEnabled, 44},
+        {"Check Self", &Config::isAnticheatCheckSelfEnabled,
+         &Config::setAnticheatCheckSelfEnabled, 46},
+    };
+    const float subStartY = cy + 78;
+    const float subRowH = 22.0f;
+    for (size_t i = 0; i < sizeof(kSubs) / sizeof(kSubs[0]); ++i) {
+      float ry = subStartY + (float)i * subRowH;
+      bool hSub = hAc && my >= ry - 2 && my < ry + subRowH - 2;
+      bool cur = kSubs[i].get();
+      g_guiFont.drawString(cx + 10, ry + 4, kSubs[i].label,
+                           applyAlpha(0xFFFFFFFF, rowAlpha), 0.42f);
+      glDisable(GL_TEXTURE_2D);
+      drawSwitch(kSubs[i].switchId, acSwX, ry + 2, cur, hSub && acEnabled,
+                 rowAlpha);
+      glEnable(GL_TEXTURE_2D);
+      if (clickEvent && hSub && acEnabled) {
+        kSubs[i].set(!cur);
+      }
+    }
+    cy += (int)acCardH + 25;
+
   } else if (s_activeTab == 0) {
     g_guiFont.drawString(cx, cy, "Overlays", applyAlpha(0xFFFFFFFF, alpha));
     cy += 40;
@@ -841,7 +1081,7 @@ void ClickGUI::render(HDC hdc) {
       glEnable(GL_TEXTURE_2D);
 
       bool hSlider = isHovered(mx, my, cx, cy - 5, sliderW, sliderH + 10);
-      if (hSlider && lClick) {
+      if (hSlider && lClick) { // slider stays drag-friendly with held LMB
         float newVal = (mx - cx) / sliderW;
         if (newVal < 0)
           newVal = 0;
@@ -850,6 +1090,181 @@ void ClickGUI::render(HDC hdc) {
         Config::setMotionBlurAmount(newVal);
       }
       cy += 30;
+    }
+
+    bool nameTagsEnabled = Config::isNameTagsEnabled();
+    drawSettingsCard("NameTags",
+                     "Renders the Bedwars stats above every nearby player",
+                     nameTagsEnabled, 7, cy);
+    Config::setNameTagsEnabled(nameTagsEnabled);
+    cy += 10;
+
+    if (nameTagsEnabled) {
+      const float panelX = mainX + 190;
+      const float panelW = g_w - 210;
+      {
+        float h = Config::getNameTagHeight();
+        const float cardH = 34.0f;
+        float rowY = cy - 6;
+        bool rowHover = isHovered(mx, my, panelX, rowY, panelW, cardH);
+
+        glDisable(GL_TEXTURE_2D);
+        RenderUtils::drawRoundedRect(panelX, rowY, panelW, cardH, 6.0f,
+                                     rowHover ? 0xFF222226 : THEME_CARD,
+                                     0.5f * alpha);
+        glEnable(GL_TEXTURE_2D);
+
+        g_guiFont.drawString(cx, cy, "Label height",
+                             applyAlpha(0xFFFFFFFF, alpha));
+
+        char hbuf[24];
+        sprintf_s(hbuf, "%.1f m", h);
+
+        const float btnW = 22, btnH = 22;
+        const float btnY = cy - 1;
+        const float upX = panelX + panelW - 12 - btnW;
+        const float dnX = upX - 6 - btnW;
+        const float valueX = dnX - 50;
+
+        g_guiFont.drawString(valueX, cy, hbuf,
+                             applyAlpha(0xFFE6E6EA, alpha));
+
+        bool hUp = isHovered(mx, my, upX, btnY, btnW, btnH);
+        bool hDn = isHovered(mx, my, dnX, btnY, btnW, btnH);
+        glDisable(GL_TEXTURE_2D);
+        RenderUtils::drawRoundedRect(upX, btnY, btnW, btnH, 4.0f,
+                                     hUp ? THEME_NAVY : 0xFF2A2A2E,
+                                     alpha);
+        RenderUtils::drawRoundedRect(dnX, btnY, btnW, btnH, 4.0f,
+                                     hDn ? THEME_NAVY : 0xFF2A2A2E,
+                                     alpha);
+        const float cxU = upX + btnW / 2.0f;
+        const float cyU = btnY + btnH / 2.0f;
+        const float cxD = dnX + btnW / 2.0f;
+        const float cyD = btnY + btnH / 2.0f;
+        const float armLen = 9.0f, armThick = 2.0f;
+        DWORD sym = 0xFFFFFFFF;
+        RenderUtils::drawRect(cxU - armLen / 2, cyU - armThick / 2,
+                              armLen, armThick, sym, alpha);
+        RenderUtils::drawRect(cxU - armThick / 2, cyU - armLen / 2,
+                              armThick, armLen, sym, alpha);
+        RenderUtils::drawRect(cxD - armLen / 2, cyD - armThick / 2,
+                              armLen, armThick, sym, alpha);
+        glEnable(GL_TEXTURE_2D);
+
+        if (hUp && clickEvent && h < 4.0f)
+          Config::setNameTagHeight(h + 0.1f);
+        if (hDn && clickEvent && h > 0.5f)
+          Config::setNameTagHeight(h - 0.1f);
+
+        cy += 30;
+      }
+
+      auto slots = Config::getNameTagStats();
+      auto labelFor = [](const std::string &k) -> const char * {
+        if (k == "star") return "Star";
+        if (k == "fkdr") return "FKDR";
+        if (k == "fk")   return "Final Kills";
+        if (k == "wins") return "Wins";
+        if (k == "wlr")  return "WLR";
+        if (k == "ws")   return "Winstreak";
+        return "?";
+      };
+
+      const float rowH = 32.0f;
+      const float rowGap = 4.0f;
+      const float handleW = 26.0f;
+
+      static int   s_dragIdx     = -1;
+      static float s_dragMouseDY = 0.0f;
+      static bool  s_dragMoved   = false;
+
+      static std::vector<float> s_rowAnimY(6, 0.0f);
+      if (s_rowAnimY.size() != slots.size())
+        s_rowAnimY.assign(slots.size(), 0.0f);
+      for (auto &v : s_rowAnimY) v *= 0.75f;
+
+      if (clickEvent) {
+        for (size_t r = 0; r < slots.size(); ++r) {
+          float ry = cy + r * (rowH + rowGap);
+          if (isHovered(mx, my, panelX, ry, handleW, rowH)) {
+            s_dragIdx = (int)r;
+            s_dragMouseDY = my - ry;
+            s_dragMoved = false;
+            break;
+          }
+        }
+      }
+
+      if (s_dragIdx >= 0 && lClick) {
+        int over = (int)((my - cy) / (rowH + rowGap));
+        if (over < 0) over = 0;
+        if (over >= (int)slots.size()) over = (int)slots.size() - 1;
+        if (over != s_dragIdx) {
+          int from = s_dragIdx, to = over;
+          if (from < to) {
+            for (int k = from + 1; k <= to; ++k)
+              s_rowAnimY[k] = -(rowH + rowGap);
+          } else {
+            for (int k = to; k < from; ++k)
+              s_rowAnimY[k] = +(rowH + rowGap);
+          }
+          auto moved = slots[from];
+          slots.erase(slots.begin() + from);
+          slots.insert(slots.begin() + to, moved);
+          Config::setNameTagStats(slots);
+          s_dragIdx = to;
+          s_dragMoved = true;
+        }
+      }
+      if (!lClick) s_dragIdx = -1;
+
+      for (size_t r = 0; r < slots.size(); ++r) {
+        float ry = cy + r * (rowH + rowGap) + s_rowAnimY[r];
+        bool isDragging = ((int)r == s_dragIdx);
+        bool rowHover = isHovered(mx, my, panelX, ry, panelW, rowH);
+        bool en = slots[r].second;
+
+        DWORD card =
+            isDragging ? 0xFF2A2A30
+            : rowHover ? 0xFF1F1F22
+                       : THEME_CARD;
+        glDisable(GL_TEXTURE_2D);
+        RenderUtils::drawRoundedRect(panelX, ry, panelW, rowH, 6.0f,
+                                     card, 0.55f * alpha);
+        if (en) {
+          RenderUtils::drawRoundedRect(panelX, ry, 3, rowH, 1.5f,
+                                       THEME_NAVY, alpha);
+        }
+        DWORD gripCol = (rowHover || isDragging) ? 0xFFE0E0E5 : 0xFF6F6F75;
+        float gx = panelX + 10, gy = ry + rowH / 2;
+        for (int dy = -1; dy <= 1; ++dy) {
+          RenderUtils::drawCircle(gx,     gy + dy * 5, 1.4f, gripCol, alpha);
+          RenderUtils::drawCircle(gx + 5, gy + dy * 5, 1.4f, gripCol, alpha);
+        }
+        glEnable(GL_TEXTURE_2D);
+
+        g_guiFont.drawString(panelX + handleW + 14, ry + 9,
+                             labelFor(slots[r].first),
+                             applyAlpha(0xFFFFFFFF, alpha));
+
+        float swX = panelX + panelW - 50;
+        float swY = ry + 7;
+        drawSwitch(2000 + (int)r, swX, swY, en, rowHover, alpha);
+
+        bool clickOnSwitch =
+            isHovered(mx, my, swX, swY, 34.0f, 18.0f);
+        bool clickOnRowBody =
+            rowHover && !isHovered(mx, my, panelX, ry, handleW, rowH);
+        if (clickEvent && (clickOnSwitch || clickOnRowBody) &&
+            !s_dragMoved && s_dragIdx < 0) {
+          slots[r].second = !en;
+          Config::setNameTagStats(slots);
+        }
+      }
+      if (!lClick) s_dragMoved = false;
+
+      cy += slots.size() * (rowH + rowGap) + 10;
     }
 
     cy += 20;
@@ -983,21 +1398,123 @@ void ClickGUI::render(HDC hdc) {
                          "Visible Columns:", applyAlpha(0xFFA0A0A5, alpha));
     cy += 30;
 
+    {
+      const char *targets[] = {"GUI Overlay", "Better Tab"};
+      g_guiFont.drawString(cx, cy + 8,
+                           "Target:", applyAlpha(0xFFA0A0A5, alpha));
+
+      float dropX = cx + 60;
+      float dropW = 140.0f;
+      float dropH = 30.0f;
+      bool hovDrop = isHovered(mx, my, dropX, cy, dropW, dropH);
+
+      s_columnTargetDropdownAnim +=
+          (s_isColumnTargetDropdownOpen ? 1.0f - s_columnTargetDropdownAnim
+                                        : 0.0f - s_columnTargetDropdownAnim) *
+          0.15f;
+
+      glDisable(GL_TEXTURE_2D);
+      RenderUtils::drawRoundedRect(dropX, cy, dropW, dropH, 6.0f, THEME_CARD,
+                                   0.8f * alpha);
+      if (hovDrop)
+        RenderUtils::drawRoundedRect(dropX, cy + dropH - 2, dropW, 2.0f, 1.0f,
+                                     0xFF808085, alpha);
+      glEnable(GL_TEXTURE_2D);
+
+      g_guiFont.drawString(dropX + 10, cy + 6, targets[s_columnTargetMode],
+                           applyAlpha(0xFFFFFFFF, alpha), 0.42f);
+
+      if (clickEvent && hovDrop)
+        s_isColumnTargetDropdownOpen = !s_isColumnTargetDropdownOpen;
+
+      if (s_columnTargetDropdownAnim > 0.01f) {
+        float listY = cy + dropH + 2;
+        for (int i = 0; i < 2; ++i) {
+          float itemY = listY + (i * dropH);
+          bool hItem = isHovered(mx, my, dropX, itemY, dropW, dropH);
+          glDisable(GL_TEXTURE_2D);
+          DWORD itCol = hItem ? 0xFF323236 : THEME_CARD;
+          RenderUtils::drawRoundedRect(dropX, itemY, dropW, dropH, 4.0f, itCol,
+                                       0.95f * alpha *
+                                           s_columnTargetDropdownAnim);
+          glEnable(GL_TEXTURE_2D);
+          g_guiFont.drawString(
+              dropX + 10, itemY + 10, targets[i],
+              applyAlpha(s_columnTargetMode == i ? 0xFFFFFFFF : 0xFFA0A0A5,
+                         alpha * s_columnTargetDropdownAnim),
+              0.42f);
+          if (clickEvent && hItem && s_columnTargetDropdownAnim > 0.8f) {
+            s_columnTargetMode = i;
+            s_isColumnTargetDropdownOpen = false;
+          }
+        }
+        cy += (2 * dropH) * s_columnTargetDropdownAnim;
+      }
+    }
+    cy += 45;
+
     struct ColToggle {
       std::string name;
       bool enabled;
       std::function<void(bool)> setter;
     };
-    ColToggle toggles[] = {
-        {"Star", Config::isShowStar(), [](bool b) { Config::setShowStar(b); }},
-        {"FK", Config::isShowFk(), [](bool b) { Config::setShowFk(b); }},
-        {"FKDR", Config::isShowFkdr(), [](bool b) { Config::setShowFkdr(b); }},
-        {"Wins", Config::isShowWins(), [](bool b) { Config::setShowWins(b); }},
-        {"WLR", Config::isShowWlr(), [](bool b) { Config::setShowWlr(b); }},
-        {"WS", Config::isShowWs(), [](bool b) { Config::setShowWs(b); }}};
+
+    std::vector<ColToggle> toggles;
+    if (s_columnTargetMode == 0) {
+      toggles = {
+          {"Star", Config::isOvShowStar(),
+           [](bool b) { Config::setOvShowStar(b); }},
+          {"FK", Config::isOvShowFk(), [](bool b) { Config::setOvShowFk(b); }},
+          {"FKDR", Config::isOvShowFkdr(),
+           [](bool b) { Config::setOvShowFkdr(b); }},
+          {"Wins", Config::isOvShowWins(),
+           [](bool b) { Config::setOvShowWins(b); }},
+          {"WLR", Config::isOvShowWlr(),
+           [](bool b) { Config::setOvShowWlr(b); }},
+          {"WS", Config::isOvShowWs(), [](bool b) { Config::setOvShowWs(b); }},
+          {"Kills", Config::isOvShowKills(),
+           [](bool b) { Config::setOvShowKills(b); }},
+          {"KDR", Config::isOvShowKdr(),
+           [](bool b) { Config::setOvShowKdr(b); }},
+          {"Beds", Config::isOvShowBeds(),
+           [](bool b) { Config::setOvShowBeds(b); }},
+          {"BLR", Config::isOvShowBlr(),
+           [](bool b) { Config::setOvShowBlr(b); }},
+          {"Ping", Config::isOvShowPing(),
+           [](bool b) { Config::setOvShowPing(b); }},
+          {"Tags", Config::isOvShowTags(),
+           [](bool b) { Config::setOvShowTags(b); }}};
+    } else {
+      toggles = {{"Star", Config::isProShowStar(),
+                  [](bool b) { Config::setProShowStar(b); }},
+                 {"FK", Config::isProShowFk(),
+                  [](bool b) { Config::setProShowFk(b); }},
+                 {"FKDR", Config::isProShowFkdr(),
+                  [](bool b) { Config::setProShowFkdr(b); }},
+                 {"Wins", Config::isProShowWins(),
+                  [](bool b) { Config::setProShowWins(b); }},
+                 {"WLR", Config::isProShowWlr(),
+                  [](bool b) { Config::setProShowWlr(b); }},
+                 {"WS", Config::isProShowWs(),
+                  [](bool b) { Config::setProShowWs(b); }},
+                 {"Kills", Config::isProShowKills(),
+                  [](bool b) { Config::setProShowKills(b); }},
+                 {"KDR", Config::isProShowKdr(),
+                  [](bool b) { Config::setProShowKdr(b); }},
+                 {"Beds", Config::isProShowBeds(),
+                  [](bool b) { Config::setProShowBeds(b); }},
+                 {"BLR", Config::isProShowBlr(),
+                  [](bool b) { Config::setProShowBlr(b); }},
+                 {"Ping", Config::isProShowPing(),
+                  [](bool b) { Config::setProShowPing(b); }},
+                 {"Tags", Config::isProShowTags(),
+                  [](bool b) { Config::setProShowTags(b); }},
+                 {"HP", Config::isProShowHp(),
+                  [](bool b) { Config::setProShowHp(b); }}};
+    }
 
     float tx = cx;
-    for (int i = 0; i < 6; ++i) {
+    for (size_t i = 0; i < toggles.size(); ++i) {
       float cardW = 125.0f;
       float cardH = 36.0f;
       bool hov = isHovered(mx, my, tx, cy, cardW, cardH);
@@ -1016,7 +1533,7 @@ void ClickGUI::render(HDC hdc) {
           0.45f);
 
       glDisable(GL_TEXTURE_2D);
-      drawSwitch(100 + i, tx + cardW - 45, cy + (cardH - 18.0f) / 2.0f,
+      drawSwitch(100 + (int)i, tx + cardW - 45, cy + (cardH - 18.0f) / 2.0f,
                  toggles[i].enabled, hov, alpha);
       glEnable(GL_TEXTURE_2D);
 
@@ -1038,13 +1555,13 @@ void ClickGUI::render(HDC hdc) {
     cy += 35;
 
     {
-      bool hTab = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 62);
+      bool hTab = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 85);
       glDisable(GL_TEXTURE_2D);
       DWORD tabCol = hTab ? 0xFF323236 : THEME_CARD;
-      RenderUtils::drawRoundedRect(mainX + 190, cy - 10, g_w - 210, 62, 8.0f,
+      RenderUtils::drawRoundedRect(mainX + 190, cy - 10, g_w - 210, 85, 8.0f,
                                    tabCol, 0.6f * alpha);
       if (hTab) {
-        RenderUtils::drawRect(mainX + 190, cy - 10, 3, 62, THEME_NAVY, alpha);
+        RenderUtils::drawRect(mainX + 190, cy - 10, 3, 85, THEME_NAVY, alpha);
       }
       glEnable(GL_TEXTURE_2D);
 
@@ -1057,17 +1574,36 @@ void ClickGUI::render(HDC hdc) {
       bool tabEnabled = Config::isTabEnabled();
       glDisable(GL_TEXTURE_2D);
       float tabSwX = mainX + g_w - 65;
-      drawSwitch(30, tabSwX, cy + 5, tabEnabled, hTab, alpha);
+      drawSwitch(30, tabSwX, cy + 5, tabEnabled, hTab && (my < cy + 30), alpha);
+      glEnable(GL_TEXTURE_2D);
+
+      bool hPro = hTab && (my >= cy + 30);
+      bool proEnabled = Config::isBetterTabModeEnabled();
+      float proAlpha = alpha * (tabEnabled ? 1.0f : 0.4f);
+
+      g_guiFont.drawString(cx + 10, cy + 45, "BetterTab",
+                           applyAlpha(0xFFFFFFFF, proAlpha), 0.42f);
+      glDisable(GL_TEXTURE_2D);
+      drawSwitch(33, tabSwX, cy + 42, proEnabled, hPro && tabEnabled, proAlpha);
       glEnable(GL_TEXTURE_2D);
 
       if (clickEvent && hTab) {
-        Config::setTabEnabled(!tabEnabled);
-        NotificationManager::getInstance()->add(
-            "Tab", !tabEnabled ? "Tab List Enabled" : "Tab List Disabled",
-            !tabEnabled ? NotificationType::Success
-                        : NotificationType::Warning);
+        if (my < cy + 30) {
+          Config::setTabEnabled(!tabEnabled);
+          NotificationManager::getInstance()->add(
+              "Tab", !tabEnabled ? "Tab List Enabled" : "Tab List Disabled",
+              !tabEnabled ? NotificationType::Success
+                          : NotificationType::Warning);
+        } else if (tabEnabled) {
+          Config::setBetterTabModeEnabled(!proEnabled);
+          NotificationManager::getInstance()->add(
+              "Tab",
+              !proEnabled ? "Better Mode Enabled" : "Better Mode Disabled",
+              !proEnabled ? NotificationType::Success
+                          : NotificationType::Warning);
+        }
       }
-      cy += 72;
+      cy += 95;
 
       bool hChatStats = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 62);
       glDisable(GL_TEXTURE_2D);
@@ -1182,115 +1718,479 @@ void ClickGUI::render(HDC hdc) {
   } else if (s_activeTab == 1) {
     g_guiFont.drawString(cx, cy, "Player Search",
                          applyAlpha(0xFFFFFFFF, alpha));
-    cy += 40;
+    cy += 24;
 
-    RenderUtils::drawRoundedRect(cx, cy, 360, 40, 6.0f, THEME_CARD,
-                                 0.6f * alpha);
+    float searchW = g_w - 200;
+    float searchH = 36.0f;
+    float searchX = mainX + 186;
+    bool hSearch = isHovered(mx, my, searchX, cy, searchW, searchH);
+    glDisable(GL_TEXTURE_2D);
+    DWORD searchBg =
+        s_typingSearch ? 0xFF1E1E22 : (hSearch ? 0xFF222226 : THEME_CARD);
+    RenderUtils::drawRoundedRect(searchX, cy, searchW, searchH, 8.0f, searchBg,
+                                 0.8f * alpha);
     if (s_typingSearch)
-      RenderUtils::drawRect(cx, cy, 2, 40, 0xFF808085, alpha);
-
-    bool hSearch = isHovered(mx, my, cx, cy, 360, 40);
+      RenderUtils::drawRoundedOutline(searchX, cy, searchW, searchH, 8.0f, 1.5f,
+                                      THEME_NAVY, 0.8f * alpha);
+    glEnable(GL_TEXTURE_2D);
 
     std::string dispSearch = s_playerSearch;
     if (s_typingSearch && (GetTickCount64() / 500) % 2 == 0)
       dispSearch += "|";
     if (dispSearch.empty() && !s_typingSearch)
-      dispSearch = "Enter player name...";
+      dispSearch = "Search player...";
 
     g_guiFont.drawString(
-        cx + 10, cy + 12, dispSearch,
-        applyAlpha(s_typingSearch ? 0xFFFFFFFF : 0xFF808085, alpha));
+        searchX + 12, cy + 7, dispSearch,
+        applyAlpha(s_typingSearch ? 0xFFFFFFFF : 0xFF606065, alpha));
 
-    if (clickEvent && isHovered(mx, my, cx, cy, 360, 40)) {
+    if (clickEvent && hSearch) {
       s_typingSearch = true;
       s_typingApiKey = s_typingAutoGG = s_typingUrchinKey = false;
-      NotificationManager::getInstance()->add("Input", "Search focused",
-                                              NotificationType::Info);
     } else if (clickEvent && !hSearch)
       s_typingSearch = false;
 
-    if (s_searching) {
-      cy += 60;
-      g_guiFont.drawString(cx, cy, "Fetching data from Hypixel API...",
-                           applyAlpha(0xFFA0A0A5, alpha));
-    } else if (s_hasLookup) {
-      cy += 60;
-      g_guiFont.drawString(cx, cy, "Result for: " + s_lookupName,
-                           applyAlpha(0xFF808085, alpha));
-      cy += 25;
-      g_guiFont.drawString(
-          cx, cy, "Star: " + std::to_string(s_lookupResult.bedwarsStar),
-          applyAlpha(0xFFFFFFFF, alpha));
-      g_guiFont.drawString(
-          cx + 100, cy, "Wins: " + std::to_string(s_lookupResult.bedwarsWins),
-          applyAlpha(0xFFFFFFFF, alpha));
-      g_guiFont.drawString(
-          cx, cy + 20,
-          "FKDR: " +
-              std::to_string((s_lookupResult.bedwarsFinalDeaths == 0)
-                                 ? s_lookupResult.bedwarsFinalKills
-                                 : (double)s_lookupResult.bedwarsFinalKills /
-                                       s_lookupResult.bedwarsFinalDeaths),
-          applyAlpha(0xFFFFFFFF, alpha));
-      cy += 40;
+    cy += searchH + 10;
 
-      auto drawWrapped = [&](const std::string &text, uint32_t color,
-                             float &currY) {
-        std::string line;
-        std::string word;
-        std::stringstream ss(text);
-        while (ss >> word) {
-          if (g_guiFont.getStringWidth(line + word) > 350) {
-            g_guiFont.drawString(cx + 10, currY, line,
-                                 applyAlpha(color, alpha));
-            currY += 18.0f;
-            line = "";
-          }
-          line += (line.empty() ? "" : " ") + word;
+    if (s_searching) {
+      float loadCardW = g_w - 210;
+      float loadCardH = 50.0f;
+      glDisable(GL_TEXTURE_2D);
+      RenderUtils::drawRoundedRect(mainX + 190, cy, loadCardW, loadCardH, 8.0f,
+                                   THEME_CARD, 0.6f * alpha);
+      glEnable(GL_TEXTURE_2D);
+      int dots = 1 + ((GetTickCount64() / 400) % 3);
+      std::string loadText = "Fetching stats";
+      for (int i = 0; i < dots; i++)
+        loadText += ".";
+      g_guiFont.drawString(mainX + 210, cy + 16, loadText,
+                           applyAlpha(0xFFA0A0A5, alpha));
+      cy += loadCardH + 10;
+    } else if (s_hasLookup) {
+      if (s_skinPendingReady) {
+        if (s_lookupSkinTexId) {
+          glDeleteTextures(1, &s_lookupSkinTexId);
+          s_lookupSkinTexId = 0;
         }
-        if (!line.empty()) {
-          g_guiFont.drawString(cx + 10, currY, line, applyAlpha(color, alpha));
-          currY += 18.0f;
+        glGenTextures(1, &s_lookupSkinTexId);
+        glBindTexture(GL_TEXTURE_2D, s_lookupSkinTexId);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, s_skinPendingW, s_skinPendingH,
+                     0, GL_RGBA, GL_UNSIGNED_BYTE, s_skinPendingData.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+        s_skinPendingReady = false;
+        s_skinPendingData.clear();
+      }
+
+      float cardW = g_w - 210;
+      float cardX = mainX + 190;
+
+      auto getRankDisplay = [&]() -> std::string {
+        const auto &r = s_lookupResult;
+        if (!r.prefix.empty())
+          return r.prefix;
+        if (r.rank == "ADMIN")
+          return "\xC2\xA7"
+                 "c[ADMIN]";
+        if (r.rank == "MODERATOR")
+          return "\xC2\xA7"
+                 "2[MOD]";
+        if (r.rank == "HELPER")
+          return "\xC2\xA7"
+                 "9[HELPER]";
+        if (r.rank == "YOUTUBER")
+          return "\xC2\xA7"
+                 "c[\xC2\xA7"
+                 "fYOUTUBE\xC2\xA7"
+                 "c]";
+        if (r.monthlyPackageRank == "SUPERSTAR") {
+          std::string plusCol = "\xC2\xA7"
+                                "c";
+          if (r.rankPlusColor == "GOLD")
+            plusCol = "\xC2\xA7"
+                      "6";
+          else if (r.rankPlusColor == "AQUA")
+            plusCol = "\xC2\xA7"
+                      "b";
+          else if (r.rankPlusColor == "GREEN")
+            plusCol = "\xC2\xA7"
+                      "a";
+          else if (r.rankPlusColor == "LIGHT_PURPLE")
+            plusCol = "\xC2\xA7"
+                      "d";
+          else if (r.rankPlusColor == "WHITE")
+            plusCol = "\xC2\xA7"
+                      "f";
+          else if (r.rankPlusColor == "BLUE")
+            plusCol = "\xC2\xA7"
+                      "9";
+          else if (r.rankPlusColor == "DARK_RED")
+            plusCol = "\xC2\xA7"
+                      "4";
+          else if (r.rankPlusColor == "DARK_AQUA")
+            plusCol = "\xC2\xA7"
+                      "3";
+          else if (r.rankPlusColor == "DARK_GREEN")
+            plusCol = "\xC2\xA7"
+                      "2";
+          else if (r.rankPlusColor == "DARK_PURPLE")
+            plusCol = "\xC2\xA7"
+                      "5";
+          else if (r.rankPlusColor == "YELLOW")
+            plusCol = "\xC2\xA7"
+                      "e";
+          return "\xC2\xA7"
+                 "6[MVP" +
+                 plusCol + "++" +
+                 "\xC2\xA7"
+                 "6]";
         }
+        if (r.newPackageRank == "MVP_PLUS") {
+          std::string plusCol = "\xC2\xA7"
+                                "c";
+          if (r.rankPlusColor == "GOLD")
+            plusCol = "\xC2\xA7"
+                      "6";
+          else if (r.rankPlusColor == "AQUA")
+            plusCol = "\xC2\xA7"
+                      "b";
+          else if (r.rankPlusColor == "GREEN")
+            plusCol = "\xC2\xA7"
+                      "a";
+          else if (r.rankPlusColor == "LIGHT_PURPLE")
+            plusCol = "\xC2\xA7"
+                      "d";
+          else if (r.rankPlusColor == "WHITE")
+            plusCol = "\xC2\xA7"
+                      "f";
+          else if (r.rankPlusColor == "BLUE")
+            plusCol = "\xC2\xA7"
+                      "9";
+          else if (r.rankPlusColor == "DARK_RED")
+            plusCol = "\xC2\xA7"
+                      "4";
+          else if (r.rankPlusColor == "DARK_AQUA")
+            plusCol = "\xC2\xA7"
+                      "3";
+          else if (r.rankPlusColor == "DARK_GREEN")
+            plusCol = "\xC2\xA7"
+                      "2";
+          else if (r.rankPlusColor == "DARK_PURPLE")
+            plusCol = "\xC2\xA7"
+                      "5";
+          else if (r.rankPlusColor == "YELLOW")
+            plusCol = "\xC2\xA7"
+                      "e";
+          return "\xC2\xA7"
+                 "b[MVP" +
+                 plusCol + "+" +
+                 "\xC2\xA7"
+                 "b]";
+        }
+        if (r.newPackageRank == "MVP")
+          return "\xC2\xA7"
+                 "b[MVP]";
+        if (r.newPackageRank == "VIP_PLUS")
+          return "\xC2\xA7"
+                 "a[VIP\xC2\xA7"
+                 "6+\xC2\xA7"
+                 "a]";
+        if (r.newPackageRank == "VIP")
+          return "\xC2\xA7"
+                 "a[VIP]";
+        return "\xC2\xA7"
+               "7";
       };
+
+      float headerH = 48.0f;
+      glDisable(GL_TEXTURE_2D);
+      RenderUtils::drawRoundedRect(cardX, cy, cardW, headerH, 8.0f, THEME_CARD,
+                                   0.7f * alpha);
+      RenderUtils::drawRect(cardX, cy + 4, 3, headerH - 8, THEME_NAVY, alpha);
+      glEnable(GL_TEXTURE_2D);
+
+      float textOffX = 0;
+      if (s_lookupSkinTexId) {
+        glColor4f(1.0f, 1.0f, 1.0f, alpha);
+        glBindTexture(GL_TEXTURE_2D, s_lookupSkinTexId);
+        glBegin(GL_QUADS);
+        float sw = 32.0f;
+        float sh = 32.0f;
+        float sx = cardX + 10;
+        float sy = cy + (headerH - sh) / 2.0f;
+        glTexCoord2f(0.0f, 0.0f);
+        glVertex2f(sx, sy);
+        glTexCoord2f(0.0f, 1.0f);
+        glVertex2f(sx, sy + sh);
+        glTexCoord2f(1.0f, 1.0f);
+        glVertex2f(sx + sw, sy + sh);
+        glTexCoord2f(1.0f, 0.0f);
+        glVertex2f(sx + sw, sy);
+        glEnd();
+        glBindTexture(GL_TEXTURE_2D, 0);
+        textOffX = 42.0f;
+      }
+
+      std::string rankStr = getRankDisplay();
+      std::string nameWithRank = rankStr + " " + s_lookupName;
+      g_guiFont.drawString(cardX + 14 + textOffX, cy + 8, nameWithRank,
+                           applyAlpha(0xFFFFFFFF, alpha));
+
+      std::string starFormatted =
+          BedwarsStars::GetFormattedLevel(s_lookupResult.bedwarsStar);
+      g_guiFont.drawString(cardX + 14 + textOffX, cy + 26, starFormatted,
+                           applyAlpha(0xFFFFFFFF, alpha));
+
+      std::string nlText =
+          "Level " + std::to_string(s_lookupResult.networkLevel);
+      g_guiFont.drawString(cardX + cardW - 120, cy + 8, nlText,
+                           applyAlpha(0xFF808085, alpha), 0.45f);
+      if (!s_lookupResult.uuid.empty()) {
+        std::string shortUuid = s_lookupResult.uuid.substr(0, 8) + "...";
+        g_guiFont.drawString(cardX + cardW - 120, cy + 22, shortUuid,
+                             applyAlpha(0xFF505055, alpha), 0.4f);
+      }
+
+      cy += headerH + 8;
+
+      struct StatEntry {
+        const char *label;
+        std::string value;
+        uint32_t color;
+      };
+
+      double fkdr = (s_lookupResult.bedwarsFinalDeaths == 0)
+                        ? (double)s_lookupResult.bedwarsFinalKills
+                        : (double)s_lookupResult.bedwarsFinalKills /
+                              s_lookupResult.bedwarsFinalDeaths;
+      double kdr = (s_lookupResult.bedwarsDeaths == 0)
+                       ? (double)s_lookupResult.bedwarsKills
+                       : (double)s_lookupResult.bedwarsKills /
+                             s_lookupResult.bedwarsDeaths;
+      double blr = (s_lookupResult.bedwarsBedsLost == 0)
+                       ? (double)s_lookupResult.bedwarsBedsBroken
+                       : (double)s_lookupResult.bedwarsBedsBroken /
+                             s_lookupResult.bedwarsBedsLost;
+      double wlr = (s_lookupResult.bedwarsLosses == 0)
+                       ? (double)s_lookupResult.bedwarsWins
+                       : (double)s_lookupResult.bedwarsWins /
+                             s_lookupResult.bedwarsLosses;
+
+      auto fmtK = [](int v) -> std::string {
+        if (v >= 1000000) {
+          char buf[32];
+          snprintf(buf, sizeof(buf), "%.1fM", v / 1000000.0);
+          return buf;
+        }
+        if (v >= 10000) {
+          char buf[32];
+          snprintf(buf, sizeof(buf), "%.1fK", v / 1000.0);
+          return buf;
+        }
+        return std::to_string(v);
+      };
+      auto fmtR = [](double v) -> std::string {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%.2f", v);
+        return buf;
+      };
+
+      StatEntry stats[] = {
+          {"Final Kills", fmtK(s_lookupResult.bedwarsFinalKills),
+           StatColors::getColor(StatColors::StatType::FinalKills,
+                                s_lookupResult.bedwarsFinalKills)},
+          {"FKDR", fmtR(fkdr),
+           StatColors::getColor(StatColors::StatType::FKDR, fkdr)},
+          {"Kills", fmtK(s_lookupResult.bedwarsKills),
+           StatColors::getColor(StatColors::StatType::Kills,
+                                s_lookupResult.bedwarsKills)},
+          {"KDR", fmtR(kdr),
+           StatColors::getColor(StatColors::StatType::KDR, kdr)},
+          {"Beds Broken", fmtK(s_lookupResult.bedwarsBedsBroken),
+           StatColors::getColor(StatColors::StatType::Beds,
+                                s_lookupResult.bedwarsBedsBroken)},
+          {"BLR", fmtR(blr),
+           StatColors::getColor(StatColors::StatType::BLR, blr)},
+          {"Wins", fmtK(s_lookupResult.bedwarsWins),
+           StatColors::getColor(StatColors::StatType::Wins,
+                                s_lookupResult.bedwarsWins)},
+          {"WLR", fmtR(wlr),
+           StatColors::getColor(StatColors::StatType::WLR, wlr)},
+          {"Winstreak", std::to_string(s_lookupResult.winstreak),
+           StatColors::getColor(StatColors::StatType::WS,
+                                s_lookupResult.winstreak)},
+      };
+      int statCount = sizeof(stats) / sizeof(stats[0]);
+
+      float colW = (cardW - 8) / 2.0f;
+      float statRowH = 36.0f;
+      int rowsNeeded = (statCount + 1) / 2;
+
+      glDisable(GL_TEXTURE_2D);
+      float gridH = rowsNeeded * statRowH + 8;
+      RenderUtils::drawRoundedRect(cardX, cy, cardW, gridH, 8.0f, THEME_CARD,
+                                   0.6f * alpha);
+      glEnable(GL_TEXTURE_2D);
+
+      for (int i = 0; i < statCount; i++) {
+        int col = i % 2;
+        int row = i / 2;
+        float sx = cardX + 14 + col * colW;
+        float sy = cy + 6 + row * statRowH;
+
+        g_guiFont.drawString(sx, sy, stats[i].label,
+                             applyAlpha(0xFF808085, alpha), 0.4f);
+        g_guiFont.drawString(sx, sy + 14, stats[i].value,
+                             applyAlpha(stats[i].color, alpha));
+      }
+
+      {
+        float sx0 = cardX + 14;
+        g_guiFont.drawString(
+            sx0 + g_guiFont.getStringWidth(stats[0].value) + 6, cy + 6 + 14 + 2,
+            "/ " + std::to_string(s_lookupResult.bedwarsFinalDeaths) + " FD",
+            applyAlpha(0xFF505055, alpha), 0.35f);
+        g_guiFont.drawString(
+            sx0 + g_guiFont.getStringWidth(stats[2].value) + 6,
+            cy + 6 + statRowH + 14 + 2,
+            "/ " + std::to_string(s_lookupResult.bedwarsDeaths) + " D",
+            applyAlpha(0xFF505055, alpha), 0.35f);
+        g_guiFont.drawString(
+            sx0 + g_guiFont.getStringWidth(stats[4].value) + 6,
+            cy + 6 + 2 * statRowH + 14 + 2,
+            "/ " + std::to_string(s_lookupResult.bedwarsBedsLost) + " BL",
+            applyAlpha(0xFF505055, alpha), 0.35f);
+        g_guiFont.drawString(
+            sx0 + g_guiFont.getStringWidth(stats[6].value) + 6,
+            cy + 6 + 3 * statRowH + 14 + 2,
+            "/ " + std::to_string(s_lookupResult.bedwarsLosses) + " L",
+            applyAlpha(0xFF505055, alpha), 0.35f);
+      }
+
+      cy += gridH + 8;
 
       if (Config::isTagsEnabled()) {
         std::string activeS = Config::getActiveTagService();
-        auto utags = Urchin::getPlayerTags(s_lookupName);
-        auto stags = Seraph::getPlayerTags(s_lookupName, s_lookupResult.uuid);
 
-        bool hasUrchin = utags && !utags->tags.empty() &&
+        bool hasUrchin = s_lookupUrchinTags &&
+                         !s_lookupUrchinTags->tags.empty() &&
                          (activeS == "Urchin" || activeS == "Both");
-        bool hasSeraph = stags && !stags->tags.empty() &&
+        bool hasSeraph = s_lookupSeraphTags &&
+                         !s_lookupSeraphTags->tags.empty() &&
                          (activeS == "Seraph" || activeS == "Both");
 
+        auto measureWrappedLines = [&](const std::string &text) -> int {
+          int lines = 0;
+          std::string line;
+          std::string word;
+          std::stringstream ss(text);
+          while (ss >> word) {
+            if (g_guiFont.getStringWidth(line + word) > cardW - 40) {
+              lines++;
+              line = "";
+            }
+            line += (line.empty() ? "" : " ") + word;
+          }
+          if (!line.empty())
+            lines++;
+          return lines;
+        };
+
+        auto drawWrapped = [&](const std::string &text, uint32_t color,
+                               float &currY) {
+          std::string line;
+          std::string word;
+          std::stringstream ss(text);
+          while (ss >> word) {
+            if (g_guiFont.getStringWidth(line + word) > cardW - 40) {
+              g_guiFont.drawString(cardX + 14, currY, line,
+                                   applyAlpha(color, alpha));
+              currY += 16.0f;
+              line = "";
+            }
+            line += (line.empty() ? "" : " ") + word;
+          }
+          if (!line.empty()) {
+            g_guiFont.drawString(cardX + 14, currY, line,
+                                 applyAlpha(color, alpha));
+            currY += 16.0f;
+          }
+        };
+
         if (hasUrchin) {
-          cy += 40;
-          g_guiFont.drawString(cx, cy,
-                               "Urchin Tags:", applyAlpha(0xFFA0A0A5, alpha));
-          cy += 20;
-          for (const auto &tag : utags->tags) {
-            std::string tagText = "[" + tag.type + "]";
-            if (!tag.reason.empty())
-              tagText += " - " + tag.reason;
-            drawWrapped(tagText, 0xFFCCCCCC, cy);
+          int totalLines = 0;
+          for (const auto &t : s_lookupUrchinTags->tags) {
+            std::string tstr = t.type;
+            if (tstr.empty())
+              continue;
+            std::string tagText = "[" + t.type + "]";
+            if (!t.reason.empty())
+              tagText += " - " + t.reason;
+            totalLines += measureWrappedLines(tagText);
           }
+          float tagCardH = 34.0f + totalLines * 16.0f;
+
+          glDisable(GL_TEXTURE_2D);
+          RenderUtils::drawRoundedRect(cardX, cy, cardW, tagCardH, 8.0f,
+                                       THEME_CARD, 0.6f * alpha);
+          RenderUtils::drawRect(cardX, cy + 4, 3, tagCardH - 8, 0xFF55FFFF,
+                                alpha);
+          glEnable(GL_TEXTURE_2D);
+          g_guiFont.drawString(cardX + 14, cy + 6, "Urchin Tags",
+                               applyAlpha(0xFF55FFFF, alpha), 0.45f);
+          float tagY = cy + 24;
+          for (const auto &t : s_lookupUrchinTags->tags) {
+            std::string tagText = "\xC2\xA7"
+                                  "e[" +
+                                  t.type + "]";
+            if (!t.reason.empty())
+              tagText += " \xC2\xA7"
+                         "7- " +
+                         t.reason;
+            drawWrapped(tagText, 0xFFCCCCCC, tagY);
+          }
+          cy += tagCardH + 6;
         }
+
         if (hasSeraph) {
-          cy += (hasUrchin ? 40 : 40);
-          g_guiFont.drawString(
-              cx, cy, "Seraph Blacklist:", applyAlpha(0xFFFF5555, alpha));
-          cy += 20;
-          for (const auto &tag : stags->tags) {
-            std::string tagText = "[" + tag.type + "]";
-            if (!tag.reason.empty())
-              tagText += " - " + tag.reason;
-            drawWrapped(tagText, 0xFFCCCCCC, cy);
+          int totalLines = 0;
+          for (const auto &t : s_lookupSeraphTags->tags) {
+            std::string tstr = t.type;
+            if (tstr.empty())
+              continue;
+            std::string tagText = "[" + t.type + "]";
+            if (!t.reason.empty())
+              tagText += " - " + t.reason;
+            totalLines += measureWrappedLines(tagText);
           }
+          float tagCardH = 34.0f + totalLines * 16.0f;
+
+          glDisable(GL_TEXTURE_2D);
+          RenderUtils::drawRoundedRect(cardX, cy, cardW, tagCardH, 8.0f,
+                                       THEME_CARD, 0.6f * alpha);
+          RenderUtils::drawRect(cardX, cy + 4, 3, tagCardH - 8, 0xFFFF5555,
+                                alpha);
+          glEnable(GL_TEXTURE_2D);
+          g_guiFont.drawString(cardX + 14, cy + 6, "Seraph Blacklist",
+                               applyAlpha(0xFFFF5555, alpha), 0.45f);
+          float tagY = cy + 24;
+          for (const auto &t : s_lookupSeraphTags->tags) {
+            std::string tagText = "\xC2\xA7"
+                                  "c[" +
+                                  t.type + "]";
+            if (!t.reason.empty())
+              tagText += " \xC2\xA7"
+                         "7- " +
+                         t.reason;
+            drawWrapped(tagText, 0xFFCCCCCC, tagY);
+          }
+          cy += tagCardH + 6;
         }
       }
     }
-    cy += 100;
+    cy += 20;
+
   } else if (s_activeTab == 2) {
     g_guiFont.drawString(cx, cy, "Tagging Services",
                          applyAlpha(0xFFFFFFFF, alpha));
@@ -1475,8 +2375,8 @@ void ClickGUI::render(HDC hdc) {
                          applyAlpha(0xFFFFFFFF, alpha));
     cy += 35;
 
-    std::lock_guard<std::mutex> stLock(ChatInterceptor::g_statsMutex);
-    if (ChatInterceptor::g_playerStatsMap.empty()) {
+    std::lock_guard<std::mutex> stLock(OVson::g_statsMutex);
+    if (OVson::g_playerStatsMap.empty()) {
       g_guiFont.drawString(cx, cy, "No players detected in this session.",
                            applyAlpha(0xFF808085, alpha));
       cy += 30;
@@ -1490,14 +2390,14 @@ void ClickGUI::render(HDC hdc) {
                            applyAlpha(0xFFA0A0A5, alpha));
       cy += 25;
 
-      for (const auto &pair : ChatInterceptor::g_playerStatsMap) {
+      for (const auto &pair : OVson::g_playerStatsMap) {
         const std::string &name = pair.first;
         const auto &stats = pair.second;
 
         bool rowHov = isHovered(mx, my, cx - 10, cy - 5, g_w - 220, 35);
         uint32_t nameCol = 0xFFFFFFFF;
-        auto itT = ChatInterceptor::g_playerTeamColor.find(name);
-        if (itT != ChatInterceptor::g_playerTeamColor.end()) {
+        auto itT = OVson::g_playerTeamColor.find(name);
+        if (itT != OVson::g_playerTeamColor.end()) {
           if (itT->second == "Red")
             nameCol = 0xFFFF5555;
           else if (itT->second == "Blue")
@@ -1619,6 +2519,106 @@ void ClickGUI::render(HDC hdc) {
                                                 NotificationType::Success);
       }
       s_typingApiKey = false;
+    }
+
+    cy += 65;
+    g_guiFont.drawString(cx, cy, "Aurora API Key",
+                         applyAlpha(0xFFA0A0A5, alpha));
+    cy += 25;
+    bool hAuroraKey = isHovered(mx, my, keyX, cy, keyW, 35);
+    glDisable(GL_TEXTURE_2D);
+    RenderUtils::drawRoundedRect(keyX, cy, keyW, 35, 6.0f, THEME_CARD,
+                                 0.6f * alpha);
+    if (s_typingAuroraApiKey)
+      RenderUtils::drawRect(keyX, cy, 2, 35, THEME_NAVY, alpha);
+    glEnable(GL_TEXTURE_2D);
+
+    if (!s_typingAuroraApiKey)
+      s_auroraApiKeyInput = Config::getAuroraApiKey();
+    std::string dispAurora =
+        s_typingAuroraApiKey
+            ? s_auroraApiKeyInput
+            : (s_auroraApiKeyInput.empty() ? "None" : "********************");
+    if (s_typingAuroraApiKey && (GetTickCount64() / 500) % 2 == 0)
+      dispAurora += "|";
+    g_guiFont.drawString(keyX + 10, cy + 12, dispAurora,
+                         applyAlpha(0xFFFFFFFF, alpha));
+
+    if (clickEvent && hAuroraKey) {
+      s_typingAuroraApiKey = true;
+      s_typingApiKey = s_typingSearch = s_typingAutoGG = s_typingUrchinKey =
+          s_typingSeraphKey = false;
+      NotificationManager::getInstance()->add("Input", "Aurora Key focused",
+                                              NotificationType::Info);
+    } else if (clickEvent && s_typingAuroraApiKey) {
+      Config::setAuroraApiKey(s_auroraApiKeyInput);
+      Config::save();
+      NotificationManager::getInstance()->add("Settings", "Aurora Key Saved",
+                                              NotificationType::Success);
+      s_typingAuroraApiKey = false;
+    }
+
+    cy += 65;
+    g_guiFont.drawString(cx, cy, "Ping History Mode",
+                         applyAlpha(0xFFFFFFFF, alpha));
+    cy += 30;
+
+    const char *pingModes[] = {"Current (Live)", "Aurora Latest",
+                               "Aurora Average"};
+    int currentPingMode = Config::getPingDisplayMode();
+
+    float pDropW = 220.0f;
+    float pDropH = 35.0f;
+    bool hovPDrop = isHovered(mx, my, cx, cy, pDropW, pDropH);
+
+    s_pingModeDropdownAnim +=
+        (s_isPingModeDropdownOpen ? 1.0f - s_pingModeDropdownAnim
+                                  : 0.0f - s_pingModeDropdownAnim) *
+        0.15f;
+
+    glDisable(GL_TEXTURE_2D);
+    RenderUtils::drawRoundedRect(cx, cy, pDropW, pDropH, 6.0f, THEME_CARD,
+                                 0.8f * alpha);
+    if (hovPDrop)
+      RenderUtils::drawRoundedRect(cx, cy + pDropH - 3, pDropW, 3.0f, 1.5f,
+                                   THEME_NAVY, alpha);
+    glEnable(GL_TEXTURE_2D);
+
+    g_guiFont.drawString(cx + 10, cy + 6, pingModes[currentPingMode % 3],
+                         applyAlpha(0xFFFFFFFF, alpha));
+    g_guiFont.drawString(cx + pDropW - 20, cy + 10,
+                         s_isPingModeDropdownOpen ? "-" : "+",
+                         applyAlpha(0xFFA0A0A5, alpha));
+
+    if (clickEvent && hovPDrop)
+      s_isPingModeDropdownOpen = !s_isPingModeDropdownOpen;
+
+    if (s_pingModeDropdownAnim > 0.01f) {
+      float listY = cy + pDropH + 2;
+      for (int i = 0; i < 3; ++i) {
+        float itemY = listY + (i * pDropH);
+        bool hItem = isHovered(mx, my, cx, itemY, pDropW, pDropH);
+        glDisable(GL_TEXTURE_2D);
+        DWORD itCol = hItem ? 0xFF222226 : THEME_CARD;
+        RenderUtils::drawRoundedRect(cx, itemY, pDropW, pDropH, 4.0f, itCol,
+                                     0.95f * alpha * s_pingModeDropdownAnim);
+        if (hItem)
+          RenderUtils::drawRect(cx, itemY, 3, pDropH, THEME_NAVY,
+                                alpha * s_pingModeDropdownAnim);
+        glEnable(GL_TEXTURE_2D);
+        g_guiFont.drawString(
+            cx + 15, itemY + 8, pingModes[i],
+            applyAlpha(currentPingMode == i ? 0xFFFFFFFF : 0xFFA0A0A5,
+                       alpha * s_pingModeDropdownAnim));
+        if (clickEvent && hItem && (s_pingModeDropdownAnim > 0.8f)) {
+          Config::setPingDisplayMode(i);
+          s_isPingModeDropdownOpen = false;
+          NotificationManager::getInstance()->add(
+              "Settings", "Ping Mode: " + std::string(pingModes[i]),
+              NotificationType::Info);
+        }
+      }
+      cy += (3 * pDropH) * s_pingModeDropdownAnim;
     }
 
     cy += 65;
@@ -1856,6 +2856,646 @@ void ClickGUI::render(HDC hdc) {
     cy += 50;
     cy += 50;
   } else if (s_activeTab == 4) {
+    g_guiFont.drawString(cx, cy, "Stat Color Ranges",
+                         applyAlpha(0xFFFFFFFF, alpha));
+    cy += 35;
+
+    const int statCount = (int)StatColors::StatType::COUNT;
+    float btnW = 55.0f;
+    float btnH = 26.0f;
+    float btnX = cx;
+    for (int i = 0; i < statCount; ++i) {
+      if ((StatColors::StatType)i == StatColors::StatType::Star) {
+        if (s_colorSelectedStat == i)
+          s_colorSelectedStat = 1;
+        continue;
+      }
+      const char *sName = StatColors::getStatName((StatColors::StatType)i);
+      bool sel = (s_colorSelectedStat == i);
+      bool hov = isHovered(mx, my, btnX, cy, btnW, btnH);
+      glDisable(GL_TEXTURE_2D);
+      RenderUtils::drawRoundedRect(
+          btnX, cy, btnW, btnH, 4.0f,
+          sel ? THEME_NAVY : (hov ? 0xFF323236 : THEME_CARD), alpha);
+      glEnable(GL_TEXTURE_2D);
+      g_guiFont.drawString(btnX + 5, cy + 4, sName,
+                           applyAlpha(sel ? 0xFFFFFFFF : 0xFF808085, alpha),
+                           0.4f);
+      if (clickEvent && hov) {
+        s_colorSelectedStat = i;
+        s_colorPickerOpen = false;
+        s_cpEditRangeIdx = -1;
+      }
+      btnX += btnW + 6;
+      if (btnX + btnW > mainX + g_w - 30) {
+        btnX = cx;
+        cy += btnH + 6;
+      }
+    }
+    cy += btnH + 20;
+
+    auto &cfg =
+        StatColors::getConfig((StatColors::StatType)s_colorSelectedStat);
+    g_guiFont.drawString(cx, cy,
+                         (std::string(cfg.name) + " Color Ranges:").c_str(),
+                         applyAlpha(0xFFA0A0A5, alpha));
+    cy += 25;
+
+    for (int ri = 0; ri < (int)cfg.ranges.size(); ++ri) {
+      const auto &r = cfg.ranges[ri];
+      float rowY = cy;
+      float rowW = g_w - 230;
+
+      bool hRow = isHovered(mx, my, cx, rowY, rowW, 28);
+      glDisable(GL_TEXTURE_2D);
+      RenderUtils::drawRoundedRect(cx, rowY, rowW, 28, 4.0f,
+                                   hRow ? 0xFF2A2A2E : THEME_CARD,
+                                   0.7f * alpha);
+      RenderUtils::drawRoundedRect(cx + 4, rowY + 4, 20, 20, 3.0f, r.color,
+                                   alpha);
+      glEnable(GL_TEXTURE_2D);
+
+      char rangeBuf[64];
+      bool isRatio = (s_colorSelectedStat == (int)StatColors::StatType::FKDR ||
+                      s_colorSelectedStat == (int)StatColors::StatType::KDR ||
+                      s_colorSelectedStat == (int)StatColors::StatType::WLR ||
+                      s_colorSelectedStat == (int)StatColors::StatType::BLR);
+
+      if (r.maxVal >= 1e300) {
+        if (isRatio)
+          snprintf(rangeBuf, sizeof(rangeBuf), "%.2f - INF", r.minVal);
+        else
+          snprintf(rangeBuf, sizeof(rangeBuf), "%.0f - INF", r.minVal);
+      } else {
+        if (isRatio)
+          snprintf(rangeBuf, sizeof(rangeBuf), "%.2f - %.2f", r.minVal,
+                   r.maxVal);
+        else
+          snprintf(rangeBuf, sizeof(rangeBuf), "%.0f - %.0f", r.minVal,
+                   r.maxVal);
+      }
+      g_guiFont.drawString(cx + 30, rowY + 5, rangeBuf,
+                           applyAlpha(0xFFFFFFFF, alpha), 0.4f);
+
+      char hexBuf[12];
+      snprintf(hexBuf, sizeof(hexBuf), "#%02X%02X%02X", (r.color >> 16) & 0xFF,
+               (r.color >> 8) & 0xFF, r.color & 0xFF);
+      g_guiFont.drawString(cx + 160, rowY + 5, hexBuf,
+                           applyAlpha(0xFFA0A0A5, alpha), 0.38f);
+
+      const char *mcName = StatColors::rgbToMcColor(r.color);
+      g_guiFont.drawString(cx + 240, rowY + 5, mcName,
+                           applyAlpha(0xFF808085, alpha), 0.35f);
+
+      float editX = cx + rowW - 65;
+      bool hEdit = isHovered(mx, my, editX, rowY + 2, 32, 24);
+      glDisable(GL_TEXTURE_2D);
+      if (hEdit || s_cpEditRangeIdx == ri)
+        RenderUtils::drawRoundedRect(editX, rowY + 2, 32, 24, 3.0f, THEME_NAVY,
+                                     alpha);
+      glEnable(GL_TEXTURE_2D);
+      g_guiFont.drawString(editX + 4, rowY + 3, "Edit",
+                           applyAlpha(0xFFFFFFFF, alpha), 0.35f);
+      if (clickEvent && hEdit) {
+        s_cpEditRangeIdx = ri;
+        s_colorPickerOpen = true;
+        bool isRatio =
+            (s_colorSelectedStat == (int)StatColors::StatType::FKDR ||
+             s_colorSelectedStat == (int)StatColors::StatType::KDR ||
+             s_colorSelectedStat == (int)StatColors::StatType::WLR ||
+             s_colorSelectedStat == (int)StatColors::StatType::BLR);
+
+        if (isRatio)
+          snprintf(s_cpMinBuf, sizeof(s_cpMinBuf), "%.2f", r.minVal);
+        else
+          snprintf(s_cpMinBuf, sizeof(s_cpMinBuf), "%.0f", r.minVal);
+
+        s_cpMinLen = (int)strlen(s_cpMinBuf);
+        if (r.maxVal >= 1e300) {
+          s_cpMaxBuf[0] = 0;
+          s_cpMaxLen = 0;
+        } else {
+          if (isRatio)
+            snprintf(s_cpMaxBuf, sizeof(s_cpMaxBuf), "%.2f", r.maxVal);
+          else
+            snprintf(s_cpMaxBuf, sizeof(s_cpMaxBuf), "%.0f", r.maxVal);
+          s_cpMaxLen = (int)strlen(s_cpMaxBuf);
+        }
+        uint8_t mr = (r.color >> 16) & 0xFF;
+        uint8_t mg = (r.color >> 8) & 0xFF;
+        uint8_t mb = r.color & 0xFF;
+        float rf = mr / 255.0f, gf = mg / 255.0f, bf = mb / 255.0f;
+        float cmax = (rf > gf) ? ((rf > bf) ? rf : bf) : ((gf > bf) ? gf : bf);
+        float cmin = (rf < gf) ? ((rf < bf) ? rf : bf) : ((gf < bf) ? gf : bf);
+        float delta = cmax - cmin;
+        s_cpVal = cmax;
+        s_cpSat = (cmax > 0) ? delta / cmax : 0;
+        if (delta < 0.001f)
+          s_cpHue = 0;
+        else if (cmax == rf)
+          s_cpHue = fmodf((gf - bf) / delta, 6.0f) / 6.0f;
+        else if (cmax == gf)
+          s_cpHue = ((bf - rf) / delta + 2.0f) / 6.0f;
+        else
+          s_cpHue = ((rf - gf) / delta + 4.0f) / 6.0f;
+        if (s_cpHue < 0)
+          s_cpHue += 1.0f;
+      }
+
+      float delX = cx + rowW - 28;
+      bool hDel = isHovered(mx, my, delX, rowY + 2, 24, 24);
+      glDisable(GL_TEXTURE_2D);
+      if (hDel)
+        RenderUtils::drawRoundedRect(delX, rowY + 2, 24, 24, 3.0f, 0xFF991111,
+                                     alpha);
+      glEnable(GL_TEXTURE_2D);
+      g_guiFont.drawString(delX + 7, rowY + 3, "X",
+                           applyAlpha(hDel ? 0xFFFFFFFF : 0xFFFF5555, alpha),
+                           0.4f);
+      if (clickEvent && hDel) {
+        StatColors::removeRange((StatColors::StatType)s_colorSelectedStat, ri);
+        Config::save();
+        NotificationManager::getInstance()->add("Colors", "Range removed",
+                                                NotificationType::Info);
+        if (s_cpEditRangeIdx == ri) {
+          s_cpEditRangeIdx = -1;
+          s_colorPickerOpen = false;
+        }
+        break;
+      }
+
+      cy += 32;
+    }
+
+    cy += 15;
+
+    float addBtnW = 160.0f;
+    bool hAdd = isHovered(mx, my, cx, cy, addBtnW, 30);
+    glDisable(GL_TEXTURE_2D);
+    RenderUtils::drawRoundedRect(
+        cx, cy, addBtnW, 30, 5.0f,
+        s_colorPickerOpen ? THEME_NAVY : (hAdd ? 0xFF323236 : THEME_CARD),
+        alpha);
+    glEnable(GL_TEXTURE_2D);
+    g_guiFont.drawString(cx + 10, cy + 6,
+                         s_colorPickerOpen ? "- Close Picker" : "+ Add Range",
+                         applyAlpha(0xFFFFFFFF, alpha), 0.42f);
+    if (clickEvent && hAdd) {
+      s_colorPickerOpen = !s_colorPickerOpen;
+      s_cpEditingField = 0;
+      if (!s_colorPickerOpen)
+        s_cpEditRangeIdx = -1;
+    }
+
+    float rstX = cx + addBtnW + 15;
+    float rstW = 140.0f;
+    bool hRst = isHovered(mx, my, rstX, cy, rstW, 30);
+    glDisable(GL_TEXTURE_2D);
+    RenderUtils::drawRoundedRect(rstX, cy, rstW, 30, 5.0f,
+                                 hRst ? 0xFF991111 : THEME_CARD, alpha);
+    glEnable(GL_TEXTURE_2D);
+    g_guiFont.drawString(rstX + 8, cy + 6, "Reset Defaults",
+                         applyAlpha(0xFFFFFFFF, alpha), 0.42f);
+    if (clickEvent && hRst) {
+      StatColors::resetToDefaults((StatColors::StatType)s_colorSelectedStat);
+      Config::save();
+      NotificationManager::getInstance()->add("Colors", "Reset to defaults",
+                                              NotificationType::Success);
+    }
+    cy += 40;
+
+    if (s_colorPickerOpen) {
+      float popX = mainX + 185;
+      float popY = cy;
+      float popW = g_w - 205;
+      float popH = 230;
+
+      glDisable(GL_TEXTURE_2D);
+      RenderUtils::drawRoundedRect(popX - 1, popY - 1, popW + 2, popH + 2, 8.0f,
+                                   THEME_BORDER, alpha);
+      RenderUtils::drawRoundedRect(popX, popY, popW, popH, 8.0f, 0xFF111113,
+                                   alpha);
+
+      float svX = popX + 12;
+      float svY = popY + 12;
+      float svSize = 140.0f;
+
+      glDisable(GL_TEXTURE_2D);
+      glDisable(GL_LIGHTING);
+      glDisable(GL_CULL_FACE);
+      glDisable(GL_ALPHA_TEST);
+      glDisable(GL_DEPTH_TEST);
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glShadeModel(GL_SMOOTH);
+
+      {
+        float hr = 1, hg = 1, hb = 1;
+        float h6 = s_cpHue * 6.0f;
+        int hi = (int)h6 % 6;
+        float f = h6 - (int)h6;
+        switch (hi) {
+        case 0:
+          hr = 1;
+          hg = f;
+          hb = 0;
+          break;
+        case 1:
+          hr = 1 - f;
+          hg = 1;
+          hb = 0;
+          break;
+        case 2:
+          hr = 0;
+          hg = 1;
+          hb = f;
+          break;
+        case 3:
+          hr = 0;
+          hg = 1 - f;
+          hb = 1;
+          break;
+        case 4:
+          hr = f;
+          hg = 0;
+          hb = 1;
+          break;
+        case 5:
+          hr = 1;
+          hg = 0;
+          hb = 1 - f;
+          break;
+        }
+
+        glBegin(GL_QUADS);
+        glColor4f(1.0f, 1.0f, 1.0f, alpha);
+        glVertex2f(svX, svY);
+        glColor4f(hr, hg, hb, alpha);
+        glVertex2f(svX + svSize, svY);
+        glColor4f(hr, hg, hb, alpha);
+        glVertex2f(svX + svSize, svY + svSize);
+        glColor4f(1.0f, 1.0f, 1.0f, alpha);
+        glVertex2f(svX, svY + svSize);
+        glEnd();
+      }
+
+      {
+        glBegin(GL_QUADS);
+        glColor4f(0.0f, 0.0f, 0.0f, 0.0f);
+        glVertex2f(svX, svY);
+        glColor4f(0.0f, 0.0f, 0.0f, 0.0f);
+        glVertex2f(svX + svSize, svY);
+        glColor4f(0.0f, 0.0f, 0.0f, alpha);
+        glVertex2f(svX + svSize, svY + svSize);
+        glColor4f(0.0f, 0.0f, 0.0f, alpha);
+        glVertex2f(svX, svY + svSize);
+        glEnd();
+      }
+
+      float cursorX = svX + s_cpSat * svSize;
+      float cursorY = svY + (1.0f - s_cpVal) * svSize;
+      glShadeModel(GL_FLAT);
+      glColor4f(1.0f, 1.0f, 1.0f, alpha);
+      glLineWidth(1.5f);
+      glBegin(GL_LINE_LOOP);
+      for (int a = 0; a < 16; ++a) {
+        float angle = a * 6.2831853f / 16.0f;
+        glVertex2f(cursorX + cosf(angle) * 4, cursorY + sinf(angle) * 4);
+      }
+      glEnd();
+      glLineWidth(1.0f);
+      glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+
+      if (isHovered(mx, my, svX, svY, svSize, svSize)) {
+        if (lClick) {
+          s_cpDraggingSV = true;
+        }
+      }
+      if (s_cpDraggingSV) {
+        if (lClick) {
+          s_cpSat = (mx - svX) / svSize;
+          s_cpVal = 1.0f - (my - svY) / svSize;
+          if (s_cpSat < 0)
+            s_cpSat = 0;
+          if (s_cpSat > 1)
+            s_cpSat = 1;
+          if (s_cpVal < 0)
+            s_cpVal = 0;
+          if (s_cpVal > 1)
+            s_cpVal = 1;
+        } else {
+          s_cpDraggingSV = false;
+        }
+      }
+
+      float hueX = svX + svSize + 15;
+      float hueY = svY;
+      float hueW = 20.0f;
+      float hueH = svSize;
+      int hueSteps = 24;
+      float stepH = hueH / hueSteps;
+      for (int i = 0; i < hueSteps; ++i) {
+        float h1 = (float)i / hueSteps;
+        float h2 = (float)(i + 1) / hueSteps;
+        float r1, g1, b1, r2, g2, b2;
+        auto hsvRgb = [](float h, float &r, float &g, float &b) {
+          float h6 = h * 6.0f;
+          int hi = (int)h6 % 6;
+          float f = h6 - (int)h6;
+          switch (hi) {
+          case 0:
+            r = 1;
+            g = f;
+            b = 0;
+            break;
+          case 1:
+            r = 1 - f;
+            g = 1;
+            b = 0;
+            break;
+          case 2:
+            r = 0;
+            g = 1;
+            b = f;
+            break;
+          case 3:
+            r = 0;
+            g = 1 - f;
+            b = 1;
+            break;
+          case 4:
+            r = f;
+            g = 0;
+            b = 1;
+            break;
+          case 5:
+            r = 1;
+            g = 0;
+            b = 1 - f;
+            break;
+          }
+        };
+        hsvRgb(h1, r1, g1, b1);
+        hsvRgb(h2, r2, g2, b2);
+        glBegin(GL_QUADS);
+        glColor4f(r1, g1, b1, alpha);
+        glVertex2f(hueX, hueY + i * stepH);
+        glColor4f(r1, g1, b1, alpha);
+        glVertex2f(hueX + hueW, hueY + i * stepH);
+        glColor4f(r2, g2, b2, alpha);
+        glVertex2f(hueX + hueW, hueY + (i + 1) * stepH);
+        glColor4f(r2, g2, b2, alpha);
+        glVertex2f(hueX, hueY + (i + 1) * stepH);
+        glEnd();
+      }
+
+      float hueCurY = hueY + s_cpHue * hueH;
+      glColor4f(1, 1, 1, alpha);
+      glBegin(GL_LINES);
+      glVertex2f(hueX - 2, hueCurY);
+      glVertex2f(hueX + hueW + 2, hueCurY);
+      glEnd();
+
+      if (isHovered(mx, my, hueX - 4, hueY, hueW + 8, hueH) &&
+          !s_cpDraggingSV) {
+        if (lClick)
+          s_cpDraggingHue = true;
+      }
+      if (s_cpDraggingHue) {
+        if (lClick) {
+          s_cpHue = (my - hueY) / hueH;
+          if (s_cpHue < 0)
+            s_cpHue = 0;
+          if (s_cpHue > 0.999f)
+            s_cpHue = 0.999f;
+        } else {
+          s_cpDraggingHue = false;
+        }
+      }
+
+      glEnable(GL_TEXTURE_2D);
+
+      float rpX = hueX + hueW + 20;
+      float rpY = popY + 12;
+      auto hsvToRgb32 = [](float h, float s, float v) -> uint32_t {
+        float h6 = h * 6.0f;
+        int hi = (int)h6 % 6;
+        float f = h6 - (int)h6;
+        float p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
+        float r, g, b;
+        switch (hi) {
+        case 0:
+          r = v;
+          g = t;
+          b = p;
+          break;
+        case 1:
+          r = q;
+          g = v;
+          b = p;
+          break;
+        case 2:
+          r = p;
+          g = v;
+          b = t;
+          break;
+        case 3:
+          r = p;
+          g = q;
+          b = v;
+          break;
+        case 4:
+          r = t;
+          g = p;
+          b = v;
+          break;
+        default:
+          r = v;
+          g = p;
+          b = q;
+          break;
+        }
+        return 0xFF000000 | ((uint8_t)(r * 255) << 16) |
+               ((uint8_t)(g * 255) << 8) | (uint8_t)(b * 255);
+      };
+
+      uint32_t previewColor = hsvToRgb32(s_cpHue, s_cpSat, s_cpVal);
+      glDisable(GL_TEXTURE_2D);
+      RenderUtils::drawRoundedRect(rpX, rpY, 60, 30, 4.0f, previewColor, alpha);
+      glEnable(GL_TEXTURE_2D);
+      char rgbBuf[32];
+      snprintf(rgbBuf, sizeof(rgbBuf), "R:%d G:%d B:%d",
+               (previewColor >> 16) & 0xFF, (previewColor >> 8) & 0xFF,
+               previewColor & 0xFF);
+      g_guiFont.drawString(rpX, rpY + 38, rgbBuf, applyAlpha(0xFFA0A0A5, alpha),
+                           0.38f);
+      char hexBuf2[12];
+      snprintf(hexBuf2, sizeof(hexBuf2), "#%02X%02X%02X",
+               (previewColor >> 16) & 0xFF, (previewColor >> 8) & 0xFF,
+               previewColor & 0xFF);
+      g_guiFont.drawString(rpX + 70, rpY + 8, hexBuf2,
+                           applyAlpha(0xFFFFFFFF, alpha), 0.42f);
+      rpY += 58;
+      g_guiFont.drawString(rpX, rpY,
+                           "MC Colors:", applyAlpha(0xFF808085, alpha), 0.38f);
+      rpY += 18;
+      struct McPreset {
+        const char *name;
+        uint32_t color;
+      };
+      McPreset mcPresets[] = {
+          {"0", 0xFF000000}, {"1", 0xFF0000AA}, {"2", 0xFF00AA00},
+          {"3", 0xFF00AAAA}, {"4", 0xFFAA0000}, {"5", 0xFFAA00AA},
+          {"6", 0xFFFFAA00}, {"7", 0xFFAAAAAA}, {"8", 0xFF555555},
+          {"9", 0xFF5555FF}, {"a", 0xFF55FF55}, {"b", 0xFF55FFFF},
+          {"c", 0xFFFF5555}, {"d", 0xFFFF55FF}, {"e", 0xFFFFFF55},
+          {"f", 0xFFFFFFFF},
+      };
+      float mcX = rpX;
+      for (int i = 0; i < 16; ++i) {
+        bool hMc = isHovered(mx, my, mcX, rpY, 14, 14);
+        glDisable(GL_TEXTURE_2D);
+        RenderUtils::drawRoundedRect(mcX, rpY, 14, 14, 2.0f, mcPresets[i].color,
+                                     alpha);
+        if (hMc)
+          RenderUtils::drawRoundedRect(mcX - 1, rpY - 1, 16, 16, 2.0f,
+                                       0xFFFFFFFF, 0.5f * alpha);
+        glEnable(GL_TEXTURE_2D);
+        if (clickEvent && hMc) {
+          uint8_t mr = (mcPresets[i].color >> 16) & 0xFF;
+          uint8_t mg = (mcPresets[i].color >> 8) & 0xFF;
+          uint8_t mb = mcPresets[i].color & 0xFF;
+          float rf = mr / 255.0f, gf = mg / 255.0f, bf = mb / 255.0f;
+          float cmax =
+              (rf > gf) ? ((rf > bf) ? rf : bf) : ((gf > bf) ? gf : bf);
+          float cmin =
+              (rf < gf) ? ((rf < bf) ? rf : bf) : ((gf < bf) ? gf : bf);
+          float delta = cmax - cmin;
+          s_cpVal = cmax;
+          s_cpSat = (cmax > 0) ? delta / cmax : 0;
+          if (delta < 0.001f)
+            s_cpHue = 0;
+          else if (cmax == rf)
+            s_cpHue = fmodf((gf - bf) / delta, 6.0f) / 6.0f;
+          else if (cmax == gf)
+            s_cpHue = ((bf - rf) / delta + 2.0f) / 6.0f;
+          else
+            s_cpHue = ((rf - gf) / delta + 4.0f) / 6.0f;
+          if (s_cpHue < 0)
+            s_cpHue += 1.0f;
+        }
+        mcX += 17;
+        if (i == 7) {
+          mcX = rpX;
+          rpY += 17;
+        }
+      }
+
+      rpY += 22;
+
+      bool showCursor = (GetTickCount64() / 500) % 2 == 0;
+
+      g_guiFont.drawString(rpX, rpY, "Min:", applyAlpha(0xFFA0A0A5, alpha),
+                           0.38f);
+      float minBoxX = rpX + 30;
+      bool hMinBox = isHovered(mx, my, minBoxX, rpY - 3, 55, 20);
+      glDisable(GL_TEXTURE_2D);
+      RenderUtils::drawRoundedRect(
+          minBoxX, rpY - 3, 55, 20, 3.0f,
+          s_cpEditingField == 1 ? 0xFF2A2A2E : THEME_CARD, alpha);
+      glEnable(GL_TEXTURE_2D);
+      g_guiFont.drawString(minBoxX + 4, rpY - 1, s_cpMinBuf,
+                           applyAlpha(0xFFFFFFFF, alpha), 0.38f);
+      if (s_cpEditingField == 1 && showCursor) {
+        float tw = (g_guiFont.getStringWidth(s_cpMinBuf) / 0.5f) * 0.38f;
+        glDisable(GL_TEXTURE_2D);
+        glColor4f(1, 1, 1, alpha);
+        glBegin(GL_LINES);
+        glVertex2f(minBoxX + 4 + tw, rpY - 1);
+        glVertex2f(minBoxX + 4 + tw, rpY + 13);
+        glEnd();
+        glEnable(GL_TEXTURE_2D);
+      }
+      if (clickEvent && hMinBox)
+        s_cpEditingField = 1;
+
+      g_guiFont.drawString(rpX + 95, rpY, "Max:", applyAlpha(0xFFA0A0A5, alpha),
+                           0.38f);
+      float maxBoxX = rpX + 125;
+      bool hMaxBox = isHovered(mx, my, maxBoxX, rpY - 3, 55, 20);
+      glDisable(GL_TEXTURE_2D);
+      RenderUtils::drawRoundedRect(
+          maxBoxX, rpY - 3, 55, 20, 3.0f,
+          s_cpEditingField == 2 ? 0xFF2A2A2E : THEME_CARD, alpha);
+      glEnable(GL_TEXTURE_2D);
+      g_guiFont.drawString(maxBoxX + 4, rpY - 1, s_cpMaxBuf,
+                           applyAlpha(0xFFFFFFFF, alpha), 0.38f);
+      if (s_cpEditingField == 2 && showCursor) {
+        float tw = (g_guiFont.getStringWidth(s_cpMaxBuf) / 0.5f) * 0.38f;
+        glDisable(GL_TEXTURE_2D);
+        glColor4f(1, 1, 1, alpha);
+        glBegin(GL_LINES);
+        glVertex2f(maxBoxX + 4 + tw, rpY - 1);
+        glVertex2f(maxBoxX + 4 + tw, rpY + 13);
+        glEnd();
+        glEnable(GL_TEXTURE_2D);
+      }
+      if (clickEvent && hMaxBox)
+        s_cpEditingField = 2;
+
+      if (clickEvent && !hMinBox && !hMaxBox)
+        s_cpEditingField = 0;
+
+      rpY += 28;
+
+      float addW2 = 120.0f;
+      bool hAdd2 = isHovered(mx, my, rpX, rpY, addW2, 26);
+      glDisable(GL_TEXTURE_2D);
+      RenderUtils::drawRoundedRect(rpX, rpY, addW2, 26, 4.0f,
+                                   hAdd2 ? THEME_NAVY : 0xFF2A2A2E, alpha);
+      glEnable(GL_TEXTURE_2D);
+      g_guiFont.drawString(rpX + 12, rpY + 4,
+                           s_cpEditRangeIdx >= 0 ? "Save Changes" : "Add Range",
+                           applyAlpha(0xFFFFFFFF, alpha), 0.4f);
+
+      if (clickEvent && hAdd2) {
+        double minV = atof(s_cpMinBuf);
+        double maxV = atof(s_cpMaxBuf);
+        if (maxV <= 0 || strlen(s_cpMaxBuf) == 0)
+          maxV = 1e308;
+
+        bool success = false;
+        if (s_cpEditRangeIdx >= 0) {
+          success = StatColors::updateRange(
+              (StatColors::StatType)s_colorSelectedStat, s_cpEditRangeIdx, minV,
+              maxV, previewColor);
+        } else {
+          success =
+              StatColors::addRange((StatColors::StatType)s_colorSelectedStat,
+                                   minV, maxV, previewColor);
+        }
+
+        if (success) {
+          Config::save();
+          NotificationManager::getInstance()->add(
+              "Colors",
+              s_cpEditRangeIdx >= 0 ? "Range updated!" : "Range added!",
+              NotificationType::Success);
+          s_cpEditRangeIdx = -1;
+          if (s_cpEditRangeIdx >= 0)
+            s_colorPickerOpen = false;
+        } else {
+          NotificationManager::getInstance()->add(
+              "Colors", "Overlap! Check existing ranges.",
+              NotificationType::Error);
+        }
+      }
+
+      cy += popH + 10;
+    }
+
+    cy += 30;
+  } else if (s_activeTab == 5) {
     g_guiFont.drawString(cx, cy, "Debug Console Settings",
                          applyAlpha(0xFFFFFFFF, alpha));
     cy += 40;
@@ -1953,7 +3593,7 @@ void ClickGUI::render(HDC hdc) {
     g_guiFont.drawString(clearTextX, cy + 4, clearText,
                          applyAlpha(0xFFFFFFFF, alpha));
     if (clickEvent && hClear) {
-      ChatInterceptor::clearAllCaches();
+      OVson::clearAllCaches();
       NotificationManager::getInstance()->add(
           "System", "All caches cleared and reset!", NotificationType::Success);
     }

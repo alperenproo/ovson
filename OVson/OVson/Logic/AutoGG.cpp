@@ -4,6 +4,7 @@
 #include "../Render/NotificationManager.h"
 #include "../Render/RenderHook.h"
 #include "../Utils/Logger.h"
+#include "../Utils/SafeGuard.h"
 #include <thread>
 #include <chrono>
 
@@ -22,23 +23,26 @@ namespace Logic {
             Logger::log(Config::DebugCategory::General, "AutoGG Triggered by chat: %s", chat.c_str());
 
             std::thread([]() {
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                
-                std::string msg = Config::getAutoGGMessage();
-                if (msg.empty()) msg = "gg";
-                
-                std::string fullMsg = "/ac " + msg;
-                
-                Logger::log(Config::DebugCategory::General, "AutoGG enqueuing task: %s", fullMsg.c_str());
+                SafeGuard::installSehTranslator();
+                SafeGuard::run("AutoGG::worker", []() {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-                RenderHook::enqueueTask([fullMsg]() {
-                    Logger::log(Config::DebugCategory::General, "AutoGG executing task (main thread)");
-                    if (!ChatSDK::sendClientChat(fullMsg)) {
-                        Logger::log(Config::DebugCategory::General, "AutoGG failed to send chat (player might be null)");
-                    }
+                    std::string msg = Config::getAutoGGMessage();
+                    if (msg.empty()) msg = "gg";
+
+                    std::string fullMsg = "/ac " + msg;
+
+                    Logger::log(Config::DebugCategory::General, "AutoGG enqueuing task: %s", fullMsg.c_str());
+
+                    RenderHook::enqueueTask([fullMsg]() {
+                        Logger::log(Config::DebugCategory::General, "AutoGG executing task (main thread)");
+                        if (!ChatSDK::sendClientChat(fullMsg)) {
+                            Logger::log(Config::DebugCategory::General, "AutoGG failed to send chat (player might be null)");
+                        }
+                    });
+
+                    Render::NotificationManager::getInstance()->add("AutoGG", "Message sent: " + fullMsg, Render::NotificationType::Success);
                 });
-                
-                Render::NotificationManager::getInstance()->add("AutoGG", "Message sent: " + fullMsg, Render::NotificationType::Success);
             }).detach();
         }
     }

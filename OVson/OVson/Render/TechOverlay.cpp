@@ -1,7 +1,7 @@
 #include "TechOverlay.h"
-#include "../Chat/ChatInterceptor.h"
 #include "../Config/Config.h"
 #include "../Java.h"
+#include "../Logic/StatsTracker.h"
 #include "../Render/FontRenderer.h"
 #include "../Render/RenderUtils.h"
 #include "../Utils/Logger.h"
@@ -32,13 +32,13 @@ void render(void *hdc, int screenWidth, int screenHeight) {
   if (!env)
     return;
 
-  float latency = ChatInterceptor::g_jniLatency;
+  float latency = OVson::g_jniLatency;
   int activeThreads = ThreadTracker::g_activeThreads.load();
 
   size_t cachedPlayers = 0;
   {
-    std::lock_guard<std::mutex> lock(ChatInterceptor::g_statsMutex);
-    cachedPlayers = ChatInterceptor::g_playerStatsMap.size();
+    std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
+    cachedPlayers = OVson::g_playerStatsMap.size();
   }
 
   static int s_cachedFps = 0;
@@ -66,8 +66,8 @@ void render(void *hdc, int screenWidth, int screenHeight) {
 
   size_t cacheBytes = 0;
   {
-    std::lock_guard<std::mutex> lock(ChatInterceptor::g_statsMutex);
-    for (const auto &pair : ChatInterceptor::g_playerStatsMap) {
+    std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
+    for (const auto &pair : OVson::g_playerStatsMap) {
       cacheBytes += sizeof(pair.first) + pair.first.capacity();
       const auto &s = pair.second;
       cacheBytes += sizeof(s) + s.uuid.capacity() + s.displayName.capacity() +
@@ -117,11 +117,11 @@ void render(void *hdc, int screenWidth, int screenHeight) {
   std::stringstream ss_cache;
   ss_cache << std::fixed << std::setprecision(3) << cacheMB;
 
-  int processed = ChatInterceptor::getProcessedCount();
-  int active = ChatInterceptor::getActiveFetchCount();
-  int pending = ChatInterceptor::getPendingStatsCount();
-  float apiLat = ChatInterceptor::getApiLatency();
-  float scanSpeed = ChatInterceptor::getScanSpeed();
+  int processed = OVson::getProcessedCount();
+  int active = OVson::getActiveFetchCount();
+  int pending = OVson::getPendingStatsCount();
+  float apiLat = OVson::getApiLatency();
+  float scanSpeed = OVson::getScanSpeed();
 
   lines.push_back("\xC2\xA7"
                   "7Threads: \xC2\xA7"
@@ -212,7 +212,7 @@ void render(void *hdc, int screenWidth, int screenHeight) {
   }
 }
 void shutdown() {
-  //
+  // yeniden yeniden
 }
 } // namespace TechOverlay
 } // namespace Render

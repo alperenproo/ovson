@@ -2,7 +2,9 @@
 #include "../Java.h"
 #include "../Render/NotificationManager.h"
 #include "../Utils/Logger.h"
+#include "StatColors.h"
 #include <cstdio>
+#include <cstdlib>
 #include <jni.h>
 #include <shlobj.h>
 #include <string>
@@ -15,12 +17,17 @@ static bool g_tabEnabled = true;
 static std::string g_tabDisplayMode = "fkdr";
 static bool g_tabSortDescending = true;
 static std::string g_sortMode = "Team";
-static bool g_showStar = true;
-static bool g_showFk = true;
-static bool g_showFkdr = true;
-static bool g_showWins = true;
-static bool g_showWlr = true;
-static bool g_showWs = true;
+static bool g_ovShowStar = true, g_ovShowFk = true, g_ovShowFkdr = true,
+            g_ovShowWins = true, g_ovShowWlr = true, g_ovShowWs = true;
+static bool g_ovShowKills = false, g_ovShowKdr = false, g_ovShowBeds = false,
+            g_ovShowBlr = false, g_ovShowPing = false, g_ovShowTags = true;
+
+static bool g_proShowStar = true, g_proShowFk = true, g_proShowFkdr = true,
+            g_proShowWins = true, g_proShowWlr = true, g_proShowWs = true;
+static bool g_proShowKills = true, g_proShowKdr = true, g_proShowBeds = true,
+            g_proShowBlr = true, g_proShowPing = true, g_proShowTags = true,
+            g_proShowHp = true;
+
 static bool g_debugging = false;
 static bool g_bedDefenseEnabled = false;
 static int g_clickGuiKey = 45; // INSERT
@@ -31,6 +38,58 @@ static std::string g_autoGGMessage = "gg";
 static DWORD g_themeColor = 0xFF0055A4;
 static bool g_motionBlurEnabled = false;
 static float g_motionBlurAmount = 0.5f;
+static bool g_nameTagsEnabled = true;
+static float g_nameTagHeight = 2.4f; // world-Y offset above feet
+
+static std::vector<std::pair<std::string, bool>> g_nameTagStats = {
+    {"star", true},
+    {"fkdr", false},
+    {"fk", false},
+    {"wins", false},
+    {"wlr", false},
+    {"ws", false},
+};
+static const std::vector<std::string> kNameTagValidKeys = {
+    "star", "fkdr", "fk", "wins", "wlr", "ws"
+};
+
+static std::string serializeNameTagStats() {
+  std::string out;
+  for (size_t i = 0; i < g_nameTagStats.size(); ++i) {
+    if (i) out += ',';
+    out += g_nameTagStats[i].first;
+    out += ':';
+    out += g_nameTagStats[i].second ? '1' : '0';
+  }
+  return out;
+}
+
+static void parseNameTagStats(const std::string &s) {
+  if (s.empty()) return;
+  std::vector<std::pair<std::string, bool>> parsed;
+  size_t pos = 0;
+  while (pos < s.size()) {
+    size_t comma = s.find(',', pos);
+    if (comma == std::string::npos) comma = s.size();
+    std::string entry = s.substr(pos, comma - pos);
+    pos = comma + 1;
+    size_t colon = entry.find(':');
+    if (colon == std::string::npos) continue;
+    std::string key = entry.substr(0, colon);
+    bool enabled = (entry.substr(colon + 1) == "1");
+    bool isValid = false;
+    for (const auto &v : kNameTagValidKeys)
+      if (v == key) { isValid = true; break; }
+    if (isValid) parsed.push_back({key, enabled});
+  }
+  for (const auto &v : kNameTagValidKeys) {
+    bool found = false;
+    for (const auto &p : parsed)
+      if (p.first == v) { found = true; break; }
+    if (!found) parsed.push_back({v, false});
+  }
+  if (!parsed.empty()) g_nameTagStats = parsed;
+}
 static bool g_urchinEnabled = false;
 static std::string g_urchinApiKey = "";
 static bool g_seraphEnabled = false;
@@ -42,6 +101,14 @@ static bool g_discordRpcEnabled = true;
 static std::string g_discordAppId = "1467865675262329019";
 static bool g_nickedBypass = true;
 static bool g_techEnabled = false;
+static bool g_anticheatEnabled = true;
+static bool g_anticheatNoSlowEnabled = true;
+static bool g_anticheatAutoBlockEnabled = true;
+static bool g_anticheatEagleEnabled = true;
+static bool g_anticheatScaffoldEnabled = true;
+static bool g_anticheatCheckSelfEnabled = true;
+static int g_anticheatVl = 5;
+static int g_anticheatCooldownSec = 4;
 static float g_techX = 0.8f;
 static float g_techY = 0.02f;
 static bool g_commandsEnabled = true;
@@ -49,8 +116,12 @@ static bool g_teamReportEnabled = false;
 static std::string g_teamReportChannel = "/pc";
 static bool g_preGameChatStatsEnabled = true;
 static bool g_smartChatBypassEnabled = false;
+static bool g_betterTabModeEnabled = false;
 static bool g_keylessMode = false;
 static std::string g_commandPrefix = ".";
+static std::string g_auroraApiKey = "";
+static bool g_numberDenickerEnabled = false;
+static int g_pingDisplayMode = 0;
 static HMODULE g_hModule = nullptr;
 
 static bool g_debugGlobal = false;
@@ -91,6 +162,22 @@ static bool parseJsonLine(const std::string &line, const char *key,
   return true;
 }
 
+static bool parseJsonInt(const std::string &all, const char *key, int &out) {
+  std::string pat = std::string("\"") + key + "\"";
+  size_t k = all.find(pat);
+  if (k == std::string::npos)
+    return false;
+  size_t colon = all.find(':', k);
+  if (colon == std::string::npos)
+    return false;
+  size_t start = all.find_first_of("0123456789-", colon);
+  if (start == std::string::npos)
+    return false;
+  size_t end = all.find_first_not_of("0123456789-", start);
+  out = atoi(all.substr(start, end - start).c_str());
+  return true;
+}
+
 static bool parseJsonBool(const std::string &all, const char *key, bool &out) {
   std::string pat = std::string("\"") + key + "\"";
   size_t k = all.find(pat);
@@ -110,21 +197,6 @@ static bool parseJsonBool(const std::string &all, const char *key, bool &out) {
     return true;
   }
   return false;
-}
-
-static bool parseJsonInt(const std::string &all, const char *key, int &out) {
-  std::string pat = std::string("\"") + key + "\"";
-  size_t k = all.find(pat);
-  if (k == std::string::npos)
-    return false;
-  size_t colon = all.find(':', k);
-  if (colon == std::string::npos)
-    return false;
-  size_t start = all.find_first_of("-0123456789", colon);
-  if (start == std::string::npos)
-    return false;
-  out = std::atoi(all.c_str() + start);
-  return true;
 }
 
 static bool parseJsonFloat(const std::string &all, const char *key,
@@ -229,6 +301,18 @@ bool Config::initialize(HMODULE self) {
   if (!parseJsonFloat(all, "motionBlurAmount", g_motionBlurAmount))
     g_motionBlurAmount = 0.5f;
 
+  if (!parseJsonBool(all, "nameTagsEnabled", g_nameTagsEnabled))
+    g_nameTagsEnabled = true;
+
+  if (!parseJsonFloat(all, "nameTagHeight", g_nameTagHeight))
+    g_nameTagHeight = 2.4f;
+
+  {
+    std::string ntStats;
+    if (parseJsonLine(all, "nameTagStats", ntStats))
+      parseNameTagStats(ntStats);
+  }
+
   if (!parseJsonBool(all, "urchinEnabled", g_urchinEnabled))
     g_urchinEnabled = false;
 
@@ -244,6 +328,17 @@ bool Config::initialize(HMODULE self) {
     g_seraphApiKey = val;
   else
     g_seraphApiKey = "";
+
+  if (!parseJsonBool(all, "numberDenickerEnabled", g_numberDenickerEnabled))
+    g_numberDenickerEnabled = false;
+
+  if (!parseJsonInt(all, "pingDisplayMode", g_pingDisplayMode))
+    g_pingDisplayMode = 0;
+
+  if (parseJsonLine(all, "auroraApiKey", val))
+    g_auroraApiKey = val;
+  else
+    g_auroraApiKey = "";
 
   if (!parseJsonBool(all, "tagsEnabled", g_tagsEnabled))
     g_tagsEnabled = false;
@@ -277,18 +372,32 @@ bool Config::initialize(HMODULE self) {
   else
     g_sortMode = "Team";
 
-  if (!parseJsonBool(all, "showStar", g_showStar))
-    g_showStar = true;
-  if (!parseJsonBool(all, "showFk", g_showFk))
-    g_showFk = true;
-  if (!parseJsonBool(all, "showFkdr", g_showFkdr))
-    g_showFkdr = true;
-  if (!parseJsonBool(all, "showWins", g_showWins))
-    g_showWins = true;
-  if (!parseJsonBool(all, "showWlr", g_showWlr))
-    g_showWlr = true;
-  if (!parseJsonBool(all, "showWs", g_showWs))
-    g_showWs = true;
+  parseJsonBool(all, "ovShowStar", g_ovShowStar);
+  parseJsonBool(all, "ovShowFk", g_ovShowFk);
+  parseJsonBool(all, "ovShowFkdr", g_ovShowFkdr);
+  parseJsonBool(all, "ovShowWins", g_ovShowWins);
+  parseJsonBool(all, "ovShowWlr", g_ovShowWlr);
+  parseJsonBool(all, "ovShowWs", g_ovShowWs);
+  parseJsonBool(all, "ovShowKills", g_ovShowKills);
+  parseJsonBool(all, "ovShowKdr", g_ovShowKdr);
+  parseJsonBool(all, "ovShowBeds", g_ovShowBeds);
+  parseJsonBool(all, "ovShowBlr", g_ovShowBlr);
+  parseJsonBool(all, "ovShowPing", g_ovShowPing);
+  parseJsonBool(all, "ovShowTags", g_ovShowTags);
+
+  parseJsonBool(all, "proShowStar", g_proShowStar);
+  parseJsonBool(all, "proShowFk", g_proShowFk);
+  parseJsonBool(all, "proShowFkdr", g_proShowFkdr);
+  parseJsonBool(all, "proShowWins", g_proShowWins);
+  parseJsonBool(all, "proShowWlr", g_proShowWlr);
+  parseJsonBool(all, "proShowWs", g_proShowWs);
+  parseJsonBool(all, "proShowKills", g_proShowKills);
+  parseJsonBool(all, "proShowKdr", g_proShowKdr);
+  parseJsonBool(all, "proShowBeds", g_proShowBeds);
+  parseJsonBool(all, "proShowBlr", g_proShowBlr);
+  parseJsonBool(all, "proShowPing", g_proShowPing);
+  parseJsonBool(all, "proShowTags", g_proShowTags);
+  parseJsonBool(all, "proShowHp", g_proShowHp);
 
   if (!parseJsonBool(all, "debugGlobal", g_debugGlobal))
     g_debugGlobal = false;
@@ -326,17 +435,58 @@ bool Config::initialize(HMODULE self) {
     g_preGameChatStatsEnabled = true;
 
   if (!parseJsonBool(all, "keylessMode", g_keylessMode)) {
-    // Default to keyless if no API key is specified
     g_keylessMode = g_apiKey.empty();
   }
 
   if (!parseJsonBool(all, "smartChatBypassEnabled", g_smartChatBypassEnabled))
     g_smartChatBypassEnabled = false;
 
+  if (!parseJsonBool(all, "betterTabModeEnabled", g_betterTabModeEnabled))
+    g_betterTabModeEnabled = false;
+
   if (parseJsonLine(all, "commandPrefix", val))
     g_commandPrefix = val;
   else
     g_commandPrefix = ".";
+
+  if (!parseJsonInt(all, "pingDisplayMode", g_pingDisplayMode))
+    g_pingDisplayMode = 0;
+
+  StatColors::initialize();
+  {
+    std::string colorsPath = getConfigDir() + "\\statcolors.json";
+    FILE *cf = nullptr;
+    fopen_s(&cf, colorsPath.c_str(), "r");
+    if (cf) {
+      char cbuf[4096];
+      std::string colorJson;
+      while (fgets(cbuf, sizeof(cbuf), cf))
+        colorJson += cbuf;
+      fclose(cf);
+      if (!colorJson.empty())
+        StatColors::deserializeFromJson(colorJson);
+    }
+  }
+
+  if (!parseJsonBool(all, "anticheatEnabled", g_anticheatEnabled))
+    g_anticheatEnabled = true;
+  if (!parseJsonBool(all, "anticheatNoSlowEnabled", g_anticheatNoSlowEnabled))
+    g_anticheatNoSlowEnabled = true;
+  if (!parseJsonBool(all, "anticheatAutoBlockEnabled",
+                     g_anticheatAutoBlockEnabled))
+    g_anticheatAutoBlockEnabled = true;
+  if (!parseJsonBool(all, "anticheatEagleEnabled", g_anticheatEagleEnabled))
+    g_anticheatEagleEnabled = true;
+  if (!parseJsonBool(all, "anticheatScaffoldEnabled",
+                     g_anticheatScaffoldEnabled))
+    g_anticheatScaffoldEnabled = true;
+  if (!parseJsonBool(all, "anticheatCheckSelfEnabled",
+                     g_anticheatCheckSelfEnabled))
+    g_anticheatCheckSelfEnabled = true;
+  if (!parseJsonInt(all, "anticheatVl", g_anticheatVl))
+    g_anticheatVl = 5;
+  if (!parseJsonInt(all, "anticheatCooldownSec", g_anticheatCooldownSec))
+    g_anticheatCooldownSec = 4;
 
   return true;
 }
@@ -364,6 +514,9 @@ bool Config::save() {
       "  \"themeColor\": %u,\n"
       "  \"motionBlurEnabled\": %s,\n"
       "  \"motionBlurAmount\": %.2f,\n"
+      "  \"nameTagsEnabled\": %s,\n"
+      "  \"nameTagHeight\": %.2f,\n"
+      "  \"nameTagStats\": \"%s\",\n"
       "  \"urchinEnabled\": %s,\n"
       "  \"urchinApiKey\": \"%s\",\n"
       "  \"seraphEnabled\": %s,\n"
@@ -385,12 +538,15 @@ bool Config::save() {
       "  \"tabSortDescending\": %s,\n"
       "  \"nickedBypass\": %s,\n"
       "  \"sortMode\": \"%s\",\n"
-      "  \"showStar\": %s,\n"
-      "  \"showFk\": %s,\n"
-      "  \"showFkdr\": %s,\n"
-      "  \"showWins\": %s,\n"
-      "  \"showWlr\": %s,\n"
-      "  \"showWs\": %s,\n"
+      "  \"ovShowStar\": %s, \"ovShowFk\": %s, \"ovShowFkdr\": %s, "
+      "\"ovShowWins\": %s, \"ovShowWlr\": %s, \"ovShowWs\": %s,\n"
+      "  \"ovShowKills\": %s, \"ovShowKdr\": %s, \"ovShowBeds\": %s, "
+      "\"ovShowBlr\": %s, \"ovShowPing\": %s, \"ovShowTags\": %s,\n"
+      "  \"proShowStar\": %s, \"proShowFk\": %s, \"proShowFkdr\": %s, "
+      "\"proShowWins\": %s, \"proShowWlr\": %s, \"proShowWs\": %s,\n"
+      "  \"proShowKills\": %s, \"proShowKdr\": %s, \"proShowBeds\": %s, "
+      "\"proShowBlr\": %s, \"proShowPing\": %s, \"proShowTags\": %s, "
+      "\"proShowHp\": %s,\n"
       "  \"techEnabled\": %s,\n"
       "  \"techX\": %.4f,\n"
       "  \"techY\": %.4f,\n"
@@ -399,8 +555,20 @@ bool Config::save() {
       "  \"teamReportChannel\": \"%s\",\n"
       "  \"preGameChatStatsEnabled\": %s,\n"
       "  \"smartChatBypassEnabled\": %s,\n"
+      "  \"betterTabModeEnabled\": %s,\n"
       "  \"keylessMode\": %s,\n"
-      "  \"commandPrefix\": \"%s\"\n"
+      "  \"commandPrefix\": \"%s\",\n"
+      "  \"auroraApiKey\": \"%s\",\n"
+      "  \"numberDenickerEnabled\": %s,\n"
+      "  \"pingDisplayMode\": %d,\n"
+      "  \"anticheatEnabled\": %s,\n"
+      "  \"anticheatNoSlowEnabled\": %s,\n"
+      "  \"anticheatAutoBlockEnabled\": %s,\n"
+      "  \"anticheatEagleEnabled\": %s,\n"
+      "  \"anticheatScaffoldEnabled\": %s,\n"
+      "  \"anticheatCheckSelfEnabled\": %s,\n"
+      "  \"anticheatVl\": %d,\n"
+      "  \"anticheatCooldownSec\": %d\n"
       "}\n",
       g_apiKey.c_str(), g_overlayMode.c_str(), g_tabEnabled ? "true" : "false",
       g_debugging ? "true" : "false", g_bedDefenseEnabled ? "true" : "false",
@@ -408,6 +576,8 @@ bool Config::save() {
       g_notificationsEnabled ? "true" : "false",
       g_autoGGEnabled ? "true" : "false", g_autoGGMessage.c_str(), g_themeColor,
       g_motionBlurEnabled ? "true" : "false", g_motionBlurAmount,
+      g_nameTagsEnabled ? "true" : "false", g_nameTagHeight,
+      serializeNameTagStats().c_str(),
       g_urchinEnabled ? "true" : "false", g_urchinApiKey.c_str(),
       g_seraphEnabled ? "true" : "false", g_seraphApiKey.c_str(),
       g_tagsEnabled ? "true" : "false", g_activeTagService.c_str(),
@@ -419,17 +589,46 @@ bool Config::save() {
       g_discordRpcEnabled ? "true" : "false", g_discordAppId.c_str(),
       g_tabDisplayMode.c_str(), g_tabSortDescending ? "true" : "false",
       g_nickedBypass ? "true" : "false", g_sortMode.c_str(),
-      g_showStar ? "true" : "false", g_showFk ? "true" : "false",
-      g_showFkdr ? "true" : "false", g_showWins ? "true" : "false",
-      g_showWlr ? "true" : "false", g_showWs ? "true" : "false",
-      g_techEnabled ? "true" : "false", g_techX, g_techY,
-      g_commandsEnabled ? "true" : "false",
+      g_ovShowStar ? "true" : "false", g_ovShowFk ? "true" : "false",
+      g_ovShowFkdr ? "true" : "false", g_ovShowWins ? "true" : "false",
+      g_ovShowWlr ? "true" : "false", g_ovShowWs ? "true" : "false",
+      g_ovShowKills ? "true" : "false", g_ovShowKdr ? "true" : "false",
+      g_ovShowBeds ? "true" : "false", g_ovShowBlr ? "true" : "false",
+      g_ovShowPing ? "true" : "false", g_ovShowTags ? "true" : "false",
+      g_proShowStar ? "true" : "false", g_proShowFk ? "true" : "false",
+      g_proShowFkdr ? "true" : "false", g_proShowWins ? "true" : "false",
+      g_proShowWlr ? "true" : "false", g_proShowWs ? "true" : "false",
+      g_proShowKills ? "true" : "false", g_proShowKdr ? "true" : "false",
+      g_proShowBeds ? "true" : "false", g_proShowBlr ? "true" : "false",
+      g_proShowPing ? "true" : "false", g_proShowTags ? "true" : "false",
+      g_proShowHp ? "true" : "false", g_techEnabled ? "true" : "false", g_techX,
+      g_techY, g_commandsEnabled ? "true" : "false",
       g_teamReportEnabled ? "true" : "false", g_teamReportChannel.c_str(),
       g_preGameChatStatsEnabled ? "true" : "false",
       g_smartChatBypassEnabled ? "true" : "false",
-      g_keylessMode ? "true" : "false",
-      g_commandPrefix.c_str());
+      g_betterTabModeEnabled ? "true" : "false",
+      g_keylessMode ? "true" : "false", g_commandPrefix.c_str(),
+      g_auroraApiKey.c_str(), g_numberDenickerEnabled ? "true" : "false",
+      g_pingDisplayMode, g_anticheatEnabled ? "true" : "false",
+      g_anticheatNoSlowEnabled ? "true" : "false",
+      g_anticheatAutoBlockEnabled ? "true" : "false",
+      g_anticheatEagleEnabled ? "true" : "false",
+      g_anticheatScaffoldEnabled ? "true" : "false",
+      g_anticheatCheckSelfEnabled ? "true" : "false", g_anticheatVl,
+      g_anticheatCooldownSec);
   fclose(f);
+
+  {
+    std::string colorsPath = getConfigDir() + "\\statcolors.json";
+    FILE *cf = nullptr;
+    fopen_s(&cf, colorsPath.c_str(), "w");
+    if (cf) {
+      std::string colorJson = StatColors::serializeToJson();
+      fputs(colorJson.c_str(), cf);
+      fclose(cf);
+    }
+  }
+
   return true;
 }
 
@@ -551,6 +750,44 @@ void Config::setMotionBlurAmount(float amount) {
   save();
 }
 
+bool Config::isNameTagsEnabled() { return g_nameTagsEnabled; }
+void Config::setNameTagsEnabled(bool enabled) {
+  g_nameTagsEnabled = enabled;
+  save();
+}
+float Config::getNameTagHeight() { return g_nameTagHeight; }
+void Config::setNameTagHeight(float h) {
+  if (h < 0.5f) h = 0.5f;
+  if (h > 4.0f) h = 4.0f;
+  g_nameTagHeight = h;
+  save();
+}
+
+std::vector<std::pair<std::string, bool>> Config::getNameTagStats() {
+  return g_nameTagStats;
+}
+void Config::setNameTagStats(
+    const std::vector<std::pair<std::string, bool>> &stats) {
+  std::vector<std::pair<std::string, bool>> out;
+  for (const auto &p : stats) {
+    bool valid = false;
+    for (const auto &v : kNameTagValidKeys)
+      if (v == p.first) { valid = true; break; }
+    bool dup = false;
+    for (const auto &o : out)
+      if (o.first == p.first) { dup = true; break; }
+    if (valid && !dup) out.push_back(p);
+  }
+  for (const auto &v : kNameTagValidKeys) {
+    bool found = false;
+    for (const auto &o : out)
+      if (o.first == v) { found = true; break; }
+    if (!found) out.push_back({v, false});
+  }
+  g_nameTagStats = out;
+  save();
+}
+
 bool Config::isUrchinEnabled() { return g_urchinEnabled; }
 void Config::setUrchinEnabled(bool enabled) {
   g_urchinEnabled = enabled;
@@ -570,6 +807,23 @@ void Config::setSeraphEnabled(bool enabled) {
 const std::string &Config::getSeraphApiKey() { return g_seraphApiKey; }
 void Config::setSeraphApiKey(const std::string &key) {
   g_seraphApiKey = key;
+  save();
+}
+
+const std::string &Config::getAuroraApiKey() { return g_auroraApiKey; }
+void Config::setAuroraApiKey(const std::string &key) {
+  g_auroraApiKey = key;
+  save();
+}
+bool Config::isNumberDenickerEnabled() { return g_numberDenickerEnabled; }
+void Config::setNumberDenickerEnabled(bool enabled) {
+  g_numberDenickerEnabled = enabled;
+  save();
+}
+
+int Config::getPingDisplayMode() { return g_pingDisplayMode; }
+void Config::setPingDisplayMode(int mode) {
+  g_pingDisplayMode = mode;
   save();
 }
 
@@ -640,36 +894,156 @@ void Config::setDiscordAppId(const std::string &id) {
   save();
 }
 
-bool Config::isShowStar() { return g_showStar; }
-void Config::setShowStar(bool show) {
-  g_showStar = show;
+bool Config::isOvShowStar() { return g_ovShowStar; }
+void Config::setOvShowStar(bool b) {
+  g_ovShowStar = b;
   save();
 }
-bool Config::isShowFk() { return g_showFk; }
-void Config::setShowFk(bool show) {
-  g_showFk = show;
+bool Config::isOvShowFk() { return g_ovShowFk; }
+void Config::setOvShowFk(bool b) {
+  g_ovShowFk = b;
   save();
 }
-bool Config::isShowFkdr() { return g_showFkdr; }
-void Config::setShowFkdr(bool show) {
-  g_showFkdr = show;
+bool Config::isOvShowFkdr() { return g_ovShowFkdr; }
+void Config::setOvShowFkdr(bool b) {
+  g_ovShowFkdr = b;
   save();
 }
-bool Config::isShowWins() { return g_showWins; }
-void Config::setShowWins(bool show) {
-  g_showWins = show;
+bool Config::isOvShowWins() { return g_ovShowWins; }
+void Config::setOvShowWins(bool b) {
+  g_ovShowWins = b;
   save();
 }
-bool Config::isShowWlr() { return g_showWlr; }
-void Config::setShowWlr(bool show) {
-  g_showWlr = show;
+bool Config::isOvShowWlr() { return g_ovShowWlr; }
+void Config::setOvShowWlr(bool b) {
+  g_ovShowWlr = b;
   save();
 }
-bool Config::isShowWs() { return g_showWs; }
-void Config::setShowWs(bool show) {
-  g_showWs = show;
+bool Config::isOvShowWs() { return g_ovShowWs; }
+void Config::setOvShowWs(bool b) {
+  g_ovShowWs = b;
   save();
 }
+bool Config::isOvShowKills() { return g_ovShowKills; }
+void Config::setOvShowKills(bool b) {
+  g_ovShowKills = b;
+  save();
+}
+bool Config::isOvShowKdr() { return g_ovShowKdr; }
+void Config::setOvShowKdr(bool b) {
+  g_ovShowKdr = b;
+  save();
+}
+bool Config::isOvShowBeds() { return g_ovShowBeds; }
+void Config::setOvShowBeds(bool b) {
+  g_ovShowBeds = b;
+  save();
+}
+bool Config::isOvShowBlr() { return g_ovShowBlr; }
+void Config::setOvShowBlr(bool b) {
+  g_ovShowBlr = b;
+  save();
+}
+bool Config::isOvShowPing() { return g_ovShowPing; }
+void Config::setOvShowPing(bool b) {
+  g_ovShowPing = b;
+  save();
+}
+bool Config::isOvShowTags() { return g_ovShowTags; }
+void Config::setOvShowTags(bool b) {
+  g_ovShowTags = b;
+  save();
+}
+
+bool Config::isProShowStar() { return g_proShowStar; }
+void Config::setProShowStar(bool b) {
+  g_proShowStar = b;
+  save();
+}
+bool Config::isProShowFk() { return g_proShowFk; }
+void Config::setProShowFk(bool b) {
+  g_proShowFk = b;
+  save();
+}
+bool Config::isProShowFkdr() { return g_proShowFkdr; }
+void Config::setProShowFkdr(bool b) {
+  g_proShowFkdr = b;
+  save();
+}
+bool Config::isProShowWins() { return g_proShowWins; }
+void Config::setProShowWins(bool b) {
+  g_proShowWins = b;
+  save();
+}
+bool Config::isProShowWlr() { return g_proShowWlr; }
+void Config::setProShowWlr(bool b) {
+  g_proShowWlr = b;
+  save();
+}
+bool Config::isProShowWs() { return g_proShowWs; }
+void Config::setProShowWs(bool b) {
+  g_proShowWs = b;
+  save();
+}
+bool Config::isProShowKills() { return g_proShowKills; }
+void Config::setProShowKills(bool b) {
+  g_proShowKills = b;
+  save();
+}
+bool Config::isProShowKdr() { return g_proShowKdr; }
+void Config::setProShowKdr(bool b) {
+  g_proShowKdr = b;
+  save();
+}
+bool Config::isProShowBeds() { return g_proShowBeds; }
+void Config::setProShowBeds(bool b) {
+  g_proShowBeds = b;
+  save();
+}
+bool Config::isProShowBlr() { return g_proShowBlr; }
+void Config::setProShowBlr(bool b) {
+  g_proShowBlr = b;
+  save();
+}
+bool Config::isProShowPing() { return g_proShowPing; }
+void Config::setProShowPing(bool b) {
+  g_proShowPing = b;
+  save();
+}
+bool Config::isProShowTags() { return g_proShowTags; }
+void Config::setProShowTags(bool b) {
+  g_proShowTags = b;
+  save();
+}
+bool Config::isProShowHp() { return g_proShowHp; }
+void Config::setProShowHp(bool b) {
+  g_proShowHp = b;
+  save();
+}
+
+// aliases
+bool Config::isShowStar() { return isOvShowStar(); }
+void Config::setShowStar(bool b) { setOvShowStar(b); }
+bool Config::isShowFk() { return isOvShowFk(); }
+void Config::setShowFk(bool b) { setOvShowFk(b); }
+bool Config::isShowFkdr() { return isOvShowFkdr(); }
+void Config::setShowFkdr(bool b) { setOvShowFkdr(b); }
+bool Config::isShowWins() { return isOvShowWins(); }
+void Config::setShowWins(bool b) { setOvShowWins(b); }
+bool Config::isShowWlr() { return isOvShowWlr(); }
+void Config::setShowWlr(bool b) { setOvShowWlr(b); }
+bool Config::isShowWs() { return isOvShowWs(); }
+void Config::setShowWs(bool b) { setOvShowWs(b); }
+bool Config::isShowKills() { return isOvShowKills(); }
+void Config::setShowKills(bool b) { setOvShowKills(b); }
+bool Config::isShowKdr() { return isOvShowKdr(); }
+void Config::setShowKdr(bool b) { setOvShowKdr(b); }
+bool Config::isShowBeds() { return isOvShowBeds(); }
+void Config::setShowBeds(bool b) { setOvShowBeds(b); }
+bool Config::isShowBlr() { return isOvShowBlr(); }
+void Config::setShowBlr(bool b) { setOvShowBlr(b); }
+bool Config::isShowPing() { return isOvShowPing(); }
+void Config::setShowPing(bool b) { setOvShowPing(b); }
 
 bool Config::isTechEnabled() { return g_techEnabled; }
 void Config::setTechEnabled(bool enabled) {
@@ -698,7 +1072,9 @@ void Config::setTeamReportEnabled(bool enabled) {
   g_teamReportEnabled = enabled;
   save();
 }
-const std::string &Config::getTeamReportChannel() { return g_teamReportChannel; }
+const std::string &Config::getTeamReportChannel() {
+  return g_teamReportChannel;
+}
 void Config::setTeamReportChannel(const std::string &channel) {
   g_teamReportChannel = channel;
   save();
@@ -713,6 +1089,12 @@ void Config::setPreGameChatStatsEnabled(bool enabled) {
 bool Config::isSmartChatBypassEnabled() { return g_smartChatBypassEnabled; }
 void Config::setSmartChatBypassEnabled(bool enabled) {
   g_smartChatBypassEnabled = enabled;
+  save();
+}
+
+bool Config::isBetterTabModeEnabled() { return g_betterTabModeEnabled; }
+void Config::setBetterTabModeEnabled(bool enabled) {
+  g_betterTabModeEnabled = enabled;
   save();
 }
 
@@ -740,4 +1122,49 @@ bool Config::isForgeEnvironment() {
     checked = true;
   }
   return forge;
+}
+
+bool Config::isAnticheatEnabled() { return g_anticheatEnabled; }
+void Config::setAnticheatEnabled(bool e) {
+  g_anticheatEnabled = e;
+  save();
+}
+bool Config::isAnticheatNoSlowEnabled() { return g_anticheatNoSlowEnabled; }
+void Config::setAnticheatNoSlowEnabled(bool e) {
+  g_anticheatNoSlowEnabled = e;
+  save();
+}
+bool Config::isAnticheatAutoBlockEnabled() {
+  return g_anticheatAutoBlockEnabled;
+}
+void Config::setAnticheatAutoBlockEnabled(bool e) {
+  g_anticheatAutoBlockEnabled = e;
+  save();
+}
+bool Config::isAnticheatEagleEnabled() { return g_anticheatEagleEnabled; }
+void Config::setAnticheatEagleEnabled(bool e) {
+  g_anticheatEagleEnabled = e;
+  save();
+}
+bool Config::isAnticheatScaffoldEnabled() { return g_anticheatScaffoldEnabled; }
+void Config::setAnticheatScaffoldEnabled(bool e) {
+  g_anticheatScaffoldEnabled = e;
+  save();
+}
+bool Config::isAnticheatCheckSelfEnabled() {
+  return g_anticheatCheckSelfEnabled;
+}
+void Config::setAnticheatCheckSelfEnabled(bool e) {
+  g_anticheatCheckSelfEnabled = e;
+  save();
+}
+int Config::getAnticheatVl() { return g_anticheatVl; }
+void Config::setAnticheatVl(int vl) {
+  g_anticheatVl = vl;
+  save();
+}
+int Config::getAnticheatCooldownSec() { return g_anticheatCooldownSec; }
+void Config::setAnticheatCooldownSec(int s) {
+  g_anticheatCooldownSec = s;
+  save();
 }

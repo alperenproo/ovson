@@ -6,5 +6,3 @@ namespace ChatHook {
 	void uninstall();
 	bool onClientSendMessage(const std::string& message);
 }
-
-

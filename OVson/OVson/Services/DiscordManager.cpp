@@ -1,5 +1,5 @@
 #include "DiscordManager.h"
-#include "../Chat/ChatInterceptor.h"
+#include "../Logic/StatsTracker.h"
 #include "../Config/Config.h"
 #include "../Utils/Logger.h"
 #include "../resource.h"
@@ -208,10 +208,10 @@ void DiscordManager::update() {
   static int sessionFinalKills = 0;
   static bool wasInGame = false;
 
-  bool inGame = ChatInterceptor::isInHypixelGame();
+  bool inGame = OVson::isInHypixelGame();
 
   if (wasInGame && !inGame) {
-    std::lock_guard<std::mutex> lock(ChatInterceptor::g_statsMutex);
+    std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
     sessionWins++;
   }
   wasInGame = inGame;
@@ -228,7 +228,7 @@ void DiscordManager::update() {
 
   if (inGame) {
     stateStr = "Playing Hypixel";
-    int mode = ChatInterceptor::getGameMode();
+    int mode = OVson::getGameMode();
     if (mode == 0)
       detailsStr = "Playing Bedwars";
     else if (mode == 1)

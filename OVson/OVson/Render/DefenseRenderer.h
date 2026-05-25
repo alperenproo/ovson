@@ -18,7 +18,7 @@ private:
     bool initialized;
     void *mc_theMc;
     void *mc_renderViewEntity;
-    void *mc_renderManager; // f5 support (not working 100%)
+    void *mc_renderManager; // f5 support (not working 100%) (now working hehe)
     void *mc_gameSettings;
     void *mc_timer;
     void *rm_viewerPosX, *rm_viewerPosY, *rm_viewerPosZ;
@@ -28,6 +28,13 @@ private:
     void *ent_yaw, *ent_pitch;
     void *gs_fovSetting;
     void *timer_partialTicks;
+    void *mc_entityRenderer; // → EntityRenderer (real-FOV source)
+    void *er_getFOVModifier; // (FZ)F
+    void *er_thirdPersonDistanceTemp; // F5 back-distance (~4.0 when on)
+    void *gs_thirdPersonView;         // 0/1/2
+    void *ari_MODELVIEW;
+    void *ari_PROJECTION;
+    void *ari_VIEWPORT;
     void *mc_getTextureManager;
     void *texMap_locationBlocksTexture;
     void *texMan_bindTexture;

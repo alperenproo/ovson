@@ -1,14 +1,18 @@
 #include "UrchinService.h"
-#include "../Chat/ChatInterceptor.h"
 #include "../Chat/ChatSDK.h"
 #include "../Config/Config.h"
+#include "../Logic/StatsTracker.h"
 #include "../Net/Http.h"
 #include "../Render/NotificationManager.h"
 #include "../Utils/Logger.h"
+#include "../Utils/SafeGuard.h"
 #include "../Utils/ThreadTracker.h"
+#include <Windows.h>
 #include <chrono>
+#include <fstream>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace Urchin {
 struct CachedTags {
@@ -114,8 +118,6 @@ std::optional<PlayerTags> getPlayerTags(const std::string &username,
                                         bool wait) {
   if (!Config::isTagsEnabled())
     return std::nullopt;
-  if (ChatInterceptor::isInPreGameLobby())
-    return std::nullopt;
   if (Config::getActiveTagService() != "Urchin" &&
       Config::getActiveTagService() != "Both")
     return std::nullopt;
@@ -137,6 +139,9 @@ std::optional<PlayerTags> getPlayerTags(const std::string &username,
     }
   }
 
+  if (!wait && OVson::isInPreGameLobby())
+    return std::nullopt;
+
   if (wait) {
     std::string url =
         "https://urchin.ws/player/" + username + "?sources=MANUAL";
@@ -148,7 +153,43 @@ std::optional<PlayerTags> getPlayerTags(const std::string &username,
     std::string body;
     Logger::log(Config::DebugCategory::Urchin,
                 "=== Urchin Sync Fetching: %s ===", username.c_str());
-    bool ok = Http::get(url, body);
+
+    {
+      std::ofstream dbg("urchin_debug.txt", std::ios::app);
+      if (dbg.is_open()) {
+        dbg << "=== URCHIN SYNC FETCH STARTED: " << username << " ===\n";
+        dbg << "URL: " << url << "\n";
+        dbg.close();
+      }
+    }
+
+    bool ok = false;
+    int maxRetries = 3;
+    for (int attempt = 0; attempt < maxRetries; ++attempt) {
+      ok = Http::get(url, body);
+
+      {
+        std::ofstream dbg("urchin_debug.txt", std::ios::app);
+        if (dbg.is_open()) {
+          dbg << "=== URCHIN SYNC FETCH COMPLETED: " << username << " (Attempt "
+              << attempt + 1 << ") ===\n";
+          dbg << "HTTP OK: " << (ok ? "Yes" : "No") << "\n";
+          dbg << "Body Size: " << body.size() << "\n";
+          dbg << "Body: " << body << "\n";
+          dbg.close();
+        }
+      }
+
+      if (body.find("Rate limit exceeded") != std::string::npos ||
+          body.find("rate limit") != std::string::npos ||
+          body.find("429") != std::string::npos) {
+        if (attempt < maxRetries - 1) {
+          std::this_thread::sleep_for(std::chrono::seconds(10));
+          continue;
+        }
+      }
+      break;
+    }
 
     PlayerTags result;
     if (ok && !body.empty() && body.find("\"error\"") == std::string::npos) {
@@ -192,64 +233,78 @@ std::optional<PlayerTags> getPlayerTags(const std::string &username,
     return std::nullopt;
   }
   std::thread([username, now]() {
-    std::string url =
-        "https://urchin.ws/player/" + username + "?sources=MANUAL";
-    std::string apiKey = Config::getUrchinApiKey();
-    if (!apiKey.empty()) {
-      url += "&key=" + apiKey;
-    }
-
-    std::string body;
-    Logger::log(Config::DebugCategory::Urchin,
-                "=== Urchin Fetching Started: %s ===", username.c_str());
-    bool ok = Http::get(url, body);
-
-    PlayerTags result;
-    bool success = false;
-    std::string failReason = "Unknown";
-
-    if (ok && !body.empty() && body.find("\"error\"") == std::string::npos) {
-      findJsonString(body, "uuid", result.uuid);
-      size_t arrStart, arrEnd;
-      if (findJsonArray(body, "tags", arrStart, arrEnd)) {
-        std::string arrJson = body.substr(arrStart, arrEnd - arrStart);
-        result.tags = parseTags(arrJson);
+    SafeGuard::installSehTranslator();
+    SafeGuard::run("Urchin::worker", [&]() {
+      std::string url =
+          "https://urchin.ws/player/" + username + "?sources=MANUAL";
+      std::string apiKey = Config::getUrchinApiKey();
+      if (!apiKey.empty()) {
+        url += "&key=" + apiKey;
       }
-      success = true;
-    } else {
-      if (!ok)
-        failReason = "HTTP request failed";
-      else if (body.empty())
-        failReason = "Empty response";
-      else if (body.find("\"error\"") != std::string::npos)
-        failReason = "API error response";
-      else
-        failReason = "JSON parse failed";
-    }
 
-    {
-      std::lock_guard<std::mutex> lock(g_cacheMutex);
-      pruneCacheLocked();
-      g_cache[username] = {result, std::chrono::steady_clock::now()};
-    }
+      bool ok = false;
+      std::string body;
+      int maxRetries = 3;
+      for (int attempt = 0; attempt < maxRetries; ++attempt) {
+        ok = Http::get(url, body);
+        if (body.find("Rate limit exceeded") != std::string::npos ||
+            body.find("rate limit") != std::string::npos ||
+            body.find("429") != std::string::npos) {
+          if (attempt < maxRetries - 1) {
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+            continue;
+          }
+        }
+        break;
+      }
 
-    {
-      std::lock_guard<std::mutex> lock(g_pendingMutex);
-      g_pendingFetches.erase(username);
-    }
+      PlayerTags result;
+      bool success = false;
+      std::string failReason = "Unknown";
 
-    if (success) {
-      Logger::log(Config::DebugCategory::Urchin,
-                  ">>> Urchin Success: %s Found %d tags <<<", username.c_str(),
-                  (int)result.tags.size());
+      if (ok && !body.empty() && body.find("\"error\"") == std::string::npos) {
+        findJsonString(body, "uuid", result.uuid);
+        size_t arrStart, arrEnd;
+        if (findJsonArray(body, "tags", arrStart, arrEnd)) {
+          std::string arrJson = body.substr(arrStart, arrEnd - arrStart);
+          result.tags = parseTags(arrJson);
+        }
+        success = true;
+      } else {
+        if (!ok)
+          failReason = "HTTP request failed";
+        else if (body.empty())
+          failReason = "Empty response";
+        else if (body.find("\"error\"") != std::string::npos)
+          failReason = "API error response";
+        else
+          failReason = "JSON parse failed";
+      }
 
-    } else {
-      if (Config::isGlobalDebugEnabled()) {
+      {
+        std::lock_guard<std::mutex> lock(g_cacheMutex);
+        pruneCacheLocked();
+        g_cache[username] = {result, std::chrono::steady_clock::now()};
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(g_pendingMutex);
+        g_pendingFetches.erase(username);
+      }
+
+      if (success) {
         Logger::log(Config::DebugCategory::Urchin,
-                    "!!! Urchin Failed: %s - Reason: %s !!!", username.c_str(),
-                    failReason.c_str());
+                    ">>> Urchin Success: %s Found %d tags <<<",
+                    username.c_str(), (int)result.tags.size());
+
+      } else {
+        if (Config::isGlobalDebugEnabled()) {
+          Logger::log(Config::DebugCategory::Urchin,
+                      "!!! Urchin Failed: %s - Reason: %s !!!",
+                      username.c_str(), failReason.c_str());
+        }
       }
-    }
+    });
     ThreadTracker::decrement();
   }).detach();
 
@@ -265,4 +320,5 @@ bool hasAnyTags(const std::string &username) {
   auto result = getPlayerTags(username);
   return result.has_value() && !result->tags.empty();
 }
+
 } // namespace Urchin

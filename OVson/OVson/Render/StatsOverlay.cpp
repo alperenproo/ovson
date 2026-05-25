@@ -1,6 +1,7 @@
 #include "StatsOverlay.h"
-#include "../Chat/ChatInterceptor.h"
+#include "../Logic/StatsTracker.h"
 #include "../Config/Config.h"
+#include "../Config/StatColors.h"
 #include "../Java.h"
 #include "../Services/Hypixel.h"
 #include "../Services/SeraphService.h"
@@ -16,7 +17,8 @@
 #include <gl/GL.h>
 #include <iomanip>
 #include <sstream>
-#include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 static std::ofstream g_overlayDebugLog;
@@ -51,6 +53,8 @@ int StatsOverlay::s_lastStatsCount = 0;
 
 static FontRenderer g_font;
 
+static bool s_rendering = false;
+
 void StatsOverlay::init() {
   if (s_initialized)
     return;
@@ -70,89 +74,7 @@ static uint32_t colorFromRGB(int r, int g, int b, int a = 255) {
 
 // will change these colors too when i got time
 
-static uint32_t colorForFKDR(double fkdr) {
-  if (fkdr < 1.0)
-    return colorFromRGB(170, 170, 170); // Gray
-  if (fkdr < 2.0)
-    return colorFromRGB(255, 255, 255); // White
-  if (fkdr < 3.0)
-    return colorFromRGB(255, 170, 0); // Gold
-  if (fkdr < 4.0)
-    return colorFromRGB(85, 255, 255); // Aqua
-  if (fkdr < 5.0)
-    return colorFromRGB(85, 255, 85); // Light Green
-  if (fkdr < 6.0)
-    return colorFromRGB(170, 0, 170); // Purple
-  return colorFromRGB(255, 85, 85);   // Light Red
-}
 
-static uint32_t colorForWLR(double wlr) {
-  if (wlr < 1.0)
-    return colorFromRGB(255, 255, 255);
-  if (wlr < 3.0)
-    return colorFromRGB(255, 170, 0);
-  if (wlr < 5.0)
-    return colorFromRGB(255, 85, 85);
-  return colorFromRGB(170, 0, 170);
-}
-
-static uint32_t colorForWins(int wins) {
-  if (wins < 500)
-    return colorFromRGB(170, 170, 170);
-  if (wins < 1000)
-    return colorFromRGB(255, 255, 255);
-  if (wins < 2000)
-    return colorFromRGB(255, 255, 85);
-  if (wins < 4000)
-    return colorFromRGB(255, 85, 85);
-  return colorFromRGB(170, 0, 170);
-}
-
-static uint32_t colorForWinstreak(int ws) {
-  if (ws < 3)
-    return colorFromRGB(170, 170, 170);
-  if (ws < 5)
-    return colorFromRGB(255, 255, 255);
-  if (ws < 10)
-    return colorFromRGB(255, 170, 0);
-  if (ws < 20)
-    return colorFromRGB(85, 255, 255);
-  if (ws < 50)
-    return colorFromRGB(85, 255, 85);
-  if (ws < 100)
-    return colorFromRGB(170, 0, 170);
-  return colorFromRGB(255, 85, 85);
-}
-
-static uint32_t colorForFinalKills(int fk) {
-  if (fk < 1000)
-    return colorFromRGB(170, 170, 170);
-  if (fk < 2000)
-    return colorFromRGB(255, 255, 255);
-  if (fk < 4000)
-    return colorFromRGB(255, 170, 0);
-  if (fk < 5000)
-    return colorFromRGB(85, 255, 255);
-  if (fk < 10000)
-    return colorFromRGB(255, 85, 85);
-  return colorFromRGB(170, 0, 170);
-}
-
-static uint32_t colorForStar(int star) {
-  if (star < 100)
-    return colorFromRGB(170, 170, 170);
-  if (star < 200)
-    return colorFromRGB(255, 255, 255);
-  if (star < 300)
-    return colorFromRGB(255, 170, 0);
-  if (star < 400)
-    return colorFromRGB(85, 255, 255);
-  if (star < 500)
-    return colorFromRGB(85, 255, 85);
-  if (star < 600)
-    return colorFromRGB(85, 255, 255);
-  return colorFromRGB(255, 85, 85);
-}
 
 static uint32_t colorForTeam(const std::string &team) {
   if (team == "Red")
@@ -227,6 +149,8 @@ static uint32_t hsbToRgb(float h, float s, float b) {
 }
 
 void StatsOverlay::render(void *hdcPtr) {
+  if (s_rendering) return;
+  s_rendering = true;
   HDC hdc = (HDC)hdcPtr;
   static bool s_loggedOnce = false;
   if (!s_loggedOnce) {
@@ -242,18 +166,24 @@ void StatsOverlay::render(void *hdcPtr) {
 
   jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
   JNIEnv *env = lc->getEnv();
-  if (!env || !mcCls)
+  if (!env || !mcCls) {
+    s_rendering = false;
     return;
+  }
 
   jfieldID f_mc = lc->GetStaticFieldID(mcCls, "theMinecraft",
                                        "Lnet/minecraft/client/Minecraft;",
                                        "field_71432_P", "S", "Lave;");
-  if (!f_mc)
+  if (!f_mc) {
+    s_rendering = false;
     return;
+  }
 
   jobject mc = env->GetStaticObjectField(mcCls, f_mc);
-  if (!mc)
+  if (!mc) {
+    s_rendering = false;
     return;
+  }
 
   jfieldID f_screen = lc->GetFieldID(mcCls, "currentScreen",
                                      "Lnet/minecraft/client/gui/GuiScreen;",
@@ -395,8 +325,10 @@ void StatsOverlay::render(void *hdcPtr) {
   env->DeleteLocalRef(mc);
 
   std::string mode = Config::getOverlayMode();
-  if (mode != "gui")
+  if (mode != "gui") {
+    s_rendering = false;
     return;
+  }
 
   // MOVED TO CLICKGUI
   /*SHORT insertState = GetAsyncKeyState(VK_INSERT);
@@ -406,8 +338,10 @@ void StatsOverlay::render(void *hdcPtr) {
   }
   s_lastInsertState = isInsertDown;*/
 
-  if (!s_enabled)
+  if (!s_enabled) {
+    s_rendering = false;
     return;
+  }
 
   GLint viewport[4];
   glGetIntegerv(GL_VIEWPORT, viewport);
@@ -434,64 +368,54 @@ void StatsOverlay::render(void *hdcPtr) {
 
   std::vector<std::pair<std::string, Hypixel::PlayerStats>> statsData;
   {
-    bool activeMatch = ChatInterceptor::isInHypixelGame() &&
-                       !ChatInterceptor::isInPreGameLobby();
-    std::lock_guard<std::mutex> lock(ChatInterceptor::g_statsMutex);
-    for (const auto &pair : ChatInterceptor::g_playerStatsMap) {
+    bool activeMatch = OVson::isInHypixelGame() &&
+                       !OVson::isInPreGameLobby();
+    std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
+    std::unordered_set<std::string> seen;
+    for (const auto &pair : OVson::g_playerStatsMap) {
       if (activeMatch && pair.second.teamColor.empty())
         continue;
+      
+      std::string lower = pair.first;
+      for (auto &c : lower) if (c >= 'A' && c <= 'Z') c += 32;
+      if (seen.count(lower)) continue;
+      seen.insert(lower);
+
       statsData.push_back(pair);
     }
   }
 
-  bool showTags = Config::isTagsEnabled();
-  float currentX = 12.0f;
-  float colPlayer = currentX;
-  currentX += 130.0f;
+  struct ColumnDef {
+    std::string title;
+    float width;
+    bool enabled;
+    float x;
+  };
+  std::vector<ColumnDef> columns = {
+    {"PLAYER", 130.0f, true, 0.0f},
+    {"TAGS", 160.0f, Config::isOvShowTags(), 0.0f},
+    {"STAR", 70.0f, Config::isOvShowStar(), 0.0f},
+    {"F. KILLS", 85.0f, Config::isOvShowFk(), 0.0f},
+    {"FKDR", 90.0f, Config::isOvShowFkdr(), 0.0f},
+    {"KILLS", 85.0f, Config::isOvShowKills(), 0.0f},
+    {"KDR", 85.0f, Config::isOvShowKdr(), 0.0f},
+    {"BEDS", 85.0f, Config::isOvShowBeds(), 0.0f},
+    {"BLR", 85.0f, Config::isOvShowBlr(), 0.0f},
+    {"WINS", 85.0f, Config::isOvShowWins(), 0.0f},
+    {"WLR", 85.0f, Config::isOvShowWlr(), 0.0f},
+    {"WS", 65.0f, Config::isOvShowWs(), 0.0f},
+    {"PING", 70.0f, Config::isOvShowPing(), 0.0f}
+  };
 
-  float colTags = -1000.0f;
-  if (showTags) {
-    colTags = currentX;
-    currentX += 160.0f;
+  float currentX_col = 12.0f;
+  for (auto &c : columns) {
+    if (c.enabled) {
+      c.x = currentX_col;
+      currentX_col += c.width;
+    }
   }
 
-  float colStar = -1000.0f;
-  if (Config::isShowStar()) {
-    colStar = currentX;
-    currentX += 70.0f;
-  }
-
-  float colFK = -1000.0f;
-  if (Config::isShowFk()) {
-    colFK = currentX;
-    currentX += 85.0f;
-  }
-
-  float colFKDR = -1000.0f;
-  if (Config::isShowFkdr()) {
-    colFKDR = currentX;
-    currentX += 90.0f;
-  }
-
-  float colWins = -1000.0f;
-  if (Config::isShowWins()) {
-    colWins = currentX;
-    currentX += 85.0f;
-  }
-
-  float colWLR = -1000.0f;
-  if (Config::isShowWlr()) {
-    colWLR = currentX;
-    currentX += 85.0f;
-  }
-
-  float colWS = -1000.0f;
-  if (Config::isShowWs()) {
-    colWS = currentX;
-    currentX += 65.0f;
-  }
-
-  float panelWidth = currentX + 10.0f;
+  float panelWidth = currentX_col + 10.0f;
   float rowHeight = 28.0f;
   float headerHeight = 32.0f;
   float panelHeight = headerHeight + (statsData.size() * rowHeight) + 10.0f;
@@ -642,29 +566,11 @@ void StatsOverlay::render(void *hdcPtr) {
     RenderUtils::drawRect(localX + 5, sepY, panelWidth - 10, 1, 0xFF2A2A2E);
 
     float headerTextY = localY + 9.0f;
-    g_font.drawString(localX + colPlayer, headerTextY, "PLAYER",
-                      colorFromRGB(255, 255, 255));
-    if (showTags)
-      g_font.drawString(localX + colTags, headerTextY, "TAGS",
-                        colorFromRGB(255, 255, 255));
-    if (Config::isShowStar())
-      g_font.drawString(localX + colStar, headerTextY, "STAR",
-                        colorFromRGB(255, 255, 255));
-    if (Config::isShowFk())
-      g_font.drawString(localX + colFK, headerTextY, "F. KILLS",
-                        colorFromRGB(255, 255, 255));
-    if (Config::isShowFkdr())
-      g_font.drawString(localX + colFKDR, headerTextY, "FKDR",
-                        colorFromRGB(255, 255, 255));
-    if (Config::isShowWins())
-      g_font.drawString(localX + colWins, headerTextY, "WINS",
-                        colorFromRGB(255, 255, 255));
-    if (Config::isShowWlr())
-      g_font.drawString(localX + colWLR, headerTextY, "WLR",
-                        colorFromRGB(255, 255, 255));
-    if (Config::isShowWs())
-      g_font.drawString(localX + colWS, headerTextY, "WS",
-                        colorFromRGB(255, 255, 255));
+    for (const auto &c : columns) {
+      if (c.enabled) {
+        g_font.drawString(localX + c.x, headerTextY, c.title, colorFromRGB(255, 255, 255));
+      }
+    }
 
     float currentY = localY + headerHeight + 5.0f;
     for (const auto &pair : statsData) {
@@ -687,133 +593,123 @@ void StatsOverlay::render(void *hdcPtr) {
       uint32_t nameColor = stats.teamColor.empty()
                                ? colorFromRGB(255, 255, 255)
                                : colorForTeam(stats.teamColor);
-      g_font.drawString(localX + colPlayer, currentY, name, nameColor);
 
-      if (showTags) {
-        float currentTagX = localX + colTags;
-        std::string activeS = Config::getActiveTagService();
+      auto fmtCommas = [](int val) -> std::string {
+          std::string s = std::to_string(val);
+          int n = (int)s.length() - 3;
+          while (n > 0) { s.insert(n, ","); n -= 3; }
+          return s;
+      };
 
-        auto getHUDAbbr = [](const std::string &raw) -> std::string {
-          std::string t = raw;
-          for (auto &c : t)
-            c = toupper(c);
-          if (t.find("BLATANT") != std::string::npos)
-            return "BC";
-          if (t.find("CLOSET") != std::string::npos)
-            return "CC";
-          if (t.find("CONFIRMED") != std::string::npos)
-            return "C";
-          if (t.find("CHEATER") != std::string::npos)
-            return "C";
-          if (t.find("SNIPER") != std::string::npos)
-            return "S";
-          return "";
-        };
+      for (const auto &c : columns) {
+          if (!c.enabled) continue;
+          float cx = localX + c.x;
+          
+          if (c.title == "PLAYER") {
+              g_font.drawString(cx, currentY, name, nameColor);
+          } else if (c.title == "TAGS") {
+              float currentTagX = cx;
+              std::string activeS = Config::getActiveTagService();
 
-        auto drawAbbr = [&](const std::string &rawType, uint32_t color,
-                            bool isUrchin) {
-          std::string abbr = getHUDAbbr(rawType);
-          if (abbr.empty())
-            abbr = isUrchin ? "U" : "S";
+              auto getHUDAbbr = [](const std::string &raw) -> std::string {
+                  std::string t = raw;
+                  for (auto &cc : t) cc = toupper(cc);
+                  if (t.find("BLATANT") != std::string::npos) return "BC";
+                  if (t.find("CLOSET") != std::string::npos) return "CC";
+                  if (t.find("CONFIRMED") != std::string::npos) return "C";
+                  if (t.find("CHEATER") != std::string::npos) return "C";
+                  if (t.find("SNIPER") != std::string::npos) return "S";
+                  return "";
+              };
 
-          std::string braced = "[" + abbr + "]";
-          g_font.drawString(currentTagX + 1.0f, currentY, braced,
-                            color & 0x40FFFFFF);
-          g_font.drawString(currentTagX, currentY, braced, color);
-          currentTagX += g_font.getStringWidth(braced) + 5.0f;
-        };
+              auto drawAbbr = [&](const std::string &rawType, uint32_t color, bool isUrchin) {
+                  std::string abbr = getHUDAbbr(rawType);
+                  if (abbr.empty()) abbr = isUrchin ? "U" : "S";
+                  std::string braced = "[" + abbr + "]";
+                  g_font.drawString(currentTagX + 1.0f, currentY, braced, color & 0x40FFFFFF);
+                  g_font.drawString(currentTagX, currentY, braced, color);
+                  currentTagX += g_font.getStringWidth(braced) + 5.0f;
+              };
 
-        auto drawTag = [&](const std::string &rawType, uint32_t baseColor) {
-          std::string type = rawType;
-          std::replace(type.begin(), type.end(), '_', ' ');
-          for (auto &c : type)
-            c = toupper(c);
-          g_font.drawString(currentTagX + 1.0f, currentY, type,
-                            baseColor & 0x40FFFFFF);
-          g_font.drawString(currentTagX, currentY, type, baseColor);
-          currentTagX += g_font.getStringWidth(type) + 12.0f;
-        };
+              auto drawTag = [&](const std::string &rawType, uint32_t baseColor) {
+                  std::string type = rawType;
+                  std::replace(type.begin(), type.end(), '_', ' ');
+                  for (auto &cc : type) cc = toupper(cc);
+                  g_font.drawString(currentTagX + 1.0f, currentY, type, baseColor & 0x40FFFFFF);
+                  g_font.drawString(currentTagX, currentY, type, baseColor);
+                  currentTagX += g_font.getStringWidth(type) + 12.0f;
+              };
 
-        std::vector<std::string> urchinTags, seraphTags;
-        for (const auto &tag : stats.rawTags) {
-          if (tag.find("URCHIN:") == 0 &&
-              (activeS == "Urchin" || activeS == "Both")) {
-            urchinTags.push_back(tag.substr(7));
-          } else if (tag.find("SERAPH:") == 0 &&
-                     (activeS == "Seraph" || activeS == "Both")) {
-            seraphTags.push_back(tag.substr(7));
+              std::vector<std::string> urchinTags, seraphTags;
+              for (const auto &tag : stats.rawTags) {
+                  if (tag.find("URCHIN:") == 0 && (activeS == "Urchin" || activeS == "Both")) urchinTags.push_back(tag.substr(7));
+                  else if (tag.find("SERAPH:") == 0 && (activeS == "Seraph" || activeS == "Both")) seraphTags.push_back(tag.substr(7));
+              }
+
+              bool hasU = !urchinTags.empty();
+              bool hasS = !seraphTags.empty();
+
+              if (hasU && hasS) {
+                  for (const auto &type : urchinTags) drawAbbr(type, colorFromRGB(220, 20, 60), true);
+                  for (const auto &type : seraphTags) drawAbbr(type, colorFromRGB(255, 85, 85), false);
+              } else {
+                  if (hasU) {
+                      for (const auto &type : urchinTags) {
+                          uint32_t color = colorFromRGB(255, 255, 255);
+                          std::string t = type; for (auto &cc : t) cc = toupper(cc);
+                          if (t.find("BLATANT") != std::string::npos) color = colorFromRGB(220, 20, 60);
+                          else if (t.find("CONFIRMED") != std::string::npos) color = colorFromRGB(148, 0, 211);
+                          drawTag(type, color);
+                      }
+                  }
+                  if (hasS) {
+                      for (const auto &type : seraphTags) {
+                          uint32_t color = colorFromRGB(255, 85, 85);
+                          std::string t = type; for (auto &cc : t) cc = toupper(cc);
+                          if (t.find("CONFIRMED") != std::string::npos) color = colorFromRGB(211, 0, 148);
+                          drawTag(type, color);
+                      }
+                  }
+              }
+              if (!hasU && !hasS) g_font.drawString(currentTagX, currentY, "-", colorFromRGB(100, 100, 105));
+          } else if (stats.isNicked && c.title != "PLAYER" && c.title != "PING") {
+              if (c.title == "STAR") g_font.drawString(cx, currentY, "[NICKED]", colorFromRGB(170, 0, 0));
+          } else {
+              if (c.title == "STAR") g_font.drawString(cx, currentY, std::to_string(stats.bedwarsStar), StatColors::getColor(StatColors::StatType::Star, stats.bedwarsStar));
+              else if (c.title == "F. KILLS") g_font.drawString(cx, currentY, fmtCommas(stats.bedwarsFinalKills), StatColors::getColor(StatColors::StatType::FinalKills, stats.bedwarsFinalKills));
+              else if (c.title == "FKDR") {
+                  std::stringstream ss; ss << std::fixed << std::setprecision(2) << fkdr;
+                  g_font.drawString(cx, currentY, ss.str(), StatColors::getColor(StatColors::StatType::FKDR, fkdr));
+              }
+              else if (c.title == "KILLS") g_font.drawString(cx, currentY, fmtCommas(stats.bedwarsKills), StatColors::getColor(StatColors::StatType::Kills, stats.bedwarsKills));
+              else if (c.title == "KDR") {
+                  double kd = stats.bedwarsDeaths == 0 ? stats.bedwarsKills : (double)stats.bedwarsKills / stats.bedwarsDeaths;
+                  std::stringstream ss; ss << std::fixed << std::setprecision(2) << kd;
+                  g_font.drawString(cx, currentY, ss.str(), StatColors::getColor(StatColors::StatType::KDR, kd));
+              }
+              else if (c.title == "BEDS") g_font.drawString(cx, currentY, fmtCommas(stats.bedwarsBedsBroken), StatColors::getColor(StatColors::StatType::Beds, stats.bedwarsBedsBroken));
+              else if (c.title == "BLR") {
+                  double blr = stats.bedwarsBedsLost == 0 ? stats.bedwarsBedsBroken : (double)stats.bedwarsBedsBroken / stats.bedwarsBedsLost;
+                  std::stringstream ss; ss << std::fixed << std::setprecision(2) << blr;
+                  g_font.drawString(cx, currentY, ss.str(), StatColors::getColor(StatColors::StatType::BLR, blr));
+              }
+              else if (c.title == "WINS") g_font.drawString(cx, currentY, fmtCommas(stats.bedwarsWins), StatColors::getColor(StatColors::StatType::Wins, stats.bedwarsWins));
+              else if (c.title == "WLR") {
+                  std::stringstream ss; ss << std::fixed << std::setprecision(2) << wlr;
+                  g_font.drawString(cx, currentY, ss.str(), StatColors::getColor(StatColors::StatType::WLR, wlr));
+              }
+              else if (c.title == "WS") g_font.drawString(cx, currentY, std::to_string(stats.winstreak), StatColors::getColor(StatColors::StatType::WS, stats.winstreak));
+              else if (c.title == "PING") {
+                  int p = stats.lastPing;
+                  int mode = Config::getPingDisplayMode();
+                  if (mode == 1 && stats.auroraPing != -1) p = stats.auroraPing;
+                  else if (mode == 2 && stats.auroraPingRecentAvg != -1) p = stats.auroraPingRecentAvg;
+
+                  std::string pStr = (p < 0) ? "N/A" : std::to_string(p);
+                  uint32_t pCol = (p < 0) ? colorFromRGB(170, 170, 170) : StatColors::getColor(StatColors::StatType::Ping, (double)p);
+                  g_font.drawString(cx, currentY, pStr, pCol);
+              }
           }
-        }
-
-        bool hasU = !urchinTags.empty();
-        bool hasS = !seraphTags.empty();
-
-        if (hasU && hasS) {
-          for (const auto &type : urchinTags)
-            drawAbbr(type, colorFromRGB(220, 20, 60), true);
-          for (const auto &type : seraphTags)
-            drawAbbr(type, colorFromRGB(255, 85, 85), false);
-        } else {
-          if (hasU) {
-            for (const auto &type : urchinTags) {
-              uint32_t c = colorFromRGB(255, 255, 255);
-              std::string t = type;
-              for (auto &cc : t)
-                cc = toupper(cc);
-              if (t.find("BLATANT") != std::string::npos)
-                c = colorFromRGB(220, 20, 60);
-              else if (t.find("CONFIRMED") != std::string::npos)
-                c = colorFromRGB(148, 0, 211);
-              drawTag(type, c);
-            }
-          }
-          if (hasS) {
-            for (const auto &type : seraphTags) {
-              uint32_t c = colorFromRGB(255, 85, 85);
-              std::string t = type;
-              for (auto &cc : t)
-                cc = toupper(cc);
-              if (t.find("CONFIRMED") != std::string::npos)
-                c = colorFromRGB(211, 0, 148);
-              drawTag(type, c);
-            }
-          }
-        }
-
-        if (!hasU && !hasS) {
-          g_font.drawString(currentTagX, currentY, "-",
-                            colorFromRGB(100, 100, 105));
-        }
-      }
-
-      if (stats.isNicked) {
-        uint32_t nickedColor = colorFromRGB(170, 0, 0);
-        if (Config::isShowStar())
-          g_font.drawString(localX + colStar, currentY, "[NICKED]",
-                            nickedColor);
-      } else {
-        if (Config::isShowStar())
-          g_font.drawString(localX + colStar, currentY,
-                            std::to_string(stats.bedwarsStar),
-                            colorForStar(stats.bedwarsStar));
-        if (Config::isShowFk())
-          g_font.drawString(localX + colFK, currentY,
-                            std::to_string(stats.bedwarsFinalKills),
-                            colorForFinalKills(stats.bedwarsFinalKills));
-        if (Config::isShowFkdr())
-          g_font.drawString(localX + colFKDR, currentY, fkdrSs.str(),
-                            colorForFKDR(fkdr));
-        if (Config::isShowWins())
-          g_font.drawString(localX + colWins, currentY,
-                            std::to_string(stats.bedwarsWins),
-                            colorForWins(stats.bedwarsWins));
-        if (Config::isShowWlr())
-          g_font.drawString(localX + colWLR, currentY, wlrSs.str(),
-                            colorForWLR(wlr));
-        if (Config::isShowWs())
-          g_font.drawString(localX + colWS, currentY,
-                            std::to_string(stats.winstreak),
-                            colorForWinstreak(stats.winstreak));
       }
 
       currentY += rowHeight;
@@ -833,4 +729,6 @@ void StatsOverlay::render(void *hdcPtr) {
   glPopMatrix();
   glMatrixMode(GL_MODELVIEW);
   glPopMatrix();
+
+  s_rendering = false;
 }

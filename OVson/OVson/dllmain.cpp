@@ -12,7 +12,8 @@
 #pragma comment(lib, "Ws2_32.lib")
 #pragma comment(lib, "Iphlpapi.lib")
 #include "Chat/ChatHook.h"
-#include "Chat/ChatInterceptor.h"
+#include "Logic/StatsTracker.h"
+#include "Utils/Anticheat/Anticheat.h"
 #include "Chat/ChatSDK.h"
 #include "Chat/Commands.h"
 #include "Config/Config.h"
@@ -35,6 +36,7 @@ static HANDLE g_sharedMap = nullptr;
 static volatile LONG *g_sharedFlag = nullptr;
 static HANDLE g_injectedMutex = nullptr;
 static HANDLE g_aliveEvent = nullptr;
+static HANDLE g_uninjectEvent = nullptr;
 
 void init(void *instance) {
   {
@@ -66,17 +68,11 @@ void init(void *instance) {
     Config::initialize(static_cast<HMODULE>(instance));
     BedDefense::TextureLoader::setModule(static_cast<HMODULE>(instance));
     RegisterDefaultCommands();
-    ChatInterceptor::initialize();
+    OVson::initialize();
+    Anticheat::initialize();
     Logger::info("ChatHook disabled (safe mode)");
 
     {
-      HANDLE evReady =
-          CreateEventW(nullptr, TRUE, FALSE, L"Local\\OVsonReadyForBanner");
-      if (evReady) {
-        WaitForSingleObject(evReady, 10000);
-        CloseHandle(evReady);
-      }
-
       const char *S = "\xC2\xA7";
       std::string banner = std::string(S) + "0[" + S + "r" + S + "cO" + S +
                            "6V" + S + "es" + S + "ao" + S + "bn" + S + "0]" +
@@ -106,13 +102,19 @@ void init(void *instance) {
     while (true) {
       SHORT endState = GetAsyncKeyState(VK_END);
       bool isEndDown = (endState & 0x8000) != 0;
-      if (!wasEndDown && isEndDown) {
+      bool shouldQuit = (!wasEndDown && isEndDown);
+      if (!shouldQuit && g_uninjectEvent) {
+        if (WaitForSingleObject(g_uninjectEvent, 0) == WAIT_OBJECT_0) {
+          shouldQuit = true;
+        }
+      }
+      if (shouldQuit) {
         ChatSDK::showClientMessage(ChatSDK::formatPrefix() +
                                    std::string("quitting..."));
         break;
       }
       wasEndDown = isEndDown;
-      ChatInterceptor::poll();
+      OVson::poll();
       RenderHook::poll();
       Services::DiscordManager::getInstance()->update();
       Sleep(5);
@@ -121,6 +123,15 @@ void init(void *instance) {
 
   if (g_sharedFlag) {
     InterlockedExchange((LONG *)g_sharedFlag, 0);
+  }
+
+  if (g_aliveEvent) {
+    CloseHandle(g_aliveEvent);
+    g_aliveEvent = nullptr;
+  }
+  if (g_uninjectEvent) {
+    CloseHandle(g_uninjectEvent);
+    g_uninjectEvent = nullptr;
   }
 
   Logger::info("Exiting main loop, starting cleanup...");
@@ -139,10 +150,10 @@ void init(void *instance) {
 
   try {
     Logger::info("Shutting down ChatInterceptor...");
-    ChatInterceptor::shutdown();
+    OVson::shutdown();
     Logger::info("ChatInterceptor shut down.");
   } catch (...) {
-    Logger::error("CRASH: Exception in ChatInterceptor::shutdown");
+    Logger::error("CRASH: Exception in OVson::shutdown");
   }
 
   try {
@@ -195,8 +206,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
     g_injectedMutex = CreateMutexW(nullptr, FALSE, L"Global\\OVsonMutex");
     {
       wchar_t name[64];
-      wsprintfW(name, L"Global\\OVsonAlive_%lu", GetCurrentProcessId());
+      DWORD pid = GetCurrentProcessId();
+      wsprintfW(name, L"Local\\OVsonAlive_%lu", pid);
       g_aliveEvent = CreateEventW(nullptr, TRUE, TRUE, name);
+      wsprintfW(name, L"Local\\OVsonUninject_%lu", pid);
+      g_uninjectEvent = CreateEventW(nullptr, TRUE, FALSE, name);
     }
 
     {
@@ -208,8 +222,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
       }
     }
     break;
-  case DLL_THREAD_ATTACH:
-  case DLL_THREAD_DETACH:
   case DLL_PROCESS_DETACH:
     if (lpReserved == nullptr) {
       if (g_sharedFlag) {
@@ -233,7 +245,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
         CloseHandle(g_aliveEvent);
         g_aliveEvent = nullptr;
       }
+      if (g_uninjectEvent) {
+        CloseHandle(g_uninjectEvent);
+        g_uninjectEvent = nullptr;
+      }
     }
+    break;
+  case DLL_THREAD_ATTACH:
+  case DLL_THREAD_DETACH:
     break;
   }
   return TRUE;

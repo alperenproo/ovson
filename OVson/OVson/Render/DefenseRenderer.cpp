@@ -5,11 +5,77 @@
 #include "../Logic/BedDefense/BedDefenseManager.h"
 #include "../Utils/Logger.h"
 #include "TextureLoader.h"
+#include <algorithm>
 #include <cmath>
+#include <vector>
 
 
 namespace BedDefense {
 DefenseRenderer *DefenseRenderer::s_instance = nullptr;
+
+struct Vec4 {
+  double x, y, z, w;
+};
+
+static inline Vec4 matMul(const float *m, const Vec4 &v) {
+  return Vec4{
+      m[0] * v.x + m[4] * v.y + m[8] * v.z + m[12] * v.w,
+      m[1] * v.x + m[5] * v.y + m[9] * v.z + m[13] * v.w,
+      m[2] * v.x + m[6] * v.y + m[10] * v.z + m[14] * v.w,
+      m[3] * v.x + m[7] * v.y + m[11] * v.z + m[15] * v.w
+  };
+}
+
+static bool readFloatBuffer(JNIEnv *env, jobject bufferObj, float *outArray, int size) {
+  if (!bufferObj) return false;
+  void *address = env->GetDirectBufferAddress(bufferObj);
+  if (address) {
+    memcpy(outArray, address, size * sizeof(float));
+    return true;
+  }
+  jclass bufferCls = env->GetObjectClass(bufferObj);
+  jmethodID getMethod = env->GetMethodID(bufferCls, "get", "(I)F");
+  if (!getMethod) {
+    env->DeleteLocalRef(bufferCls);
+    return false;
+  }
+  for (int i = 0; i < size; ++i) {
+    outArray[i] = env->CallFloatMethod(bufferObj, getMethod, i);
+    if (env->ExceptionCheck()) {
+      env->ExceptionClear();
+      env->DeleteLocalRef(bufferCls);
+      return false;
+    }
+  }
+  env->DeleteLocalRef(bufferCls);
+  return true;
+}
+
+static bool readIntBuffer(JNIEnv *env, jobject bufferObj, int *outArray, int size) {
+  if (!bufferObj) return false;
+  void *address = env->GetDirectBufferAddress(bufferObj);
+  if (address) {
+    memcpy(outArray, address, size * sizeof(int));
+    return true;
+  }
+  jclass bufferCls = env->GetObjectClass(bufferObj);
+  jmethodID getMethod = env->GetMethodID(bufferCls, "get", "(I)I");
+  if (!getMethod) {
+    env->DeleteLocalRef(bufferCls);
+    return false;
+  }
+  for (int i = 0; i < size; ++i) {
+    outArray[i] = env->CallIntMethod(bufferObj, getMethod, i);
+    if (env->ExceptionCheck()) {
+      env->ExceptionClear();
+      env->DeleteLocalRef(bufferCls);
+      return false;
+    }
+  }
+  env->DeleteLocalRef(bufferCls);
+  return true;
+}
+
 
 static void drawCross(float x, float y, float radius, int color) {
   float alpha = (float)((color >> 24) & 0xFF) / 255.0f;
@@ -116,6 +182,52 @@ void DefenseRenderer::initIds(void *envPtr) {
       return;
     m_ids.timer_partialTicks = (void *)lc->GetFieldID(
         timerCls, "renderPartialTicks", "F", "field_74281_c", "c");
+
+    {
+      jclass erCls =
+          lc->GetClass("net.minecraft.client.renderer.EntityRenderer");
+      if (erCls) {
+        m_ids.mc_entityRenderer = (void *)lc->GetFieldID(
+            mcCls, "entityRenderer",
+            "Lnet/minecraft/client/renderer/EntityRenderer;",
+            "field_71460_t", "j", "Lbfb;");
+        m_ids.er_getFOVModifier = (void *)lc->GetMethodID(
+            erCls, "getFOVModifier", "(FZ)F", "func_78481_a", "a");
+        m_ids.er_thirdPersonDistanceTemp = (void *)lc->GetFieldID(
+            erCls, "thirdPersonDistanceTemp", "F", "field_78491_C", "C");
+      } else {
+        m_ids.mc_entityRenderer = nullptr;
+        m_ids.er_getFOVModifier = nullptr;
+        m_ids.er_thirdPersonDistanceTemp = nullptr;
+      }
+    }
+
+    m_ids.gs_thirdPersonView = (void *)lc->GetFieldID(
+        gsCls, "thirdPersonView", "I", "field_74320_O", "aA");
+    if (!m_ids.gs_thirdPersonView) {
+      m_ids.gs_thirdPersonView =
+          (void *)env->GetFieldID(gsCls, "thirdPersonView", "I");
+      if (env->ExceptionCheck()) env->ExceptionClear();
+    }
+    if (!m_ids.gs_thirdPersonView) {
+      m_ids.gs_thirdPersonView =
+          (void *)env->GetFieldID(gsCls, "field_74320_O", "I");
+      if (env->ExceptionCheck()) env->ExceptionClear();
+    }
+
+    jclass ariCls = lc->GetClass("net.minecraft.client.renderer.ActiveRenderInfo");
+    if (ariCls) {
+      m_ids.ari_MODELVIEW = (void *)lc->GetStaticFieldID(
+          ariCls, "MODELVIEW", "Ljava/nio/FloatBuffer;", "field_178812_b", "b");
+      m_ids.ari_PROJECTION = (void *)lc->GetStaticFieldID(
+          ariCls, "PROJECTION", "Ljava/nio/FloatBuffer;", "field_178813_c", "c");
+      m_ids.ari_VIEWPORT = (void *)lc->GetStaticFieldID(
+          ariCls, "VIEWPORT", "Ljava/nio/IntBuffer;", "field_178814_a", "a");
+    } else {
+      m_ids.ari_MODELVIEW = nullptr;
+      m_ids.ari_PROJECTION = nullptr;
+      m_ids.ari_VIEWPORT = nullptr;
+    }
 
     jclass texMapCls =
         lc->GetClass("net.minecraft.client.renderer.texture.TextureMap");
@@ -336,9 +448,12 @@ void DefenseRenderer::render(void *hdcPtr, double partialTicksManual) {
   }
 
   double camX = 0, camY = 0, camZ = 0;
+  double feetY = 0;
   float rotationYaw = 0, rotationPitch = 0;
   float fovSetting = 70.0f;
   float pt = (float)partialTicksManual;
+  float thirdPersonDist = 0.0f;
+  int thirdPersonMode = 0;
 
   if (!m_ids.initialized)
     return;
@@ -367,6 +482,8 @@ void DefenseRenderer::render(void *hdcPtr, double partialTicksManual) {
             env->GetDoubleField(renderManager, (jfieldID)m_ids.rm_viewerPosY);
         camZ =
             env->GetDoubleField(renderManager, (jfieldID)m_ids.rm_viewerPosZ);
+        feetY = camY;
+        camY += 1.62;
         rotationPitch =
             env->GetFloatField(renderManager, (jfieldID)m_ids.rm_playerViewX);
         rotationYaw =
@@ -385,7 +502,8 @@ void DefenseRenderer::render(void *hdcPtr, double partialTicksManual) {
           double preY = env->GetDoubleField(entity, (jfieldID)m_ids.ent_prevY);
           double preZ = env->GetDoubleField(entity, (jfieldID)m_ids.ent_prevZ);
           camX = preX + (curX - preX) * (double)pt;
-          camY = preY + (curY - preY) * (double)pt;
+          feetY = preY + (curY - preY) * (double)pt;
+          camY = feetY + 1.62;
           camZ = preZ + (curZ - preZ) * (double)pt;
           rotationYaw = env->GetFloatField(entity, (jfieldID)m_ids.ent_yaw);
           rotationPitch = env->GetFloatField(entity, (jfieldID)m_ids.ent_pitch);
@@ -398,7 +516,32 @@ void DefenseRenderer::render(void *hdcPtr, double partialTicksManual) {
       if (settings) {
         fovSetting =
             env->GetFloatField(settings, (jfieldID)m_ids.gs_fovSetting);
+        if (m_ids.gs_thirdPersonView)
+          thirdPersonMode = env->GetIntField(
+              settings, (jfieldID)m_ids.gs_thirdPersonView);
         env->DeleteLocalRef(settings);
+      }
+
+      if (m_ids.mc_entityRenderer) {
+        jobject er = env->GetObjectField(
+            mcObj, (jfieldID)m_ids.mc_entityRenderer);
+        if (er) {
+          if (m_ids.er_getFOVModifier) {
+            jfloat realFov = env->CallFloatMethod(
+                er, (jmethodID)m_ids.er_getFOVModifier,
+                (jfloat)pt, (jboolean)JNI_TRUE);
+            if (env->ExceptionCheck()) {
+              env->ExceptionClear();
+            } else if (realFov > 1.0f && realFov < 180.0f) {
+              fovSetting = (float)realFov;
+            }
+          }
+          if (m_ids.er_thirdPersonDistanceTemp) {
+            thirdPersonDist = env->GetFloatField(
+                er, (jfieldID)m_ids.er_thirdPersonDistanceTemp);
+          }
+          env->DeleteLocalRef(er);
+        }
       }
 
       env->DeleteLocalRef(mcObj);
@@ -407,93 +550,157 @@ void DefenseRenderer::render(void *hdcPtr, double partialTicksManual) {
     return;
   }
 
+  bool useActiveRenderInfo = false;
+  float modelview[16];
+  float projection[16];
+  int viewport[4];
+
+  if (m_ids.ari_MODELVIEW && m_ids.ari_PROJECTION && m_ids.ari_VIEWPORT) {
+    jclass ariCls = lc->GetClass("net.minecraft.client.renderer.ActiveRenderInfo");
+    if (ariCls) {
+      jobject modelviewBuf = env->GetStaticObjectField(ariCls, (jfieldID)m_ids.ari_MODELVIEW);
+      jobject projectionBuf = env->GetStaticObjectField(ariCls, (jfieldID)m_ids.ari_PROJECTION);
+      jobject viewportBuf = env->GetStaticObjectField(ariCls, (jfieldID)m_ids.ari_VIEWPORT);
+
+      if (modelviewBuf && projectionBuf) {
+        if (readFloatBuffer(env, modelviewBuf, modelview, 16) &&
+            readFloatBuffer(env, projectionBuf, projection, 16)) {
+          useActiveRenderInfo = true;
+          bool hasViewport = readIntBuffer(env, viewportBuf, viewport, 4);
+          if (!hasViewport) {
+            glGetIntegerv(GL_VIEWPORT, (GLint*)viewport);
+          }
+        }
+      }
+
+      if (modelviewBuf) env->DeleteLocalRef(modelviewBuf);
+      if (projectionBuf) env->DeleteLocalRef(projectionBuf);
+      if (viewportBuf) env->DeleteLocalRef(viewportBuf);
+    }
+  }
+
+  if (!useActiveRenderInfo) {
+    glGetIntegerv(GL_VIEWPORT, (GLint*)viewport);
+  }
+
+  if (viewport[2] <= 0 || viewport[3] <= 0) return;
+  const float vpW = (float)viewport[2];
+  const float vpH = (float)viewport[3];
+  const float aspect = vpW / vpH;
+
+  const double yawRad =
+      (double)(rotationYaw + 180.0f) * 3.14159265358979 / 180.0;
+  const double pitchRad =
+      (double)(rotationPitch) * 3.14159265358979 / 180.0;
+  const double sinYaw = sin(yawRad), cosYaw = cos(yawRad);
+  const double sinPitch = sin(pitchRad), cosPitch = cos(pitchRad);
+  const double fovHalfRad =
+      (double)fovSetting * 0.5 * 3.14159265358979 / 180.0;
+  const double f = 1.0 / tan(fovHalfRad);
+
+  struct ProjectedBed {
+    const DetectedBed *bed;
+    float pixelX = 0;
+    float pixelY = 0;
+    float scale  = 1.0f;
+    double dist  = 0.0;
+  };
+  std::vector<ProjectedBed> projected;
+  projected.reserve(bedsToDraw.size());
+
+  for (const auto &bed : bedsToDraw) {
+    double wx = bed.x + 0.5;
+    double wy = bed.y + 1.6;
+    double wz = bed.z + 0.5;
+
+    double rx = wx - camX;
+    double ry = wy - (useActiveRenderInfo ? feetY : camY);
+    double rz = wz - camZ;
+
+    double ndcX = 0.0, ndcY = 0.0;
+    double dist = 0.0;
+
+    if (useActiveRenderInfo) {
+      Vec4 pos{ rx, ry, rz, 1.0 };
+      Vec4 eyeSpace = matMul(modelview, pos);
+
+      if (eyeSpace.z >= -0.05) continue;
+
+      Vec4 clipSpace = matMul(projection, eyeSpace);
+      if (clipSpace.w == 0.0) continue;
+
+      ndcX = clipSpace.x / clipSpace.w;
+      ndcY = clipSpace.y / clipSpace.w;
+      dist = sqrt(eyeSpace.x * eyeSpace.x + eyeSpace.y * eyeSpace.y + eyeSpace.z * eyeSpace.z);
+    } else {
+      double vx = rx * cosYaw + rz * sinYaw;
+      double vz1 = -rx * sinYaw + rz * cosYaw;
+      double vy = ry * cosPitch - vz1 * sinPitch;
+      double vz2 = ry * sinPitch + vz1 * cosPitch;
+      if (thirdPersonMode == 2) {
+        vx = -vx;
+        vz2 = -vz2;
+      }
+      if (thirdPersonMode > 0 && thirdPersonDist > 0.01f)
+        vz2 -= (double)thirdPersonDist;
+
+      if (vz2 >= -0.05) continue; // behind camera (i fucking hate this)
+
+      ndcX = (f / aspect) * vx / -vz2;
+      ndcY = f * vy / -vz2;
+      dist = sqrt(rx * rx + ry * ry + rz * rz);
+    }
+
+    if (ndcX < -1.4 || ndcX > 1.4 || ndcY < -1.4 || ndcY > 1.4) continue;
+    if (dist < 0.5) continue;
+
+    ProjectedBed p;
+    p.bed = &bed;
+    p.pixelX = (float)(viewport[0] + viewport[2] * (ndcX * 0.5 + 0.5));
+    p.pixelY = (float)(viewport[1] + viewport[3] * (1.0 - (ndcY * 0.5 + 0.5)));
+    float activeF = useActiveRenderInfo ? projection[5] : (float)f;
+    float s = (float)(activeF / dist) * 15.0f;
+    if (s < 0.5f) s = 0.5f;
+    if (s > 30.0f) s = 30.0f;
+    p.scale = s;
+    p.dist = dist;
+    projected.push_back(p);
+  }
+
+  std::sort(projected.begin(), projected.end(),
+            [](const ProjectedBed &a, const ProjectedBed &b) {
+              return a.dist > b.dist;
+            });
+
   glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_TRANSFORM_BIT |
                GL_DEPTH_BUFFER_BIT);
   glDisable(GL_CULL_FACE);
   glDisable(GL_LIGHTING);
-  glDisable(GL_TEXTURE_2D);
-  glColor4f(1, 1, 1, 1);
+  glDisable(GL_FOG);
+  glDisable(GL_DEPTH_TEST);
+  glDepthMask(GL_FALSE);
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-  GLint viewport[4];
-  glGetIntegerv(GL_VIEWPORT, viewport);
-  float aspect = (float)viewport[2] / (float)viewport[3];
+  glColor4f(1, 1, 1, 1);
 
   glMatrixMode(GL_PROJECTION);
   glPushMatrix();
   glLoadIdentity();
-
-  float fov = fovSetting;
-  float nearP = 0.05f;
-  float farP = 2000.0f;
-  float f = 1.0f / tanf(fov * (3.14159265f / 360.0f));
-  float proj[16] = {f / aspect,
-                    0,
-                    0,
-                    0,
-                    0,
-                    f,
-                    0,
-                    0,
-                    0,
-                    0,
-                    (farP + nearP) / (nearP - farP),
-                    -1,
-                    0,
-                    0,
-                    (2 * farP * nearP) / (nearP - farP),
-                    0};
-  glLoadMatrixf(proj);
+  glOrtho(0, vpW, vpH, 0, -1, 1);
 
   glMatrixMode(GL_MODELVIEW);
   glPushMatrix();
   glLoadIdentity();
 
-  glRotatef(rotationPitch, 1.0f, 0.0f, 0.0f);
-  glRotatef(rotationYaw + 180.0f, 0.0f, 1.0f, 0.0f);
-
   try {
-    glDisable(GL_DEPTH_TEST);
-    glDepthMask(GL_FALSE);
-    glDisable(GL_LIGHTING);
-    glDisable(GL_FOG);
+    for (const auto &p : projected) {
+      const auto &bed = *p.bed;
 
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDisable(GL_TEXTURE_2D);
-
-    for (const auto &bed : bedsToDraw) {
       glPushMatrix();
-      glTranslated(bed.x + 0.5 - camX, bed.y + 0.8 - camY, bed.z + 0.5 - camZ);
-      double deltaX = camX - (bed.x + 0.5);
-      double deltaY = camY - (bed.y + 0.8);
-      double deltaZ = camZ - (bed.z + 0.5);
-      double distXZ = sqrt(deltaX * deltaX + deltaZ * deltaZ);
+      glTranslatef(p.pixelX, p.pixelY, 0.0f);
+      glScalef(p.scale, p.scale, 1.0f);
 
-      float yaw = (float)(atan2(deltaZ, deltaX) * 180.0 / 3.14159265) - 90.0f;
-      float pitch = -(float)(atan2(deltaY, distXZ) * 180.0 / 3.14159265);
-
-      glRotatef(-yaw, 0.0f, 1.0f, 0.0f);
-      glRotatef(pitch, 1.0f, 0.0f, 0.0f);
-
-      double dist = sqrt(deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ);
-      float baseScale = 0.02f;
-      float distScale = 1.0f + (float)(dist / 10.0f);
-
-      if (dist < 8.0f) {
-        distScale *= (float)(dist / 8.0f);
-      }
-
-      if (distScale < 0.1f)
-        distScale = 0.1f;
-      if (distScale > 6.0f)
-        distScale = 6.0f;
-
-      float finalScale = baseScale * distScale;
-      glScalef(finalScale, -finalScale, finalScale);
-
-      std::string distStr = std::to_string((int)dist) + "m";
+      std::string distStr = std::to_string((int)p.dist) + "m";
 
       float iconSize = 16.0f;
       float padding = 3.0f;
@@ -502,7 +709,7 @@ void DefenseRenderer::render(void *hdcPtr, double partialTicksManual) {
       float rawTextW =
           m_font.isInitialized() ? m_font.getStringWidth(distStr) : 20.0f;
       float textW = rawTextW * textScale;
-      float gap = 12.0f;
+      float gap = 6.0f;
 
       bool isEmpty = bed.layers.empty();
       float contentW =
@@ -517,7 +724,6 @@ void DefenseRenderer::render(void *hdcPtr, double partialTicksManual) {
       if (m_font.isInitialized()) {
         glPushMatrix();
         float textY = (-boxH / 2 + padding) / textScale;
-
         glScalef(textScale, textScale, 1.0f);
         m_font.drawString(-rawTextW / 2.0f, textY, distStr, 0xFFFFFFFF);
         glPopMatrix();
@@ -537,15 +743,17 @@ void DefenseRenderer::render(void *hdcPtr, double partialTicksManual) {
           glPopMatrix();
         }
       }
+
       glPopMatrix();
     }
   } catch (...) {
   }
 
-  glPopAttrib();
   glMatrixMode(GL_PROJECTION);
   glPopMatrix();
   glMatrixMode(GL_MODELVIEW);
   glPopMatrix();
+  glDepthMask(GL_TRUE);
+  glPopAttrib();
 }
 } // namespace BedDefense

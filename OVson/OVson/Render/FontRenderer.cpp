@@ -169,7 +169,7 @@ void FontRenderer::drawString(float x, float y, const std::string &text,
   for (size_t k = 0; k < text.length(); k++) {
     unsigned char ch = (unsigned char)text[k];
 
-    if (ch == 167 || ch == '&') { // 167 is §
+    if (ch == 167 || ch == '&') {
       if (k + 1 < text.length()) {
         char code = tolower(text[k + 1]);
         uint32_t newColor = color;
@@ -207,7 +207,7 @@ void FontRenderer::drawString(float x, float y, const std::string &text,
         else if (code == 'f')
           newColor = 0xFFFFFFFF;
         else if (code == 'r')
-          newColor = color; // Reset
+          newColor = color;
         else
           found = false;
 

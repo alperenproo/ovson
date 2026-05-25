@@ -180,6 +180,12 @@ public:
     GetClass("net.minecraft.client.gui.GuiChat");
     GetClass("net.minecraft.client.gui.GuiScreen");
     GetClass("net.minecraft.client.gui.GuiTextField");
+    GetClass("net.minecraft.client.renderer.ActiveRenderInfo");
+    GetClass("net.minecraft.client.renderer.entity.RenderManager");
+    GetClass("net.minecraft.entity.Entity");
+    GetClass("net.minecraft.client.renderer.EntityRenderer");
+    GetClass("net.minecraft.client.settings.GameSettings");
+    GetClass("net.minecraft.util.Timer");
   }
 
   virtual ~Lunar() { Cleanup(); }
@@ -241,8 +247,11 @@ public:
         {"net.minecraft.block.Block", "afh"},
         {"net.minecraft.block.BlockBed", "afg"},
         {"net.minecraft.client.settings.GameSettings", "avh"},
+        {"net.minecraft.client.settings.KeyBinding", "avb"},
         {"net.minecraft.util.Timer", "avl"},
         {"net.minecraft.client.renderer.entity.RenderManager", "biu"},
+        {"net.minecraft.client.renderer.ActiveRenderInfo", "axs"},
+        {"net.minecraft.client.renderer.EntityRenderer", "bfb"},
         {"net.minecraft.client.renderer.texture.TextureMap", "bmh"},
         {"net.minecraft.client.renderer.texture.TextureManager", "bmj"},
         {"net.minecraft.client.renderer.texture.TextureAtlasSprite", "bmi"},

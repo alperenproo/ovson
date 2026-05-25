@@ -1,20 +1,26 @@
 #include "RenderHook.h"
-#include "../Chat/ChatInterceptor.h"
 #include "../Config/Config.h"
+#include "../Java.h"
 #include "../Logic/BedDefense/BedDefenseManager.h"
+#include "../Logic/StatsTracker.h"
+#include "../Utils/Anticheat/AcInternal.h"
+#include "../Utils/Anticheat/Anticheat.h"
 #include "../Utils/Logger.h"
 #include "../Utils/ReplaySpammer.h"
+#include "../Utils/SafeGuard.h"
 #include "../Utils/SensitivityFix.h"
+#include "BetterTab.h"
 #include "ClickGUI.h"
 #include "DefenseRenderer.h"
+#include "NameTagRenderer.h"
 #include "NotificationManager.h"
 #include "StatsOverlay.h"
 #include "TechOverlay.h"
 #include <fstream>
 #include <functional>
-#include <windows.h>
 #include <gl/GL.h>
 #include <mutex>
+#include <windows.h>
 
 #include "../Utils/Timer.h"
 #include <algorithm>
@@ -30,6 +36,7 @@ static std::mutex g_queueMutex;
 static float g_frameDelta = 0.0f;
 static std::atomic<bool> g_unloading{false};
 static std::atomic<int> g_threadsInHook{0};
+static std::atomic<bool> g_tabDown{false};
 
 typedef void(__stdcall *PFNGLUSEPROGRAMPROC_LOCAL)(unsigned int);
 static PFNGLUSEPROGRAMPROC_LOCAL g_glUseProgram = nullptr;
@@ -225,8 +232,15 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT uMsg, WPARAM wParam,
     }
   }
 
+  if (uMsg == WM_KEYDOWN && wParam == VK_TAB) {
+    if (Config::isBetterTabModeEnabled() && OVson::isInHypixelGame() &&
+        !OVson::isInPreGameLobby() && !OVson::isChatOpen()) {
+      return 0;
+    }
+  }
+
   if (uMsg == WM_KEYDOWN && wParam == VK_RETURN) {
-    if (ChatInterceptor::handleEnterKeyPress()) {
+    if (OVson::handleEnterKeyPress()) {
       g_threadsInHook--;
       return 0;
     }
@@ -237,14 +251,7 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT uMsg, WPARAM wParam,
   return res;
 }
 
-BOOL WINAPI hookedSwapBuffers(HDC hdc) {
-  g_threadsInHook++;
-  if (g_unloading) {
-    BOOL res = originalSwapBuffers(hdc);
-    g_threadsInHook--;
-    return res;
-  }
-
+static void renderOverlayWorkBody(HDC hdc) {
   static int frameCount = 0;
   frameCount++;
 
@@ -253,13 +260,20 @@ BOOL WINAPI hookedSwapBuffers(HDC hdc) {
   if (g_glUseProgram)
     g_glUseProgram(0);
 
-  if (!g_gameHwnd) {
-    g_gameHwnd = WindowFromDC(hdc);
-    if (g_gameHwnd) {
-      originalWndProc = (WNDPROC)SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC,
-                                                  (LONG_PTR)hookedWndProc);
-      writeDebugLog("WndProc hooked successfully!");
+  HWND currentHwnd = WindowFromDC(hdc);
+  if (currentHwnd && currentHwnd != g_gameHwnd) {
+    if (g_gameHwnd && originalWndProc) {
+      SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC, (LONG_PTR)originalWndProc);
     }
+    g_gameHwnd = currentHwnd;
+    originalWndProc = (WNDPROC)SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC,
+                                                (LONG_PTR)hookedWndProc);
+    writeDebugLog("WndProc hooked (re-hook on HWND change)");
+  } else if (!g_gameHwnd && currentHwnd) {
+    g_gameHwnd = currentHwnd;
+    originalWndProc = (WNDPROC)SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC,
+                                                (LONG_PTR)hookedWndProc);
+    writeDebugLog("WndProc hooked successfully!");
   }
 
   if (frameCount % 100 == 0) {
@@ -273,46 +287,87 @@ BOOL WINAPI hookedSwapBuffers(HDC hdc) {
     if (amount > 0.01f) {
       GLint viewport[4];
       glGetIntegerv(GL_VIEWPORT, viewport);
-      float sw = (float)viewport[2];
-      float sh = (float)viewport[3];
+      int sw = viewport[2];
+      int sh = viewport[3];
 
-      glPushMatrix();
-      glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-      glDisable(GL_TEXTURE_2D);
-      glDisable(GL_LIGHTING);
-      glDisable(GL_DEPTH_TEST);
-      glEnable(GL_BLEND);
-      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      static GLuint g_blurTex = 0;
+      static int    g_blurTexW = 0;
+      static int    g_blurTexH = 0;
+      static bool   g_blurHavePrev = false;
 
-      glMatrixMode(GL_PROJECTION);
-      glPushMatrix();
-      glLoadIdentity();
-      glOrtho(0, sw, sh, 0, -1, 1);
-      glMatrixMode(GL_MODELVIEW);
-      glPushMatrix();
-      glLoadIdentity();
+      if (sw > 0 && sh > 0) {
+        if (!g_blurTex || g_blurTexW != sw || g_blurTexH != sh) {
+          if (g_blurTex) glDeleteTextures(1, &g_blurTex);
+          glGenTextures(1, &g_blurTex);
+          glBindTexture(GL_TEXTURE_2D, g_blurTex);
+          glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, sw, sh, 0,
+                       GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+          g_blurTexW = sw;
+          g_blurTexH = sh;
+          g_blurHavePrev = false;
+        }
 
-      float alpha = amount * 0.15f;
-      glColor4f(0.0f, 0.0f, 0.0f, alpha);
-      glBegin(GL_QUADS);
-      glVertex2f(0, 0);
-      glVertex2f(sw, 0);
-      glVertex2f(sw, sh);
-      glVertex2f(0, sh);
-      glEnd();
+        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT |
+                     GL_DEPTH_BUFFER_BIT | GL_TEXTURE_BIT |
+                     GL_TRANSFORM_BIT);
+        glDisable(GL_LIGHTING);
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glDisable(GL_CULL_FACE);
+        glDisable(GL_FOG);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-      glMatrixMode(GL_PROJECTION);
-      glPopMatrix();
-      glMatrixMode(GL_MODELVIEW);
-      glPopMatrix();
-      glPopAttrib();
-      glPopMatrix();
+        glMatrixMode(GL_PROJECTION);
+        glPushMatrix();
+        glLoadIdentity();
+        glOrtho(0, sw, 0, sh, -1, 1);
+        glMatrixMode(GL_MODELVIEW);
+        glPushMatrix();
+        glLoadIdentity();
+
+        if (g_blurHavePrev) {
+          glEnable(GL_TEXTURE_2D);
+          glBindTexture(GL_TEXTURE_2D, g_blurTex);
+          float alpha = amount * 0.85f;
+          if (alpha > 0.92f) alpha = 0.92f;
+          glColor4f(1, 1, 1, alpha);
+          glBegin(GL_QUADS);
+          glTexCoord2f(0, 0); glVertex2f(0,  0);
+          glTexCoord2f(1, 0); glVertex2f((float)sw, 0);
+          glTexCoord2f(1, 1); glVertex2f((float)sw, (float)sh);
+          glTexCoord2f(0, 1); glVertex2f(0, (float)sh);
+          glEnd();
+          glBindTexture(GL_TEXTURE_2D, 0);
+          glDisable(GL_TEXTURE_2D);
+        }
+
+        glBindTexture(GL_TEXTURE_2D, g_blurTex);
+        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, sw, sh);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        g_blurHavePrev = true;
+
+        glMatrixMode(GL_PROJECTION);
+        glPopMatrix();
+        glMatrixMode(GL_MODELVIEW);
+        glPopMatrix();
+        glDepthMask(GL_TRUE);
+        glPopAttrib();
+      }
     }
   }
 
   StatsOverlay::render((void *)hdc);
 
   BedDefense::DefenseRenderer::getInstance()->render((void *)hdc, 0.0);
+
+  SafeGuard::run("NameTagRenderer::render", [hdc]() {
+    OVson::NameTagRenderer::getInstance()->render((void *)hdc, 0.0);
+  });
 
   if (Config::isNotificationsEnabled()) {
     Render::NotificationManager::getInstance()->render(hdc);
@@ -324,15 +379,50 @@ BOOL WINAPI hookedSwapBuffers(HDC hdc) {
     Render::TechOverlay::render(hdc, vp[2], vp[3]);
   }
 
+  OVson::poll();
+
+  bool wantBetterTab = Config::isBetterTabModeEnabled() &&
+                       OVson::isInHypixelGame() && !OVson::isInPreGameLobby() &&
+                       !OVson::isChatOpen();
+  bool physicalTab = (GetAsyncKeyState(VK_TAB) & 0x8000) != 0;
+
+  static bool wasWantBetterTab = false;
+  if (wantBetterTab != wasWantBetterTab) {
+    HWND hwnd = WindowFromDC((HDC)hdc);
+    if (hwnd) {
+      if (wantBetterTab) {
+        PostMessage(hwnd, WM_KEYUP, VK_TAB, 0xC00F0001);
+      } else {
+        if (physicalTab) {
+          PostMessage(hwnd, WM_KEYDOWN, VK_TAB, 0x000F0001);
+        }
+      }
+    }
+    wasWantBetterTab = wantBetterTab;
+  }
+
+  if (wantBetterTab && physicalTab) {
+    BetterTab::render((void *)hdc);
+  }
+
   BedDefense::BedDefenseManager::getInstance()->tick();
+
+  Anticheat::tickFromRenderThread();
 
   Utils::ReplaySpammer::getInstance().tick();
 
   {
     std::lock_guard<std::mutex> lock(g_queueMutex);
     while (!g_taskQueue.empty()) {
-      g_taskQueue.front()();
+      auto task = std::move(g_taskQueue.front());
       g_taskQueue.pop();
+      try {
+        task();
+      } catch (const std::exception &e) {
+        Logger::error("[SafeGuard] enqueueTask exception: %s", e.what());
+      } catch (...) {
+        Logger::error("[SafeGuard] enqueueTask unknown exception");
+      }
     }
   }
 
@@ -340,6 +430,29 @@ BOOL WINAPI hookedSwapBuffers(HDC hdc) {
     FocusFix::setIngameFocus(false);
   }
   Render::ClickGUI::render(hdc);
+}
+
+BOOL WINAPI hookedSwapBuffers(HDC hdc) {
+  g_threadsInHook++;
+  if (g_unloading) {
+    BOOL res = originalSwapBuffers(hdc);
+    g_threadsInHook--;
+    return res;
+  }
+
+  SafeGuard::installSehTranslator();
+
+  JNIEnv *env = (lc ? lc->getEnv() : nullptr);
+  bool framePushed = false;
+  if (env && env->PushLocalFrame(128) == 0) {
+    framePushed = true;
+  }
+
+  SafeGuard::run("hookedSwapBuffers", [hdc]() { renderOverlayWorkBody(hdc); });
+
+  if (framePushed) {
+    env->PopLocalFrame(nullptr);
+  }
 
   g_threadsInHook--;
   return originalSwapBuffers(hdc);
@@ -429,7 +542,7 @@ void RenderHook::uninstall() {
     g_unloading = true;
 
     int retries = 0;
-    while (g_threadsInHook > 0 && retries < 500) {
+    while (g_threadsInHook.load() > 0 && retries < 500) {
       Sleep(10);
       retries++;
     }

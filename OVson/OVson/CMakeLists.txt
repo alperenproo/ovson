@@ -7,13 +7,31 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Definitions
 add_definitions(-DWIN32 -D_WINDOWS -D_USRDLL -D_WINDLL -DOVSON_EXPORTS -D_CRT_SECURE_NO_WARNINGS)
 
+# /EHa enables asynchronous exception handling, required by
+# _set_se_translator (used in Utils/SafeGuard.h to convert SEH crashes
+# into C++ SehException so try/catch can handle them).
+if(MSVC)
+    add_compile_options(/EHa)
+    # Suppress C4535 (the warning we'd get if EHa were missing); harmless
+    # to leave even when EHa is set.
+    add_compile_options(/wd4535)
+endif()
+
 # Source files
 set(OVSON_SOURCES
     dllmain.cpp
     Config/Config.cpp
     Net/Http.cpp
     Services/Hypixel.cpp
-    Chat/ChatInterceptor.cpp
+    Logic/StatsTracker.cpp
+    Logic/McBindings.cpp
+    Logic/ScoreboardTeams.cpp
+    Logic/TabListScan.cpp
+    Logic/HypixelGameState.cpp
+    Logic/StatsCache.cpp
+    Logic/PlayerStatsFetch.cpp
+    Logic/StatsPoll.cpp
+    Logic/McLogTail.cpp
     Chat/ChatHook.cpp
     Chat/ChatSDK.cpp
     Chat/Commands.cpp
@@ -24,6 +42,7 @@ set(OVSON_SOURCES
     Render/StatsOverlay.cpp
     Render/RenderHook.cpp
     Render/DefenseRenderer.cpp
+    Render/NameTagRenderer.cpp
     Render/TextureLoader.cpp
     Render/NotificationManager.cpp
     Render/ClickGUI.cpp
@@ -35,6 +54,8 @@ set(OVSON_SOURCES
     Utils/Timer.cpp
     Utils/ChatBypasser.cpp
     Utils/ThreadTracker.cpp
+    Utils/Anticheat/AcCore.cpp
+    Utils/Anticheat/AcChecks.cpp
     Services/UrchinService.cpp
     Services/SeraphService.cpp
     Services/DiscordManager.cpp
@@ -49,7 +70,8 @@ set(OVSON_HEADERS
     Config/Config.h
     Net/Http.h
     Services/Hypixel.h
-    Chat/ChatInterceptor.h
+    Logic/StatsTracker.h
+    Logic/StatsTracker.internal.h
     Chat/ChatHook.h
     Chat/ChatSDK.h
     Chat/Commands.h
@@ -73,6 +95,7 @@ set(OVSON_HEADERS
     Render/StatsOverlay.h
     Render/RenderHook.h
     Render/DefenseRenderer.h
+    Render/NameTagRenderer.h
     Render/NotificationManager.h
     Render/ClickGUI.h
     Render/RenderUtils.h
@@ -82,6 +105,9 @@ set(OVSON_HEADERS
     Logic/BedDefense/BlockHook.h
     Logic/AutoGG.h
     Utils/ChatBypasser.h
+    Utils/SafeGuard.h
+    Utils/Anticheat/Anticheat.h
+    Utils/Anticheat/AcInternal.h
     Services/UrchinService.h
     Services/SeraphService.h
     Services/DiscordManager.h

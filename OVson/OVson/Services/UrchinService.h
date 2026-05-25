@@ -22,4 +22,5 @@ std::optional<PlayerTags> getPlayerTags(const std::string &username,
                                         bool wait = false);
 void clearCache();
 bool hasAnyTags(const std::string &username);
+
 } // namespace Urchin

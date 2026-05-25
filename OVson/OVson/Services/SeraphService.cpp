@@ -1,10 +1,11 @@
 #include "SeraphService.h"
-#include "../Chat/ChatInterceptor.h"
 #include "../Chat/ChatSDK.h"
 #include "../Config/Config.h"
+#include "../Logic/StatsTracker.h"
 #include "../Net/Http.h"
 #include "../Render/NotificationManager.h"
 #include "../Utils/Logger.h"
+#include "../Utils/SafeGuard.h"
 #include "../Utils/ThreadTracker.h"
 #include <chrono>
 #include <mutex>
@@ -161,62 +162,65 @@ std::optional<PlayerTags> getPlayerTags(const std::string &username,
     return std::nullopt;
   }
   std::thread([username, uuid]() {
-    std::string url = "https://api.seraph.si/" + uuid + "/blacklist";
-    std::string apiKey = Config::getSeraphApiKey();
-    if (apiKey.empty()) {
-      std::lock_guard<std::mutex> lock(g_pendingMutex);
-      g_pendingFetches.erase(uuid);
-      return;
-    }
+    SafeGuard::installSehTranslator();
+    SafeGuard::run("Seraph::worker", [&]() {
+      std::string url = "https://api.seraph.si/" + uuid + "/blacklist";
+      std::string apiKey = Config::getSeraphApiKey();
+      if (apiKey.empty()) {
+        std::lock_guard<std::mutex> lock(g_pendingMutex);
+        g_pendingFetches.erase(uuid);
+        return;
+      }
 
-    std::string body;
-    bool ok = Http::get(url, body, "seraph-api-key", apiKey);
+      std::string body;
+      bool ok = Http::get(url, body, "seraph-api-key", apiKey);
 
-    PlayerTags result;
-    result.uuid = uuid;
+      PlayerTags result;
+      result.uuid = uuid;
 
-    if (ok && !body.empty() &&
-        body.find("\"success\":true") != std::string::npos) {
-      size_t blacklistPos = body.find("\"blacklist\"");
-      if (blacklistPos != std::string::npos) {
-        std::string blacklistSection = body.substr(blacklistPos);
-        size_t endPos = blacklistSection.find("},");
-        if (endPos == std::string::npos)
-          endPos = blacklistSection.find("}");
-        if (endPos != std::string::npos) {
-          blacklistSection = blacklistSection.substr(0, endPos + 1);
-        }
-
-        if (blacklistSection.find("\"tagged\":true") != std::string::npos) {
-          std::string reportType, tooltip;
-          findJsonString(blacklistSection, "report_type", reportType);
-          findJsonString(blacklistSection, "tooltip", tooltip);
-
-          size_t parenPos = tooltip.rfind('(');
-          if (parenPos != std::string::npos &&
-              tooltip.find("by", parenPos) != std::string::npos) {
-            tooltip = tooltip.substr(0, parenPos);
-            while (!tooltip.empty() && isspace(tooltip.back()))
-              tooltip.pop_back();
+      if (ok && !body.empty() &&
+          body.find("\"success\":true") != std::string::npos) {
+        size_t blacklistPos = body.find("\"blacklist\"");
+        if (blacklistPos != std::string::npos) {
+          std::string blacklistSection = body.substr(blacklistPos);
+          size_t endPos = blacklistSection.find("},");
+          if (endPos == std::string::npos)
+            endPos = blacklistSection.find("}");
+          if (endPos != std::string::npos) {
+            blacklistSection = blacklistSection.substr(0, endPos + 1);
           }
 
-          if (reportType.empty())
-            reportType = "Seraph Blacklist";
-          result.tags.push_back({reportType, tooltip});
+          if (blacklistSection.find("\"tagged\":true") != std::string::npos) {
+            std::string reportType, tooltip;
+            findJsonString(blacklistSection, "report_type", reportType);
+            findJsonString(blacklistSection, "tooltip", tooltip);
+
+            size_t parenPos = tooltip.rfind('(');
+            if (parenPos != std::string::npos &&
+                tooltip.find("by", parenPos) != std::string::npos) {
+              tooltip = tooltip.substr(0, parenPos);
+              while (!tooltip.empty() && isspace(tooltip.back()))
+                tooltip.pop_back();
+            }
+
+            if (reportType.empty())
+              reportType = "Seraph Blacklist";
+            result.tags.push_back({reportType, tooltip});
+          }
         }
       }
-    }
 
-    {
-      std::lock_guard<std::mutex> lock(g_cacheMutex);
-      pruneCacheLocked();
-      g_cache[uuid] = {result, std::chrono::steady_clock::now()};
-    }
+      {
+        std::lock_guard<std::mutex> lock(g_cacheMutex);
+        pruneCacheLocked();
+        g_cache[uuid] = {result, std::chrono::steady_clock::now()};
+      }
 
-    {
-      std::lock_guard<std::mutex> lock(g_pendingMutex);
-      g_pendingFetches.erase(uuid);
-    }
+      {
+        std::lock_guard<std::mutex> lock(g_pendingMutex);
+        g_pendingFetches.erase(uuid);
+      }
+    });
     ThreadTracker::decrement();
   }).detach();
 

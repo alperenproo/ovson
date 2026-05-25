@@ -4,6 +4,7 @@
 #include "../../Config/Config.h"
 #include "../../Java.h"
 #include "../../Utils/Logger.h"
+#include "../../Utils/SafeGuard.h"
 #include <algorithm>
 #include <cmath>
 #include <thread>
@@ -1096,7 +1097,11 @@ void BedDefenseManager::forceScan() {
     return;
 
   m_isScanning = true;
-  std::thread([this]() { asyncScanTask(); }).detach();
+  std::thread([this]() {
+    SafeGuard::installSehTranslator();
+    SafeGuard::run("BedDefense::asyncScanTask",
+                   [this]() { asyncScanTask(); });
+  }).detach();
 }
 
 void BedDefenseManager::asyncScanTask() {
@@ -1147,7 +1152,7 @@ void BedDefenseManager::asyncScanTask() {
     if (!f_px)
       f_px = lc->FindFieldBySignature(entityCls, "D");
     if (!f_pz)
-      f_pz = lc->FindFieldBySignature(entityCls, "D"); // Fallback for posZ
+      f_pz = lc->FindFieldBySignature(entityCls, "D");
 
     if (f_px && f_pz) {
       double px = env->GetDoubleField(player, f_px);

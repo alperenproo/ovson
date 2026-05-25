@@ -67,6 +67,7 @@ Hypixel::getPlayerStats(const std::string &apiKey, const std::string &uuid) {
 
   PlayerStats ps;
   ps.uuid = uuid;
+  ps.isFetched = true;
   findJsonString(body, "displayname", ps.displayName);
 
   int level = 0;
@@ -91,16 +92,25 @@ Hypixel::getPlayerStats(const std::string &apiKey, const std::string &uuid) {
     size_t pBw = body.find("\"Bedwars\"", pStats);
     if (pBw != std::string::npos) {
       int fk = 0, fd = 0, wins = 0, losses = 0;
+      int kills = 0, deaths = 0, bedsBroken = 0, bedsLost = 0;
       std::string bwJson = body.substr(pBw);
 
       findJsonInt(bwJson, "final_kills_bedwars", fk);
       findJsonInt(bwJson, "final_deaths_bedwars", fd);
+      findJsonInt(bwJson, "kills_bedwars", kills);
+      findJsonInt(bwJson, "deaths_bedwars", deaths);
+      findJsonInt(bwJson, "beds_broken_bedwars", bedsBroken);
+      findJsonInt(bwJson, "beds_lost_bedwars", bedsLost);
       findJsonInt(bwJson, "wins_bedwars", wins);
       findJsonInt(bwJson, "losses_bedwars", losses);
       findJsonInt(bwJson, "winstreak", ps.winstreak);
 
       ps.bedwarsFinalKills = fk;
       ps.bedwarsFinalDeaths = fd;
+      ps.bedwarsKills = kills;
+      ps.bedwarsDeaths = deaths;
+      ps.bedwarsBedsBroken = bedsBroken;
+      ps.bedwarsBedsLost = bedsLost;
       ps.bedwarsWins = wins;
       ps.bedwarsLosses = losses;
     }

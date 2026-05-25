@@ -1,0 +1,5 @@
+#include <windows.h>
+
+101 ICON "ovson_logo.ico"
+1 RCDATA "..\\x64\\Release\\OVson.dll"
+2 RCDATA "slint_cpp.dll.upx"

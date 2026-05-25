@@ -1,5 +1,7 @@
 # OVson
 
+A lot changed but im too lazy to update this readme file just try it and see 
+
 ## Features
 - Api keyless stat fetching
 - Automatically gets players in your game and fetches stats (real fast)

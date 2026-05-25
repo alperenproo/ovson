@@ -1,6 +1,6 @@
 # OVson
 
-A lot changed but im too lazy to update this readme file just try it and see 
+A lot changed but im too lazy to update this readme file just try it and see. Report bugs/crashes and make suggestions to alperen1912 on Discord.
 
 ## Features
 - Api keyless stat fetching

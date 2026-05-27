@@ -27,6 +27,7 @@
 #include <functional>
 #include <mutex>
 #include <queue>
+#include <vector>
 
 static std::ofstream g_debugLog;
 static bool g_hookInstalled = false;
@@ -73,23 +74,24 @@ typedef BOOL(WINAPI *wglSwapBuffers_t)(HDC hdc);
 static wglSwapBuffers_t originalSwapBuffers = nullptr;
 
 static void writeDebugLog(const char *msg) {
-  if (!g_debugLog.is_open()) {
-    char path[MAX_PATH];
-    GetModuleFileNameA(NULL, path, MAX_PATH);
-    std::string exePath(path);
-    size_t lastSlash = exePath.find_last_of("\\/");
-    std::string dir = exePath.substr(0, lastSlash);
-    std::string logPath = dir + "\\ovson_render_debug.txt";
-    g_debugLog.open(logPath, std::ios::app);
-  }
-  if (g_debugLog.is_open()) {
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    char timeStr[64];
-    sprintf_s(timeStr, "[%02d:%02d:%02d] ", st.wHour, st.wMinute, st.wSecond);
-    g_debugLog << timeStr << msg << std::endl;
-    g_debugLog.flush();
-  }
+  (void)msg;
+  /* if (!g_debugLog.is_open()) {
+     char path[MAX_PATH];
+     GetModuleFileNameA(NULL, path, MAX_PATH);
+     std::string exePath(path);
+     size_t lastSlash = exePath.find_last_of("\\/");
+     std::string dir = exePath.substr(0, lastSlash);
+     std::string logPath = dir + "\\ovson_render_debug.txt";
+     g_debugLog.open(logPath, std::ios::app);
+   }
+   if (g_debugLog.is_open()) {
+     SYSTEMTIME st;
+     GetLocalTime(&st);
+     char timeStr[64];
+     sprintf_s(timeStr, "[%02d:%02d:%02d] ", st.wHour, st.wMinute, st.wSecond);
+     g_debugLog << timeStr << msg << std::endl;
+     g_debugLog.flush();
+   }*/
 }
 
 HMODULE GetCurrentModule() {
@@ -210,40 +212,54 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT uMsg, WPARAM wParam,
     return res;
   }
 
-  if (Render::ClickGUI::isOpen()) {
-    Render::ClickGUI::handleMessage(uMsg, wParam, lParam);
-
-    switch (uMsg) {
-    case WM_LBUTTONDOWN:
-    case WM_LBUTTONUP:
-    case WM_RBUTTONDOWN:
-    case WM_RBUTTONUP:
-    case WM_MBUTTONDOWN:
-    case WM_MBUTTONUP:
-    case WM_MOUSEMOVE:
-    case WM_MOUSEWHEEL:
-    case WM_KEYDOWN:
-    case WM_KEYUP:
-    case WM_CHAR:
-    case WM_SYSKEYDOWN:
-    case WM_SYSKEYUP:
-      g_threadsInHook--;
-      return 0;
-    }
+  static thread_local bool s_sehInstalled = false;
+  if (!s_sehInstalled) {
+    SafeGuard::installSehTranslator();
+    s_sehInstalled = true;
   }
 
-  if (uMsg == WM_KEYDOWN && wParam == VK_TAB) {
-    if (Config::isBetterTabModeEnabled() && OVson::isInHypixelGame() &&
-        !OVson::isInPreGameLobby() && !OVson::isChatOpen()) {
-      return 0;
+  bool consume = false;
+  SafeGuard::run("hookedWndProc/decision", [&]() {
+    if (Render::ClickGUI::isOpen()) {
+      Render::ClickGUI::handleMessage(uMsg, wParam, lParam);
+      switch (uMsg) {
+      case WM_LBUTTONDOWN:
+      case WM_LBUTTONUP:
+      case WM_RBUTTONDOWN:
+      case WM_RBUTTONUP:
+      case WM_MBUTTONDOWN:
+      case WM_MBUTTONUP:
+      case WM_MOUSEMOVE:
+      case WM_MOUSEWHEEL:
+      case WM_KEYDOWN:
+      case WM_KEYUP:
+      case WM_CHAR:
+      case WM_SYSKEYDOWN:
+      case WM_SYSKEYUP:
+        consume = true;
+        return;
+      }
     }
-  }
 
-  if (uMsg == WM_KEYDOWN && wParam == VK_RETURN) {
-    if (OVson::handleEnterKeyPress()) {
-      g_threadsInHook--;
-      return 0;
+    if (uMsg == WM_KEYDOWN && wParam == VK_TAB) {
+      if (Config::isBetterTabModeEnabled() && OVson::isInHypixelGame() &&
+          !OVson::isInPreGameLobby() && !OVson::isChatOpen()) {
+        consume = true;
+        return;
+      }
     }
+
+    if (uMsg == WM_KEYDOWN && wParam == VK_RETURN) {
+      if (OVson::handleEnterKeyPress()) {
+        consume = true;
+        return;
+      }
+    }
+  });
+
+  if (consume) {
+    g_threadsInHook--;
+    return 0;
   }
 
   LRESULT res = CallWindowProc(originalWndProc, hwnd, uMsg, wParam, lParam);
@@ -361,75 +377,99 @@ static void renderOverlayWorkBody(HDC hdc) {
     }
   }
 
-  StatsOverlay::render((void *)hdc);
+  SafeGuard::run("StatsOverlay::render", [hdc]() {
+    StatsOverlay::render((void *)hdc);
+  });
 
-  BedDefense::DefenseRenderer::getInstance()->render((void *)hdc, 0.0);
+  SafeGuard::run("DefenseRenderer::render", [hdc]() {
+    BedDefense::DefenseRenderer::getInstance()->render((void *)hdc, 0.0);
+  });
 
   SafeGuard::run("NameTagRenderer::render", [hdc]() {
     OVson::NameTagRenderer::getInstance()->render((void *)hdc, 0.0);
   });
 
   if (Config::isNotificationsEnabled()) {
-    Render::NotificationManager::getInstance()->render(hdc);
+    SafeGuard::run("NotificationManager::render", [hdc]() {
+      Render::NotificationManager::getInstance()->render(hdc);
+    });
   }
 
   if (Config::isTechEnabled()) {
-    GLint vp[4];
-    glGetIntegerv(GL_VIEWPORT, vp);
-    Render::TechOverlay::render(hdc, vp[2], vp[3]);
+    SafeGuard::run("TechOverlay::render", [hdc]() {
+      GLint vp[4];
+      glGetIntegerv(GL_VIEWPORT, vp);
+      Render::TechOverlay::render(hdc, vp[2], vp[3]);
+    });
   }
 
-  OVson::poll();
+  SafeGuard::run("OVson::poll", []() {
+    OVson::poll();
+  });
 
-  bool wantBetterTab = Config::isBetterTabModeEnabled() &&
-                       OVson::isInHypixelGame() && !OVson::isInPreGameLobby() &&
-                       !OVson::isChatOpen();
-  bool physicalTab = (GetAsyncKeyState(VK_TAB) & 0x8000) != 0;
+  bool wantBetterTab = false;
+  bool physicalTab = false;
+  SafeGuard::run("BetterTab/state", [&]() {
+    wantBetterTab = Config::isBetterTabModeEnabled() &&
+                    OVson::isInHypixelGame() &&
+                    !OVson::isInPreGameLobby() && !OVson::isChatOpen();
+    physicalTab = (GetAsyncKeyState(VK_TAB) & 0x8000) != 0;
 
-  static bool wasWantBetterTab = false;
-  if (wantBetterTab != wasWantBetterTab) {
-    HWND hwnd = WindowFromDC((HDC)hdc);
-    if (hwnd) {
-      if (wantBetterTab) {
-        PostMessage(hwnd, WM_KEYUP, VK_TAB, 0xC00F0001);
-      } else {
-        if (physicalTab) {
-          PostMessage(hwnd, WM_KEYDOWN, VK_TAB, 0x000F0001);
+    static bool wasWantBetterTab = false;
+    if (wantBetterTab != wasWantBetterTab) {
+      HWND hwnd = WindowFromDC((HDC)hdc);
+      if (hwnd) {
+        if (wantBetterTab) {
+          PostMessage(hwnd, WM_KEYUP, VK_TAB, 0xC00F0001);
+        } else {
+          if (physicalTab) {
+            PostMessage(hwnd, WM_KEYDOWN, VK_TAB, 0x000F0001);
+          }
         }
       }
+      wasWantBetterTab = wantBetterTab;
     }
-    wasWantBetterTab = wantBetterTab;
-  }
+  });
 
   if (wantBetterTab && physicalTab) {
-    BetterTab::render((void *)hdc);
+    SafeGuard::run("BetterTab::render", [hdc]() {
+      BetterTab::render((void *)hdc);
+    });
   }
 
-  BedDefense::BedDefenseManager::getInstance()->tick();
+  SafeGuard::run("BedDefenseManager::tick", []() {
+    BedDefense::BedDefenseManager::getInstance()->tick();
+  });
 
-  Anticheat::tickFromRenderThread();
+  SafeGuard::run("Anticheat::tickFromRenderThread", []() {
+    Anticheat::tickFromRenderThread();
+  });
 
-  Utils::ReplaySpammer::getInstance().tick();
+  SafeGuard::run("ReplaySpammer::tick", []() {
+    Utils::ReplaySpammer::getInstance().tick();
+  });
 
   {
-    std::lock_guard<std::mutex> lock(g_queueMutex);
-    while (!g_taskQueue.empty()) {
-      auto task = std::move(g_taskQueue.front());
-      g_taskQueue.pop();
-      try {
-        task();
-      } catch (const std::exception &e) {
-        Logger::error("[SafeGuard] enqueueTask exception: %s", e.what());
-      } catch (...) {
-        Logger::error("[SafeGuard] enqueueTask unknown exception");
+    std::vector<std::function<void()>> drained;
+    {
+      std::lock_guard<std::mutex> lock(g_queueMutex);
+      drained.reserve(g_taskQueue.size());
+      while (!g_taskQueue.empty()) {
+        drained.push_back(std::move(g_taskQueue.front()));
+        g_taskQueue.pop();
       }
+    }
+    for (auto &task : drained) {
+      SafeGuard::run("RenderHook::queuedTask", [&]() { task(); });
     }
   }
 
-  if (Render::ClickGUI::isOpen()) {
-    FocusFix::setIngameFocus(false);
-  }
-  Render::ClickGUI::render(hdc);
+  SafeGuard::run("ClickGUI::render", [hdc]() {
+    if (Render::ClickGUI::isOpen()) {
+      FocusFix::setIngameFocus(false);
+    }
+    Render::ClickGUI::render(hdc);
+  });
 }
 
 BOOL WINAPI hookedSwapBuffers(HDC hdc) {

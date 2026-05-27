@@ -51,6 +51,7 @@ struct JCache {
   jmethodID m_bindTexture = nullptr;
   jmethodID m_tm_getTexture = nullptr;
   jmethodID m_tex_getGlTextureId = nullptr;
+  jmethodID m_object_toString = nullptr;
 
   jclass collCls = nullptr;
   jmethodID m_iterator = nullptr;
@@ -74,6 +75,8 @@ static std::string resolveLogPath() {
 }
 
 static void logDiagnostic(const char *fmt, ...) {
+  (void)fmt;
+  return;
   static FILE *f = nullptr;
   static std::mutex logMtx;
   static std::string s_path;
@@ -414,6 +417,17 @@ static void ensureMcFields(JNIEnv *env) {
     }
   }
 
+  if (!g_jc.m_object_toString) {
+    jclass objCls = env->FindClass("java/lang/Object");
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (objCls) {
+      g_jc.m_object_toString =
+          env->GetMethodID(objCls, "toString", "()Ljava/lang/String;");
+      if (env->ExceptionCheck()) env->ExceptionClear();
+      env->DeleteLocalRef(objCls);
+    }
+  }
+
   logDiagnostic("SKIN init: npiCls=%p tmCls=%p rlCls=%p", (void *)npiCls,
                 (void *)tmCls, (void *)rlClass);
   logDiagnostic("SKIN init: f_locationSkin=%p m_getLocationSkin=%p "
@@ -571,6 +585,7 @@ namespace {
 struct SkinEntry {
   GLuint glId = 0;
   ULONGLONG lastTry = 0;
+  bool tentative = false;
   std::list<std::string>::iterator lruIt;
 };
 constexpr size_t kSkinCacheMax = 256;
@@ -604,7 +619,9 @@ static inline void skinDiagOnce(int bit, const char *msg) {
     logDiagnostic("SKIN: %s", msg);
 }
 
-GLuint resolveSkinTexId(JNIEnv *env, jobject tm, jobject npi) {
+GLuint resolveSkinTexId(JNIEnv *env, jobject tm, jobject npi,
+                        bool *outIsDefault = nullptr) {
+  if (outIsDefault) *outIsDefault = false;
   if (!env || !tm || !npi || !g_jc.m_tm_getTexture ||
       (!g_jc.m_getLocationSkin && !g_jc.f_locationSkin)) {
     skinDiagOnce(0, "resolveSkinTexId: preconditions failed "
@@ -628,6 +645,23 @@ GLuint resolveSkinTexId(JNIEnv *env, jobject tm, jobject npi) {
         "resolveSkinTexId: locationSkin is null (skin not loaded yet)");
     return 0;
   }
+
+  if (outIsDefault && g_jc.m_object_toString) {
+    jstring jpath =
+        (jstring)env->CallObjectMethod(rl, g_jc.m_object_toString);
+    if (env->ExceptionCheck()) {
+      env->ExceptionClear();
+    } else if (jpath) {
+      const char *cpath = env->GetStringUTFChars(jpath, nullptr);
+      if (cpath) {
+        *outIsDefault = (strstr(cpath, "/skins/") == nullptr) &&
+                        (strstr(cpath, ":skins/") == nullptr);
+        env->ReleaseStringUTFChars(jpath, cpath);
+      }
+      env->DeleteLocalRef(jpath);
+    }
+  }
+
   jobject texObj = env->CallObjectMethod(tm, g_jc.m_tm_getTexture, rl);
   env->DeleteLocalRef(rl);
   if (env->ExceptionCheck()) {
@@ -717,11 +751,15 @@ static void touchLru(SkinEntry &entry) {
 }
 
 static SkinEntry &upsertEntry(const std::string &name, GLuint id,
-                              ULONGLONG now) {
+                              ULONGLONG now, bool tentative) {
   auto it = g_skinTexCache.find(name);
   if (it != g_skinTexCache.end()) {
+    bool wasConfirmed = !it->second.tentative && it->second.glId != 0;
     it->second.glId = id;
     it->second.lastTry = now;
+    if (!wasConfirmed) {
+      it->second.tentative = tentative;
+    }
     touchLru(it->second);
     return it->second;
   }
@@ -730,7 +768,7 @@ static SkinEntry &upsertEntry(const std::string &name, GLuint id,
     g_skinLru.pop_back();
   }
   g_skinLru.push_front(name);
-  SkinEntry e{id, now, g_skinLru.begin()};
+  SkinEntry e{id, now, tentative, g_skinLru.begin()};
   auto [insIt, _] = g_skinTexCache.emplace(name, e);
   return insIt->second;
 }
@@ -741,13 +779,14 @@ GLuint cacheLookupOrFetch(JNIEnv *env, jobject tm, jobject npi,
   ULONGLONG now = GetTickCount64();
   if (it != g_skinTexCache.end()) {
     touchLru(it->second);
-    if (it->second.glId != 0)
+    if (it->second.glId != 0 && !it->second.tentative)
       return it->second.glId;
     if (now - it->second.lastTry < SKIN_RETRY_MS)
-      return 0;
+      return it->second.glId;
   }
-  GLuint id = resolveSkinTexId(env, tm, npi);
-  upsertEntry(name, id, now);
+  bool isDefault = false;
+  GLuint id = resolveSkinTexId(env, tm, npi, &isDefault);
+  upsertEntry(name, id, now, isDefault);
   return id;
 }
 } // namespace

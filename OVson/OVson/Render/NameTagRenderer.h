@@ -17,9 +17,13 @@ private:
   NameTagRenderer &operator=(const NameTagRenderer &) = delete;
 
   void initIds();
+  void renderInner(void *hdcPtr, double partialTicksManual);
 
   struct JNICache {
     bool initialized = false;
+    void *ep_classGlobal = nullptr;
+    void *worldListBlacklist[16] = {};
+    int worldListBlacklistCount = 0;
     void *mc_theMc = nullptr;
     void *mc_theWorld = nullptr;
     void *mc_renderViewEntity = nullptr;

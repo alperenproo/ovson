@@ -154,31 +154,11 @@ std::optional<PlayerTags> getPlayerTags(const std::string &username,
     Logger::log(Config::DebugCategory::Urchin,
                 "=== Urchin Sync Fetching: %s ===", username.c_str());
 
-    {
-      std::ofstream dbg("urchin_debug.txt", std::ios::app);
-      if (dbg.is_open()) {
-        dbg << "=== URCHIN SYNC FETCH STARTED: " << username << " ===\n";
-        dbg << "URL: " << url << "\n";
-        dbg.close();
-      }
-    }
-
     bool ok = false;
     int maxRetries = 3;
     for (int attempt = 0; attempt < maxRetries; ++attempt) {
       ok = Http::get(url, body);
 
-      {
-        std::ofstream dbg("urchin_debug.txt", std::ios::app);
-        if (dbg.is_open()) {
-          dbg << "=== URCHIN SYNC FETCH COMPLETED: " << username << " (Attempt "
-              << attempt + 1 << ") ===\n";
-          dbg << "HTTP OK: " << (ok ? "Yes" : "No") << "\n";
-          dbg << "Body Size: " << body.size() << "\n";
-          dbg << "Body: " << body << "\n";
-          dbg.close();
-        }
-      }
 
       if (body.find("Rate limit exceeded") != std::string::npos ||
           body.find("rate limit") != std::string::npos ||

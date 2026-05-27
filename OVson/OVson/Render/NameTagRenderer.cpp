@@ -23,32 +23,23 @@ static FILE *g_ntLog = nullptr;
 static DWORD g_ntLogLastTick = 0;
 
 static FILE *openNtLog() {
-  if (g_ntLog) return g_ntLog;
-  wchar_t path[MAX_PATH];
-  GetTempPathW(MAX_PATH, path);
-  wcscat_s(path, L"ovson_nametag.log");
-  _wfopen_s(&g_ntLog, path, L"a");
-  return g_ntLog;
+  return nullptr;
 }
 
 static bool shouldLogNow() {
-  static constexpr bool kEnableNameTagLog = true;
-  if (!kEnableNameTagLog) return false;
-  DWORD now = GetTickCount();
-  if (now - g_ntLogLastTick < 2000) return false;
-  g_ntLogLastTick = now;
-  return true;
+  return false;
 }
 
 static void ntLog(const char *fmt, ...) {
-  FILE *f = openNtLog();
-  if (!f) return;
-  va_list ap;
-  va_start(ap, fmt);
-  vfprintf(f, fmt, ap);
-  va_end(ap);
-  fputc('\n', f);
-  fflush(f);
+  (void)fmt;
+  // FILE *f = openNtLog();
+  // if (!f) return;
+  // va_list ap;
+  // va_start(ap, fmt);
+  // vfprintf(f, fmt, ap);
+  // va_end(ap);
+  // fputc('\n', f);
+  // fflush(f);
 }
 
 struct Vec4 {
@@ -216,6 +207,10 @@ void NameTagRenderer::initIds() {
     jclass epCls = findCls("net.minecraft.entity.player.EntityPlayer",
                            {"zw", "wn", "ahd", "xe", "yw"});
     if (!epCls) { ntLog("initIds: FAIL epCls"); return; }
+    if (!m_ids.ep_classGlobal) {
+      m_ids.ep_classGlobal = (void *)env->NewGlobalRef(epCls);
+      if (env->ExceptionCheck()) env->ExceptionClear();
+    }
     m_ids.player_getCommandSenderName = (void *)lc->GetMethodID(
         epCls, "getName", "()Ljava/lang/String;", "func_70005_c_", "Q",
         "()Ljava/lang/String;");
@@ -241,13 +236,26 @@ void NameTagRenderer::initIds() {
                               {"ahb", "ahq", "ahr"});
     if (!worldCls) { ntLog("initIds: FAIL worldCls"); return; }
     m_ids.world_playerEntities = nullptr;
+    auto isBlacklisted = [&](void *fid) -> bool {
+      for (int i = 0; i < m_ids.worldListBlacklistCount; ++i)
+        if (m_ids.worldListBlacklist[i] == fid) return true;
+      return false;
+    };
     auto tryWorldList = [&](const char *name) {
       if (m_ids.world_playerEntities) return;
-      m_ids.world_playerEntities =
+      void *fid =
           (void *)env->GetFieldID(worldCls, name, "Ljava/util/List;");
       if (env->ExceptionCheck()) env->ExceptionClear();
-      if (m_ids.world_playerEntities)
-        ntLog("initIds: world.playerEntities matched obf '%s'", name);
+      if (!fid) return;
+      if (isBlacklisted(fid)) {
+        ntLog("initIds: skipping obf '%s' (fid=%p) — already blacklisted",
+              name, fid);
+        return;
+      }
+      m_ids.world_playerEntities = fid;
+      ntLog("initIds: world.playerEntities candidate obf '%s' (fid=%p, "
+            "attempt #%d)",
+            name, fid, m_ids.worldListBlacklistCount + 1);
     };
     tryWorldList("playerEntities");
     tryWorldList("field_73010_i");
@@ -358,6 +366,17 @@ struct NameTagDraw {
 };
 
 void NameTagRenderer::render(void *hdcPtr, double partialTicksManual) {
+  static thread_local bool s_sehInstalled = false;
+  if (!s_sehInstalled) {
+    SafeGuard::installSehTranslator();
+    s_sehInstalled = true;
+  }
+  SafeGuard::run("NameTag/render-outer", [&]() {
+    renderInner(hdcPtr, partialTicksManual);
+  });
+}
+
+void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
   (void)hdcPtr;
 
   const bool logThisPass = shouldLogNow();
@@ -535,6 +554,21 @@ void NameTagRenderer::render(void *hdcPtr, double partialTicksManual) {
     if (logThisPass)
       ntLog("  gate: EXCEPTION in camera-state try block at step '%s'",
             step);
+    if (step && strstr(step, "world.playerEntities") &&
+        m_ids.world_playerEntities) {
+      if (m_ids.worldListBlacklistCount <
+          (int)(sizeof(m_ids.worldListBlacklist) /
+                sizeof(m_ids.worldListBlacklist[0]))) {
+        m_ids.worldListBlacklist[m_ids.worldListBlacklistCount++] =
+            m_ids.world_playerEntities;
+        ntLog("  gate: blacklisted bad world.playerEntities fid=%p "
+              "(total blacklisted=%d) — will re-resolve next frame",
+              m_ids.world_playerEntities,
+              m_ids.worldListBlacklistCount);
+      }
+      m_ids.world_playerEntities = nullptr;
+      m_ids.initialized = false;
+    }
     if (mcObj) env->DeleteLocalRef(mcObj);
     return;
   }
@@ -619,6 +653,39 @@ void NameTagRenderer::render(void *hdcPtr, double partialTicksManual) {
   jint listSize = env->CallIntMethod(playerList, (jmethodID)m_ids.list_size);
   if (env->ExceptionCheck()) { env->ExceptionClear(); listSize = 0; }
 
+  if (listSize > 0 && m_ids.ep_classGlobal && m_ids.list_get) {
+    jobject probe = env->CallObjectMethod(playerList,
+                                          (jmethodID)m_ids.list_get, 0);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); probe = nullptr; }
+    if (probe) {
+      jboolean isEp = env->IsInstanceOf(probe,
+                                        (jclass)m_ids.ep_classGlobal);
+      if (env->ExceptionCheck()) { env->ExceptionClear(); isEp = JNI_FALSE; }
+      env->DeleteLocalRef(probe);
+      if (!isEp) {
+        if (logThisPass)
+          ntLog("  gate: playerList element [0] is NOT an EntityPlayer — "
+                "world_playerEntities field guess was wrong, blacklisting "
+                "fid=%p (size=%d). Will re-resolve on next initIds.",
+                m_ids.world_playerEntities, (int)listSize);
+        if (m_ids.worldListBlacklistCount <
+            (int)(sizeof(m_ids.worldListBlacklist) /
+                  sizeof(m_ids.worldListBlacklist[0]))) {
+          m_ids.worldListBlacklist[m_ids.worldListBlacklistCount++] =
+              m_ids.world_playerEntities;
+        }
+        m_ids.world_playerEntities = nullptr;
+        m_ids.initialized = false;
+        env->DeleteLocalRef(worldObj);
+        env->DeleteLocalRef(playerList);
+        if (viewerEntity) env->DeleteLocalRef(viewerEntity);
+        env->DeleteLocalRef(fontObj);
+        env->DeleteLocalRef(mcObj);
+        return;
+      }
+    }
+  }
+
   std::vector<NameTagDraw> draws;
   draws.reserve((size_t)listSize);
 
@@ -653,7 +720,6 @@ void NameTagRenderer::render(void *hdcPtr, double partialTicksManual) {
     }
   }
 
-  SafeGuard::installSehTranslator();
   for (jint i = 0; i < listSize; ++i) {
     SafeGuard::run("NameTag/player-iter", [&]() {
     jobject player =

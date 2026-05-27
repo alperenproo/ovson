@@ -9,6 +9,7 @@
 #include "../Render/RenderHook.h"
 #include "../Services/AuroraService.h"
 #include "../Services/Hypixel.h"
+#include "../Services/KhadowService.h"
 #include "../Services/SeraphService.h"
 #include "../Services/UrchinService.h"
 #include "../Utils/BedwarsPrestiges.h"
@@ -256,6 +257,25 @@ void fetchWorkerBody(const std::string &name, const std::string &forcedUuid) {
       return "";
     };
 
+    if (activeS == "Khadow" || activeS == "Tagse") {
+      auto kh = Khadow::getPlayerAnticheat(name, true);
+      rTags.push_back("URCHIN_CHECKED");
+      rTags.push_back("SERAPH_CHECKED");
+      if (kh) {
+        if (kh->urchinBlacklisted) {
+          std::string a = getAbbr(kh->urchinType);
+          tagStr += " " + (a.empty() ? "\xC2\xA7" "4[U]" : a);
+          rTags.push_back("URCHIN:" + kh->urchinType + "\x1F" +
+                          kh->urchinReason);
+        }
+        if (kh->seraphBlacklisted) {
+          std::string a = getAbbr(kh->seraphType);
+          tagStr += " " + (a.empty() ? "\xC2\xA7" "4[S]" : a);
+          rTags.push_back("SERAPH:" + kh->seraphType + "\x1F" +
+                          kh->seraphReason);
+        }
+      }
+    }
     if (activeS == "Urchin" || activeS == "Both") {
       auto uT = Urchin::getPlayerTags(name, true);
       rTags.push_back("URCHIN_CHECKED");
@@ -687,36 +707,23 @@ void processPendingStats() {
       if (tag.find("URCHIN:") == 0) {
         auto [type, reason] = splitTagPayload(tag.substr(7));
         reason = trimRedundantPrefix(reason, type);
-        std::string check = type;
-        for (auto &c : check)
-          c = (char)toupper((unsigned char)c);
-        if (check.find("BLATANT") != std::string::npos ||
-            check.find("SNIPER") != std::string::npos ||
-            check.find("CHEATER") != std::string::npos) {
-          std::string umsg = ChatSDK::formatPrefix() +
-                             "\xC2\xA7"
-                             "cALERT: \xC2\xA7"
-                             "f" +
-                             name +
-                             " is tagged as \xC2\xA7"
-                             "l" +
-                             type +
-                             "\xC2\xA7"
-                             "r!";
-          if (!reason.empty()) {
-            umsg += " \xC2\xA7" "7(reason: \xC2\xA7" "f" + reason +
-                    "\xC2\xA7" "7)";
-          }
-          RenderHook::enqueueTask([umsg]() {
-            ChatSDK::showClientMessage(umsg);
-          });
-          std::string notifBody = name + " is a " + type;
-          if (!reason.empty()) notifBody += " — " + reason;
-          Render::NotificationManager::getInstance()->add(
-              "Urchin Alert", notifBody,
-              Render::NotificationType::Warning);
-          break;
+        std::string umsg = ChatSDK::formatPrefix() + "\xC2\xA7" +
+                           "4URCHIN ALERT: \xC2\xA7" + "f" + name +
+                           " is tagged as \xC2\xA7" + "l" + type +
+                           "\xC2\xA7" + "r!";
+        if (!reason.empty()) {
+          umsg += " \xC2\xA7" "7(reason: \xC2\xA7" "f" + reason +
+                  "\xC2\xA7" "7)";
         }
+        RenderHook::enqueueTask([umsg]() {
+          ChatSDK::showClientMessage(umsg);
+        });
+        std::string notifBody = name + " is tagged " + type;
+        if (!reason.empty()) notifBody += " — " + reason;
+        Render::NotificationManager::getInstance()->add(
+            "Urchin Alert", notifBody,
+            Render::NotificationType::Warning);
+        break;
       } else if (tag.find("SERAPH:") == 0) {
         auto [type, reason] = splitTagPayload(tag.substr(7));
         reason = trimRedundantPrefix(reason, type);

@@ -390,10 +390,13 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                      ? &s_apiKeyInput
                      : (s_typingAutoGG
                             ? &s_autoGGInput
-                            : (s_typingSeraphKey ? &s_seraphKeyInput
-                                                 : (s_typingAuroraApiKey
-                                                        ? &s_auroraApiKeyInput
-                                                        : &s_prefixInput))));
+                            : (s_typingUrchinKey
+                                   ? &s_urchinKeyInput
+                                   : (s_typingSeraphKey
+                                          ? &s_seraphKeyInput
+                                          : (s_typingAuroraApiKey
+                                                 ? &s_auroraApiKeyInput
+                                                 : &s_prefixInput)))));
       int cap = (s_typingAutoGG || s_typingUrchinKey || s_typingSeraphKey ||
                  s_typingAuroraApiKey)
                     ? 100
@@ -2226,7 +2229,9 @@ void ClickGUI::render(HDC hdc) {
       cy += 30;
 
       std::string currentService = Config::getActiveTagService();
-      const char *services[] = {"Urchin", "Seraph", "Both"};
+      const char *services[] = {"Urchin", "Seraph", "Both", "Khadow"};
+      constexpr int kServiceCount =
+          (int)(sizeof(services) / sizeof(services[0]));
 
       float dropW = 220.0f;
       float dropH = 35.0f;
@@ -2256,7 +2261,7 @@ void ClickGUI::render(HDC hdc) {
 
       if (s_tagsDropdownAnim > 0.01f) {
         float listY = cy + dropH + 2;
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < kServiceCount; ++i) {
           float itemY = listY + (i * dropH);
           bool hItem = isHovered(mx, my, cx, itemY, dropW, dropH);
 
@@ -2283,7 +2288,7 @@ void ClickGUI::render(HDC hdc) {
                 NotificationType::Info);
           }
         }
-        cy += (3 * dropH) * s_tagsDropdownAnim;
+        cy += (kServiceCount * dropH) * s_tagsDropdownAnim;
       }
       cy += 50;
 

@@ -370,8 +370,8 @@ bool installAndRelaunch() {
   script += "@echo off\r\n";
   script += "setlocal EnableExtensions\r\n";
   script += "set \"PID=%~1\"\r\n";
-  script += "set \"TARGET=%~dp0OVsonLoader.exe\"\r\n";
-  script += "set \"STAGED=%~dp0OVsonLoader.exe.new\"\r\n";
+  script += "set \"TARGET=%~2\"\r\n";
+  script += "set \"STAGED=%~3\"\r\n";
   script += "timeout /t 2 /nobreak >NUL\r\n";
   script += ":wait\r\n";
   script += "tasklist /FI \"PID eq %PID%\" 2>NUL | find \"%PID%\" >NUL\r\n";
@@ -382,9 +382,9 @@ bool installAndRelaunch() {
   script += "if not exist \"%STAGED%\" goto cleanup\r\n";
   script += "del \"%TARGET%\" >NUL 2>&1\r\n";
   script += "if exist \"%TARGET%\" goto cleanup\r\n";
-  script += "ren \"%STAGED%\" \"OVsonLoader.exe\" >NUL 2>&1\r\n";
+  script += "ren \"%STAGED%\" \"%~nx2\" >NUL 2>&1\r\n";
   script += "if not exist \"%TARGET%\" goto cleanup\r\n";
-  script += "start \"\" /D \"%~dp0\" \"%TARGET%\"\r\n";
+  script += "start \"\" /D \"%~dp2\" \"%TARGET%\"\r\n";
   script += ":cleanup\r\n";
   script += "(goto) 2>nul & del \"%~f0\"\r\n";
 
@@ -400,7 +400,7 @@ bool installAndRelaunch() {
   wchar_t pidBuf[16];
   swprintf_s(pidBuf, L"%lu", GetCurrentProcessId());
   std::wstring cmdLine =
-      L"cmd.exe /c \"\"" + cmdPath + L"\" " + pidBuf + L"\"";
+      L"cmd.exe /c \"\"" + cmdPath + L"\" " + pidBuf + L" \"" + exe + L"\" \"" + exe + L".new\"\"";
 
   STARTUPINFOW si{ sizeof(si) };
   si.dwFlags = STARTF_USESHOWWINDOW;

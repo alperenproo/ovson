@@ -1,6 +1,8 @@
 #include "injector.h"
 #include "process_scan.h"
+#include <atomic>
 #include <cstdio>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -8,22 +10,78 @@
 static std::once_flag g_dllOnce;
 static std::vector<uint8_t> g_dllBytes;
 
+static std::atomic<int> g_activeSlot{0};
+static std::mutex       g_customPathMtx;
+static std::wstring     g_customPath;
+static std::once_flag   g_betaOnce;
+static std::vector<uint8_t> g_betaBytes;
+
+static const std::vector<uint8_t> &loadEmbeddedResource(int resId,
+                                                       std::vector<uint8_t> &dst) {
+  HRSRC res = FindResourceW(nullptr, MAKEINTRESOURCEW(resId),
+                            MAKEINTRESOURCEW(10));
+  if (!res) return dst;
+  HGLOBAL h = LoadResource(nullptr, res);
+  if (!h) return dst;
+  DWORD sz = SizeofResource(nullptr, res);
+  void *data = LockResource(h);
+  if (!data || sz == 0) return dst;
+  dst.assign((const uint8_t *)data, (const uint8_t *)data + sz);
+  return dst;
+}
+
 const std::vector<uint8_t> &embeddedDllBytes() {
-  std::call_once(g_dllOnce, []() {
-    HRSRC res =
-        FindResourceW(nullptr, MAKEINTRESOURCEW(1), MAKEINTRESOURCEW(10));
-    if (!res)
-      return;
-    HGLOBAL h = LoadResource(nullptr, res);
-    if (!h)
-      return;
-    DWORD sz = SizeofResource(nullptr, res);
-    void *data = LockResource(h);
-    if (!data || sz == 0)
-      return;
-    g_dllBytes.assign((const uint8_t *)data, (const uint8_t *)data + sz);
-  });
+  std::call_once(g_dllOnce, []() { loadEmbeddedResource(1, g_dllBytes); });
   return g_dllBytes;
+}
+
+static const std::vector<uint8_t> &betaDllBytes() {
+  std::call_once(g_betaOnce, []() { loadEmbeddedResource(2, g_betaBytes); });
+  return g_betaBytes;
+}
+
+void setActiveSlot(int slot, const std::wstring &customPath) {
+  if (slot < 0 || slot > 2) slot = 0;
+  g_activeSlot.store(slot, std::memory_order_relaxed);
+  std::lock_guard<std::mutex> lk(g_customPathMtx);
+  g_customPath = customPath;
+}
+
+static std::vector<uint8_t> readFileBytes(const std::wstring &path) {
+  std::vector<uint8_t> out;
+  if (path.empty()) return out;
+  FILE *f = nullptr;
+  if (_wfopen_s(&f, path.c_str(), L"rb") != 0 || !f) return out;
+  fseek(f, 0, SEEK_END);
+  long sz = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  if (sz > 0 && sz < (64 * 1024 * 1024)) {
+    out.resize((size_t)sz);
+    size_t rd = fread(out.data(), 1, (size_t)sz, f);
+    if (rd != (size_t)sz) out.clear();
+  }
+  fclose(f);
+  return out;
+}
+
+std::vector<uint8_t> activeDllBytes() {
+  int slot = g_activeSlot.load(std::memory_order_relaxed);
+  if (slot == 1) {
+    const auto &beta = betaDllBytes();
+    if (!beta.empty()) return beta;
+    return embeddedDllBytes();
+  }
+  if (slot == 2) {
+    std::wstring path;
+    {
+      std::lock_guard<std::mutex> lk(g_customPathMtx);
+      path = g_customPath;
+    }
+    auto bytes = readFileBytes(path);
+    if (!bytes.empty()) return bytes;
+    return {};
+  }
+  return embeddedDllBytes();
 }
 
 bool embeddedDllHasUninjectHandler() {
@@ -66,7 +124,7 @@ static void sweepStaleTempDlls() {
 }
 
 static std::wstring writeTempDll(DWORD pid) {
-  const auto &bytes = embeddedDllBytes();
+  std::vector<uint8_t> bytes = activeDllBytes();
   if (bytes.empty())
     return L"";
   wchar_t tempDir[MAX_PATH];
@@ -74,7 +132,7 @@ static std::wstring writeTempDll(DWORD pid) {
     return L"";
   std::wstring path = std::wstring(tempDir) + L"OVson_" +
                       std::to_wstring(pid) + L"_" +
-                      std::to_wstring(GetTickCount()) + L".dll";
+                      std::to_wstring(GetTickCount64()) + L".dll";
   FILE *f = nullptr;
   if (_wfopen_s(&f, path.c_str(), L"wb") != 0 || !f)
     return L"";
@@ -165,6 +223,34 @@ bool injectPid(DWORD pid, const ProgressFn &cb) {
   if (dllPath.empty()) {
     step(100, L"Failed");
     return false;
+  }
+
+  wchar_t hintName[64];
+  wsprintfW(hintName, L"Local\\OVsonLoaderHint_%lu", pid);
+  HANDLE hint = CreateEventW(nullptr, TRUE, TRUE, hintName);
+  if (hint) {
+    SetEvent(hint);
+    static std::mutex                   s_mtx;
+    static std::map<DWORD, HANDLE>      g_hintEvents;
+    std::lock_guard<std::mutex> lk(s_mtx);
+    auto it = g_hintEvents.find(pid);
+    if (it != g_hintEvents.end()) {
+      CloseHandle(it->second);
+      g_hintEvents.erase(it);
+    }
+    g_hintEvents[pid] = hint;
+    std::thread([pid, &mtxRef = s_mtx, &mapRef = g_hintEvents]() {
+      HANDLE proc = OpenProcess(SYNCHRONIZE, FALSE, pid);
+      if (!proc) return;
+      WaitForSingleObject(proc, INFINITE);
+      CloseHandle(proc);
+      std::lock_guard<std::mutex> lk(mtxRef);
+      auto it = mapRef.find(pid);
+      if (it != mapRef.end()) {
+        CloseHandle(it->second);
+        mapRef.erase(it);
+      }
+    }).detach();
   }
 
   step(40, L"Injecting");

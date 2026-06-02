@@ -24,11 +24,12 @@ void renderUtils(TabCtx &ctx) {
 
   g_guiFont.drawString(cx, cy, "Utilities", applyAlpha(0xFFFFFFFF, alpha));
   cy += 40;
-  g_guiFont.drawString(cx, cy, "Bed Defense", applyAlpha(0xFFFFFFFF, alpha));
   bool hCard = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 95);
   glDisable(GL_TEXTURE_2D);
   drawThemeCard(mainX + 190, cy - 10, g_w - 210, 95, hCard, alpha);
   glEnable(GL_TEXTURE_2D);
+
+  g_guiFont.drawString(cx, cy, "Bed Defense", applyAlpha(0xFFFFFFFF, alpha));
 
   g_guiFont.drawString(cx, cy + 18,
                        "X-Ray style outlines for bed defense blocks",

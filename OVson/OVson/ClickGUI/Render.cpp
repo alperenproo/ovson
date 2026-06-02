@@ -163,7 +163,7 @@ void ClickGUI::render(HDC hdc) {
       Render::LiquidGlass::drawRect(closeX, closeY, closeSize, closeSize, 8.0f, s_animAlpha, hovClose ? 0xFFE03A4F : 0x00000000);
     } else {
       DWORD bg = hovClose ? 0xFFE03A4F : 0x15FFFFFF;
-      RenderUtils::drawRoundedRect(closeX, closeY, closeSize, closeSize, 8.0f, bg, s_animAlpha);
+      RenderUtils::drawRoundedRect(closeX, closeY, closeSize, closeSize, 8.0f, applyAlpha(bg, s_animAlpha), -1.0f);
     }
     glEnable(GL_TEXTURE_2D);
 

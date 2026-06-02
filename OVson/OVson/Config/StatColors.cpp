@@ -342,11 +342,10 @@ void resetToDefaults(StatType type) {
 void resetAllToDefaults() { loadDefaults(); }
 
 std::string serializeToJson() {
-  std::ostringstream ss;
-  ss << "[\n";
+  std::string result = "[\n";
   for (int i = 0; i < (int)g_configs.size(); ++i) {
     const auto &cfg = g_configs[i];
-    ss << "  {\"name\":\"" << cfg.name << "\",\"ranges\":[";
+    result += "  {\"name\":\"" + cfg.name + "\",\"ranges\":[";
     for (int j = 0; j < (int)cfg.ranges.size(); ++j) {
       const auto &r = cfg.ranges[j];
       char buf[128];
@@ -356,17 +355,17 @@ std::string serializeToJson() {
       else
         snprintf(buf, sizeof(buf), "{\"min\":%.2f,\"max\":%.2f,\"color\":%u}",
                  r.minVal, r.maxVal, r.color);
-      ss << buf;
+      result += buf;
       if (j + 1 < (int)cfg.ranges.size())
-        ss << ",";
+        result += ",";
     }
-    ss << "]}";
+    result += "]}";
     if (i + 1 < (int)g_configs.size())
-      ss << ",";
-    ss << "\n";
+      result += ",";
+    result += "\n";
   }
-  ss << "]";
-  return ss.str();
+  result += "]";
+  return result;
 }
 
 static bool parseNextNumber(const std::string &s, size_t &pos, double &out) {

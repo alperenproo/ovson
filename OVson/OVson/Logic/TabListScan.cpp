@@ -193,14 +193,12 @@ void updateTabListStats() {
   }
 
   if (!nh) {
-    ChatSDK::showPrefixed("§cCRITICAL: NetHandler object is NULL!");
     env->DeleteLocalRef(mcObj);
     return;
   }
 
   jobject col = m_getMap ? env->CallObjectMethod(nh, m_getMap) : nullptr;
   if (!col) {
-    ChatSDK::showPrefixed("§cCRITICAL: PlayerInfoMap collection is NULL!");
     env->DeleteLocalRef(nh);
     env->DeleteLocalRef(mcObj);
     return;
@@ -1222,21 +1220,9 @@ void updateTabListStats() {
                 }
               }
 
-              std::string internalName = finalPrefix + teamColorCode + cName;
-              if (f_gpName) {
-                if (internalName.length() > 40) {
-                  internalName = teamColorCode + cName;
-                  if (internalName.length() > 40)
-                    internalName = internalName.substr(0, 40);
-                }
-                jstring newNameObj = env->NewStringUTF(internalName.c_str());
-                if (newNameObj) {
-                  env->SetObjectField(prof, f_gpName, newNameObj);
-                  if (env->ExceptionCheck())
-                    env->ExceptionClear();
-                  env->DeleteLocalRef(newNameObj);
-                }
-              }
+              (void)finalPrefix;
+              (void)f_gpName;
+              (void)cName;
 
               std::string fullTabString;
               if (hasStats) {
@@ -1256,6 +1242,11 @@ void updateTabListStats() {
                   std::string dMode = Config::getTabDisplayMode();
                   std::transform(dMode.begin(), dMode.end(), dMode.begin(),
                                  ::tolower);
+                  auto format2 = [](double v) -> std::string {
+                    int i = (int)(v * 100.0 + 0.5);
+                    return std::to_string(i / 100) + "." + (i % 100 < 10 ? "0" : "") + std::to_string(i % 100);
+                  };
+
                   if (dMode == "fk")
                     fullTabString += fullTabString +=
                         StatColors::getMcColor(
@@ -1267,11 +1258,9 @@ void updateTabListStats() {
                                       ? (double)stats.bedwarsFinalKills
                                       : (double)stats.bedwarsFinalKills /
                                             stats.bedwarsFinalDeaths;
-                    std::ostringstream ss_fkdr;
-                    ss_fkdr << std::fixed << std::setprecision(2) << fkdr;
                     fullTabString += StatColors::getMcColor(
                                          StatColors::StatType::FKDR, fkdr) +
-                                     ss_fkdr.str();
+                                     format2(fkdr);
                   } else if (dMode == "wins")
                     fullTabString +=
                         StatColors::getMcColor(StatColors::StatType::Wins,
@@ -1282,11 +1271,9 @@ void updateTabListStats() {
                         (stats.bedwarsLosses == 0)
                             ? (double)stats.bedwarsWins
                             : (double)stats.bedwarsWins / stats.bedwarsLosses;
-                    std::ostringstream ss_wlr;
-                    ss_wlr << std::fixed << std::setprecision(2) << wlr;
                     fullTabString +=
                         StatColors::getMcColor(StatColors::StatType::WLR, wlr) +
-                        ss_wlr.str();
+                        format2(wlr);
                   } else if (dMode == "star" || dMode == "lvl")
                     fullTabString += "\xC2\xA7"
                                      "6" +
@@ -1317,120 +1304,6 @@ void updateTabListStats() {
               if (component)
                 env->DeleteLocalRef(component);
 
-              // === HEALTH SYNC DEBUG ===
-              {
-                static ULONGLONG lastHealthDbg = 0;
-                bool doHealthDbg = Config::isGlobalDebugEnabled() &&
-                                   (now - lastHealthDbg > 3000) &&
-                                   processedTab == 0;
-
-                if (doHealthDbg) {
-                  Logger::log(Config::DebugCategory::GameDetection,
-                              "HealthSync check: scoreboard=%p tabObj=%p "
-                              "m_getScore=%p m_getVal=%p m_setVal=%p",
-                              scoreboard, tabObj, m_getScore, m_getVal,
-                              m_setVal);
-                }
-
-                if (scoreboard && tabObj && m_getScore && m_getVal &&
-                    m_setVal) {
-                  jstring oldNameJ = env->NewStringUTF(name.c_str());
-                  int scoreVal = 0;
-                  bool scoreFound = false;
-                  if (oldNameJ) {
-                    jobject oldScore = env->CallObjectMethod(
-                        scoreboard, m_getScore, oldNameJ, tabObj);
-                    if (env->ExceptionCheck())
-                      env->ExceptionClear();
-                    if (oldScore) {
-                      scoreVal = env->CallIntMethod(oldScore, m_getVal);
-                      if (scoreVal > 0)
-                        scoreFound = true;
-                      if (doHealthDbg) {
-                        Logger::log(
-                            Config::DebugCategory::GameDetection,
-                            "HealthSync READ: name=%s scoreVal=%d found=%d",
-                            name.c_str(), scoreVal, scoreFound ? 1 : 0);
-                      }
-                      env->DeleteLocalRef(oldScore);
-                    } else {
-                      if (doHealthDbg) {
-                        Logger::log(
-                            Config::DebugCategory::GameDetection,
-                            "HealthSync READ: oldScore is NULL for name=%s",
-                            name.c_str());
-                      }
-                    }
-                    env->DeleteLocalRef(oldNameJ);
-                  }
-
-                  if (scoreFound) {
-                    jstring newNameJ = env->NewStringUTF(internalName.c_str());
-                    if (newNameJ) {
-                      jobject newScore = env->CallObjectMethod(
-                          scoreboard, m_getScore, newNameJ, tabObj);
-                      if (env->ExceptionCheck())
-                        env->ExceptionClear();
-                      if (newScore) {
-                        env->CallVoidMethod(newScore, m_setVal, scoreVal);
-                        if (env->ExceptionCheck()) {
-                          if (doHealthDbg)
-                            Logger::log(Config::DebugCategory::GameDetection,
-                                        "HealthSync WRITE: EXCEPTION on "
-                                        "setScorePoints!");
-                          env->ExceptionClear();
-                        } else {
-                          if (doHealthDbg)
-                            Logger::log(Config::DebugCategory::GameDetection,
-                                        "HealthSync WRITE: OK val=%d",
-                                        scoreVal);
-                        }
-                        env->DeleteLocalRef(newScore);
-                      } else {
-                        if (doHealthDbg)
-                          Logger::log(Config::DebugCategory::GameDetection,
-                                      "HealthSync WRITE: newScore is NULL");
-                      }
-                      if (g_jCache.m_onScoreUpdated) {
-                        env->CallVoidMethod(
-                            scoreboard, g_jCache.m_onScoreUpdated, newNameJ);
-                        if (env->ExceptionCheck()) {
-                          if (doHealthDbg)
-                            Logger::log(Config::DebugCategory::GameDetection,
-                                        "HealthSync BROADCAST: EXCEPTION!");
-                          env->ExceptionClear();
-                        } else {
-                          if (doHealthDbg)
-                            Logger::log(Config::DebugCategory::GameDetection,
-                                        "HealthSync BROADCAST: OK");
-                        }
-                      } else {
-                        if (doHealthDbg)
-                          Logger::log(
-                              Config::DebugCategory::GameDetection,
-                              "HealthSync BROADCAST: m_onScoreUpdated is NULL");
-                      }
-                      env->DeleteLocalRef(newNameJ);
-                    }
-                  } else {
-                    if (doHealthDbg) {
-                      Logger::log(Config::DebugCategory::GameDetection,
-                                  "HealthSync: score NOT found for %s (val=%d)",
-                                  name.c_str(), scoreVal);
-                    }
-                  }
-                } else if (doHealthDbg) {
-                  Logger::log(Config::DebugCategory::GameDetection,
-                              "HealthSync SKIP: sb=%d tabObj=%d getScore=%d "
-                              "getVal=%d setVal=%d",
-                              scoreboard ? 1 : 0, tabObj ? 1 : 0,
-                              m_getScore ? 1 : 0, m_getVal ? 1 : 0,
-                              m_setVal ? 1 : 0);
-                }
-
-                if (doHealthDbg)
-                  lastHealthDbg = now;
-              }
             } else {
               if (m_setDisp)
                 env->CallVoidMethod(info, m_setDisp, nullptr);
@@ -1600,7 +1473,7 @@ void syncTeamColors() {
 #pragma warning(push)
 #pragma warning(disable : 26110 26117)
 void syncTags() {
-  if (!Config::isTagsEnabled())
+  if (!OVson::shouldAutoFetchTags())
     return;
 
   std::string activeS = Config::getActiveTagService();

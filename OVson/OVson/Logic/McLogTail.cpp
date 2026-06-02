@@ -1,12 +1,10 @@
 #define WIN32_LEAN_AND_MEAN
 #include "StatsTracker.internal.h"
-
 #include "../Chat/ChatSDK.h"
 #include "../Config/Config.h"
 #include "../Logic/AutoGG.h"
 #include "../Utils/Logger.h"
 #include "../Utils/NumberDenicker.h"
-
 #include <Windows.h>
 #include <algorithm>
 #include <cctype>

@@ -1,0 +1,17 @@
+#pragma once
+#include <Windows.h>
+#include <string>
+
+namespace Render {
+class ClickGUI {
+public:
+  static void init();
+  static void render(HDC hdc);
+  static void shutdown();
+  static bool isOpen();
+  static void toggle();
+  static void updateInput(HWND hwnd);
+  static void handleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
+  static std::string getKeyName(int vk);
+};
+} // namespace Render

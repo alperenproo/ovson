@@ -97,6 +97,14 @@ static std::string g_seraphApiKey = "";
 static bool g_tagsEnabled = false;
 static std::string g_activeTagService = "Urchin";
 static bool g_chatBypasserEnabled = false;
+// stored as a string for future
+static std::string g_clickGuiTheme = "LiquidGlass";
+static bool g_liquidGlassWiggle = true;
+static bool g_liquidGlassGlow = true;
+static float g_liquidGlassRefractStrength = 0.7f;
+static float g_liquidGlassEdgeWidth = 0.6f;
+static float g_liquidGlassCardEdgeWidth = 0.6f;
+static float g_liquidGlassDarkness = 0.58f;
 static bool g_discordRpcEnabled = true;
 static std::string g_discordAppId = "1467865675262329019";
 static bool g_nickedBypass = true;
@@ -132,6 +140,9 @@ static bool g_debugSeraph = false;
 static bool g_debugGUI = false;
 static bool g_debugBedDefense = false;
 static bool g_debugGeneral = false;
+
+static std::atomic<bool> g_savePending = false;
+static ULONGLONG g_lastSaveRequest = 0;
 
 static std::string getConfigDir() {
   char appdata[MAX_PATH]{};
@@ -348,6 +359,24 @@ bool Config::initialize(HMODULE self) {
   else
     g_activeTagService = "Urchin";
 
+  if (parseJsonLine(all, "clickGuiTheme", val))
+    g_clickGuiTheme = val;
+  else
+    g_clickGuiTheme = "LiquidGlass";
+
+  if (!parseJsonBool(all, "liquidGlassWiggle", g_liquidGlassWiggle))
+    g_liquidGlassWiggle = true;
+  if (!parseJsonBool(all, "liquidGlassGlow", g_liquidGlassGlow))
+    g_liquidGlassGlow = true;
+  if (!parseJsonFloat(all, "liquidGlassRefractStrength", g_liquidGlassRefractStrength))
+    g_liquidGlassRefractStrength = 0.7f;
+  if (!parseJsonFloat(all, "liquidGlassEdgeWidth", g_liquidGlassEdgeWidth))
+    g_liquidGlassEdgeWidth = 0.6f;
+  if (!parseJsonFloat(all, "liquidGlassCardEdgeWidth", g_liquidGlassCardEdgeWidth))
+    g_liquidGlassCardEdgeWidth = 0.6f;
+  if (!parseJsonFloat(all, "liquidGlassDarkness", g_liquidGlassDarkness))
+    g_liquidGlassDarkness = 0.58f;
+
   if (!parseJsonBool(all, "chatBypasserEnabled", g_chatBypasserEnabled))
     g_chatBypasserEnabled = false;
 
@@ -493,7 +522,18 @@ bool Config::initialize(HMODULE self) {
 
 HMODULE Config::getModuleHandle() { return g_hModule; }
 
-bool Config::save() {
+static bool saveImpl();
+
+void Config::update() {
+  if (g_savePending) {
+    if (GetTickCount64() - g_lastSaveRequest > 500) {
+      g_savePending = false;
+      saveImpl();
+    }
+  }
+}
+
+static bool saveImpl() {
   FILE *f = nullptr;
   fopen_s(&f, g_configPath.c_str(), "w");
   if (!f)
@@ -523,6 +563,13 @@ bool Config::save() {
       "  \"seraphApiKey\": \"%s\",\n"
       "  \"tagsEnabled\": %s,\n"
       "  \"activeTagService\": \"%s\",\n"
+      "  \"clickGuiTheme\": \"%s\",\n"
+      "  \"liquidGlassWiggle\": %s,\n"
+      "  \"liquidGlassGlow\": %s,\n"
+      "  \"liquidGlassRefractStrength\": %.2f,\n"
+      "  \"liquidGlassEdgeWidth\": %.2f,\n"
+      "  \"liquidGlassCardEdgeWidth\": %.2f,\n"
+      "  \"liquidGlassDarkness\": %.2f,\n"
       "  \"chatBypasserEnabled\": %s,\n"
       "  \"debugGlobal\": %s,\n"
       "  \"debugGameDetection\": %s,\n"
@@ -581,6 +628,13 @@ bool Config::save() {
       g_urchinEnabled ? "true" : "false", g_urchinApiKey.c_str(),
       g_seraphEnabled ? "true" : "false", g_seraphApiKey.c_str(),
       g_tagsEnabled ? "true" : "false", g_activeTagService.c_str(),
+      g_clickGuiTheme.c_str(),
+      g_liquidGlassWiggle ? "true" : "false",
+      g_liquidGlassGlow ? "true" : "false",
+      g_liquidGlassRefractStrength,
+      g_liquidGlassEdgeWidth,
+      g_liquidGlassCardEdgeWidth,
+      g_liquidGlassDarkness,
       g_chatBypasserEnabled ? "true" : "false",
       g_debugGlobal ? "true" : "false", g_debugGameDetection ? "true" : "false",
       g_debugBedDetection ? "true" : "false", g_debugUrchin ? "true" : "false",
@@ -629,6 +683,12 @@ bool Config::save() {
     }
   }
 
+  return true;
+}
+
+bool Config::save() {
+  g_savePending = true;
+  g_lastSaveRequest = GetTickCount64();
   return true;
 }
 
@@ -835,6 +895,47 @@ void Config::setTagsEnabled(bool enabled) {
 const std::string &Config::getActiveTagService() { return g_activeTagService; }
 void Config::setActiveTagService(const std::string &service) {
   g_activeTagService = service;
+  save();
+}
+const std::string &Config::getClickGuiTheme() { return g_clickGuiTheme; }
+void Config::setClickGuiTheme(const std::string &theme) {
+  g_clickGuiTheme = theme;
+  save();
+}
+
+bool Config::isLiquidGlassWiggleEnabled() { return g_liquidGlassWiggle; }
+void Config::setLiquidGlassWiggleEnabled(bool enabled) {
+  g_liquidGlassWiggle = enabled;
+  save();
+}
+
+bool Config::isLiquidGlassGlowEnabled() { return g_liquidGlassGlow; }
+void Config::setLiquidGlassGlowEnabled(bool enabled) {
+  g_liquidGlassGlow = enabled;
+  save();
+}
+
+float Config::getLiquidGlassRefractStrength() { return g_liquidGlassRefractStrength; }
+void Config::setLiquidGlassRefractStrength(float str) {
+  g_liquidGlassRefractStrength = str;
+  save();
+}
+
+float Config::getLiquidGlassEdgeWidth() { return g_liquidGlassEdgeWidth; }
+void Config::setLiquidGlassEdgeWidth(float w) {
+  g_liquidGlassEdgeWidth = w;
+  save();
+}
+
+float Config::getLiquidGlassCardEdgeWidth() { return g_liquidGlassCardEdgeWidth; }
+void Config::setLiquidGlassCardEdgeWidth(float w) {
+  g_liquidGlassCardEdgeWidth = w;
+  save();
+}
+
+float Config::getLiquidGlassDarkness() { return g_liquidGlassDarkness; }
+void Config::setLiquidGlassDarkness(float d) {
+  g_liquidGlassDarkness = d;
   save();
 }
 

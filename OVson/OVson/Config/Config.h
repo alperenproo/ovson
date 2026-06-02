@@ -8,6 +8,7 @@
 namespace Config {
 bool initialize(HMODULE selfModule);
 HMODULE getModuleHandle();
+void update();
 bool save();
 const std::string &getApiKey();
 void setApiKey(const std::string &key);
@@ -89,6 +90,28 @@ bool isTagsEnabled();
 void setTagsEnabled(bool enabled);
 const std::string &getActiveTagService();
 void setActiveTagService(const std::string &service);
+
+// ClickGUI visual theme: "LiquidGlass" (default) | "Minimal".
+const std::string &getClickGuiTheme();
+void setClickGuiTheme(const std::string &theme);
+
+bool isLiquidGlassWiggleEnabled();
+void setLiquidGlassWiggleEnabled(bool enabled);
+
+bool isLiquidGlassGlowEnabled();
+void setLiquidGlassGlowEnabled(bool enabled);
+
+float getLiquidGlassRefractStrength();
+void setLiquidGlassRefractStrength(float str);
+
+float getLiquidGlassEdgeWidth();
+void setLiquidGlassEdgeWidth(float w);
+
+float getLiquidGlassCardEdgeWidth();
+void setLiquidGlassCardEdgeWidth(float w);
+
+float getLiquidGlassDarkness();
+void setLiquidGlassDarkness(float d);
 
 bool isChatBypasserEnabled();
 void setChatBypasserEnabled(bool enabled);

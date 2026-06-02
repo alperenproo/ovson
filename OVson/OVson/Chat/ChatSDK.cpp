@@ -163,6 +163,110 @@ bool ChatSDK::showClientMessage(const std::string &text) {
   return callAddChatMessage(text);
 }
 
+bool ChatSDK::showJsonMessage(const std::string &json,
+                              const std::string &fallback) {
+  JNIEnv *env = lc->getEnv();
+  if (!env) {
+    return fallback.empty() ? false : callAddChatMessage(fallback);
+  }
+
+  jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
+  if (!mcCls) goto fall;
+  {
+    jfieldID theMc = lc->GetStaticFieldID(mcCls, "theMinecraft",
+                                          "Lnet/minecraft/client/Minecraft;",
+                                          "field_71432_P", "S", "Lave;");
+    if (!theMc) goto fall;
+    jobject mcObj = env->GetStaticObjectField(mcCls, theMc);
+    if (!mcObj) goto fall;
+
+    jfieldID f_ingame = lc->GetFieldID(mcCls, "ingameGUI",
+                                       "Lnet/minecraft/client/gui/GuiIngame;",
+                                       "field_71456_v", "q", "Lavo;");
+    if (!f_ingame)
+      f_ingame = lc->FindFieldBySignature(
+          mcCls, "Lnet/minecraft/client/gui/GuiIngame;");
+    if (!f_ingame) f_ingame = lc->FindFieldBySignature(mcCls, "Laxe;");
+    if (!f_ingame) { env->DeleteLocalRef(mcObj); goto fall; }
+
+    jobject ingame = env->GetObjectField(mcObj, f_ingame);
+    env->DeleteLocalRef(mcObj);
+    if (!ingame) goto fall;
+
+    jclass igCls = lc->GetClass("net.minecraft.client.gui.GuiIngame");
+    if (!igCls) { env->DeleteLocalRef(ingame); goto fall; }
+
+    jmethodID getChatGUI = lc->GetMethodID(
+        igCls, "getChatGUI", "()Lnet/minecraft/client/gui/GuiNewChat;",
+        "func_146158_b", "d", "()Lavt;");
+    if (!getChatGUI)
+      getChatGUI = lc->FindMethodBySignature(
+          igCls, "()Lnet/minecraft/client/gui/GuiNewChat;");
+    if (!getChatGUI)
+      getChatGUI = lc->FindMethodBySignature(igCls, "()Lavt;");
+    if (!getChatGUI) { env->DeleteLocalRef(ingame); goto fall; }
+
+    jobject chatGui = env->CallObjectMethod(ingame, getChatGUI);
+    env->DeleteLocalRef(ingame);
+    if (!chatGui) goto fall;
+
+    jclass serCls = lc->GetClass("net.minecraft.util.IChatComponent$Serializer");
+    jmethodID jsonToComp = nullptr;
+    if (serCls) {
+      jsonToComp = env->GetStaticMethodID(serCls, "jsonToComponent",
+          "(Ljava/lang/String;)Lnet/minecraft/util/IChatComponent;");
+      if (!jsonToComp) {
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        jsonToComp = env->GetStaticMethodID(serCls, "func_150699_a",
+            "(Ljava/lang/String;)Lnet/minecraft/util/IChatComponent;");
+      }
+      if (env->ExceptionCheck()) env->ExceptionClear();
+    }
+    if (!jsonToComp) {
+      env->DeleteLocalRef(chatGui);
+      goto fall;
+    }
+
+    jstring jsonStr = env->NewStringUTF(json.c_str());
+    jobject component = env->CallStaticObjectMethod(serCls, jsonToComp,
+                                                     jsonStr);
+    if (env->ExceptionCheck()) {
+      env->ExceptionClear();
+      env->DeleteLocalRef(jsonStr);
+      env->DeleteLocalRef(chatGui);
+      goto fall;
+    }
+    env->DeleteLocalRef(jsonStr);
+    if (!component) {
+      env->DeleteLocalRef(chatGui);
+      goto fall;
+    }
+
+    jclass gncCls = lc->GetClass("net.minecraft.client.gui.GuiNewChat");
+    if (!gncCls) {
+      env->DeleteLocalRef(component);
+      env->DeleteLocalRef(chatGui);
+      goto fall;
+    }
+    jmethodID print = lc->GetMethodID(gncCls, "printChatMessage",
+        "(Lnet/minecraft/util/IChatComponent;)V",
+        "func_146227_a", "a", "(Leu;)V");
+    if (!print)
+      print = lc->FindMethodBySignature(
+          gncCls, "(Lnet/minecraft/util/IChatComponent;)V");
+    if (!print) print = lc->FindMethodBySignature(gncCls, "(Leu;)V");
+
+    if (print) {
+      env->CallVoidMethod(chatGui, print, component);
+    }
+    env->DeleteLocalRef(component);
+    env->DeleteLocalRef(chatGui);
+    return true;
+  }
+fall:
+  return fallback.empty() ? false : callAddChatMessage(fallback);
+}
+
 std::string ChatSDK::formatPrefix() {
   const char *S = "\xC2\xA7";
   return std::string(S) + "0[" + S + "r" + S + "cO" + S + "6V" + S + "es" + S +

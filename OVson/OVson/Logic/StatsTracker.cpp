@@ -124,8 +124,6 @@ bool isInGame(const std::string &name) {
 }
 
 bool shouldAlert(const std::string &name) {
-  if (!isInGame(name))
-    return false;
   std::lock_guard<std::mutex> lock(g_alertedMutex);
   if (g_alertedPlayers.count(name))
     return false;
@@ -135,6 +133,10 @@ bool shouldAlert(const std::string &name) {
 
 bool isInHypixelGame() { return g_inHypixelGame; }
 bool isInPreGameLobby() { return g_inPreGameLobby; }
+bool shouldAutoFetchTags() {
+  return Config::isTagsEnabled() &&
+         (g_inPreGameLobby || g_inHypixelGame);
+}
 int getGameMode() { return g_mode; }
 float getApiLatency() { return g_apiLatency; }
 float getScanSpeed() { return g_scanSpeed; }

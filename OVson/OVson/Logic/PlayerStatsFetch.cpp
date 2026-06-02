@@ -210,7 +210,7 @@ void fetchWorkerBody(const std::string &name, const std::string &forcedUuid) {
   }
 
   bool shouldFetchTags = false;
-  if (Config::isTagsEnabled()) {
+  if (OVson::shouldAutoFetchTags()) {
     if (cacheFound &&
         (cachedData.tagsDisplay.empty() && cachedData.rawTags.empty()))
       shouldFetchTags = true;
@@ -244,10 +244,10 @@ void fetchWorkerBody(const std::string &name, const std::string &forcedUuid) {
                "4[CC]";
       if (t.find("CONFIRMED") != std::string::npos)
         return "\xC2\xA7"
-               "4[C]";
+               "5[C]";
       if (t.find("CHEATER") != std::string::npos)
         return "\xC2\xA7"
-               "4[C]";
+               "5[C]";
       if (t.find("CAUTION") != std::string::npos)
         return "\xC2\xA7"
                "e[!]";
@@ -257,7 +257,7 @@ void fetchWorkerBody(const std::string &name, const std::string &forcedUuid) {
       return "";
     };
 
-    if (activeS == "Khadow" || activeS == "Tagse") {
+    if (activeS == "Khadow") {
       auto kh = Khadow::getPlayerAnticheat(name, true);
       rTags.push_back("URCHIN_CHECKED");
       rTags.push_back("SERAPH_CHECKED");
@@ -311,28 +311,41 @@ void fetchWorkerBody(const std::string &name, const std::string &forcedUuid) {
   }
 
   if (cacheFound) {
-    std::lock_guard<std::mutex> lock(g_pendingStatsMutex);
-    g_pendingStatsMap[name] = cachedData;
-    std::lock_guard<std::mutex> lockQ(g_queueMutex);
-    g_processedPlayers.insert(name);
+    {
+      std::lock_guard<std::mutex> lock(g_pendingStatsMutex);
+      g_pendingStatsMap[name] = cachedData;
+    }
+    {
+      std::lock_guard<std::mutex> lockQ(g_queueMutex);
+      g_processedPlayers.insert(name);
+    }
   } else if (!fetchError) {
     {
       std::lock_guard<std::mutex> lock(g_cacheMutex);
       g_persistentStatsCache[name] = {fetchedStats, now};
     }
-    std::lock_guard<std::mutex> lock(g_pendingStatsMutex);
-    g_pendingStatsMap[name] = fetchedStats;
-
-    std::lock_guard<std::mutex> lockQ(g_queueMutex);
-    g_processedPlayers.insert(name);
+    {
+      std::lock_guard<std::mutex> lock(g_pendingStatsMutex);
+      g_pendingStatsMap[name] = fetchedStats;
+    }
+    {
+      std::lock_guard<std::mutex> lockQ(g_queueMutex);
+      g_processedPlayers.insert(name);
+    }
   }
 
   if (fetchError && !cacheFound) {
-    std::lock_guard<std::mutex> lock(g_retryMutex);
-    int count = ++g_playerFetchRetries[name];
-    if (count < 5) {
-      g_retryUntil[name] = now + 2000;
-    } else {
+    bool shouldNick = false;
+    {
+      std::lock_guard<std::mutex> lock(g_retryMutex);
+      int count = ++g_playerFetchRetries[name];
+      if (count < 5) {
+        g_retryUntil[name] = now + 2000;
+      } else {
+        shouldNick = true;
+      }
+    }
+    if (shouldNick) {
       Hypixel::PlayerStats nickedStats;
       nickedStats.isNicked = true;
       nickedStats.isFetched = true;
@@ -344,8 +357,10 @@ void fetchWorkerBody(const std::string &name, const std::string &forcedUuid) {
         std::lock_guard<std::mutex> lock(g_cacheMutex);
         g_persistentStatsCache[name] = {nickedStats, now};
       }
-      std::lock_guard<std::mutex> lockQ(g_queueMutex);
-      g_processedPlayers.insert(name);
+      {
+        std::lock_guard<std::mutex> lockQ(g_queueMutex);
+        g_processedPlayers.insert(name);
+      }
       fetchError = false;
     }
   }
@@ -703,8 +718,11 @@ void processPendingStats() {
       }
       return reason;
     };
+    bool urchinAlerted = false;
+    bool seraphAlerted = false;
     for (const auto &tag : stats.rawTags) {
-      if (tag.find("URCHIN:") == 0) {
+      if (!urchinAlerted && tag.find("URCHIN:") == 0 &&
+          OVson::shouldAlert(name + ":URCHIN")) {
         auto [type, reason] = splitTagPayload(tag.substr(7));
         reason = trimRedundantPrefix(reason, type);
         std::string umsg = ChatSDK::formatPrefix() + "\xC2\xA7" +
@@ -718,13 +736,12 @@ void processPendingStats() {
         RenderHook::enqueueTask([umsg]() {
           ChatSDK::showClientMessage(umsg);
         });
-        std::string notifBody = name + " is tagged " + type;
-        if (!reason.empty()) notifBody += " — " + reason;
         Render::NotificationManager::getInstance()->add(
-            "Urchin Alert", notifBody,
+            "Urchin Alert", name + " is tagged " + type,
             Render::NotificationType::Warning);
-        break;
-      } else if (tag.find("SERAPH:") == 0) {
+        urchinAlerted = true;
+      } else if (!seraphAlerted && tag.find("SERAPH:") == 0 &&
+                 OVson::shouldAlert(name + ":SERAPH")) {
         auto [type, reason] = splitTagPayload(tag.substr(7));
         reason = trimRedundantPrefix(reason, type);
         std::string smsg = ChatSDK::formatPrefix() + "\xC2\xA7" +
@@ -747,17 +764,17 @@ void processPendingStats() {
               "Seraph Alert", "Player tagged by a corrupt Seraph mod",
               Render::NotificationType::Error);
         } else {
-          std::string notifBody = name + " is blacklisted (" + type + ")";
-          if (!reason.empty()) notifBody += ": " + reason;
           Render::NotificationManager::getInstance()->add(
-              "Seraph Alert", notifBody,
+              "Seraph Alert", name + " is blacklisted (" + type + ")",
               Render::NotificationType::Error);
         }
 
         RenderHook::enqueueTask([smsg]() {
           ChatSDK::showClientMessage(smsg);
         });
+        seraphAlerted = true;
       }
+      if (urchinAlerted && seraphAlerted) break;
     }
   }
 

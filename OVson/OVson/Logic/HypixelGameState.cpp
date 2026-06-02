@@ -18,7 +18,14 @@
 namespace OVson {
 
 void detectFinalKillsFromLine(const std::string &chat) {
-  // "gamerboy80 was killed by sekerbenimkedim. FINAL KILL!"
+  // Recognised formats (all share the trailing "FINAL KILL!" sentinel,
+  // which is what we anchor on):
+  //   standard:
+  //     "gamerboy80 was killed by sekerbenimkedim. FINAL KILL!"
+  //   glorious:
+  //     "gamerboy80 was sekerbenimkedim's final #100,000. FINAL KILL!"
+  //   ranks in case:
+  //     "[YOUTUBE] gamerboy80 was [MVP++] sekerbenimkedim's final #100,000. FINAL KILL!"
   std::string lowerChat = chat;
   for (auto &c : lowerChat)
     c = (char)toupper((unsigned char)c);

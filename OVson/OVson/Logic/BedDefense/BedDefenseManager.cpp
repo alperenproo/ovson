@@ -1105,13 +1105,16 @@ void BedDefenseManager::forceScan() {
 }
 
 void BedDefenseManager::asyncScanTask() {
+  struct ScanGuard {
+    std::atomic<bool>& flag;
+    ~ScanGuard() { flag = false; }
+  } guard{m_isScanning};
+
   if (Config::isForgeEnvironment() || !lc) {
-    m_isScanning = false;
     return;
   }
   JNIEnv *env = lc->getEnv();
   if (!env) {
-    m_isScanning = false;
     return;
   }
 
@@ -1123,7 +1126,6 @@ void BedDefenseManager::asyncScanTask() {
                                              "Lnet/minecraft/client/Minecraft;",
                                              "field_71432_P", "S", "Lave;");
     if (!mcObj) {
-      m_isScanning = false;
       return;
     }
 
@@ -1139,7 +1141,6 @@ void BedDefenseManager::asyncScanTask() {
     jobject player = f_player ? env->GetObjectField(mcObj, f_player) : nullptr;
     if (!player) {
       env->DeleteLocalRef(mcObj);
-      m_isScanning = false;
       return;
     }
 
@@ -1381,8 +1382,6 @@ void BedDefenseManager::asyncScanTask() {
     env->DeleteLocalRef(mcObj);
   } catch (...) {
   }
-
-  m_isScanning = false;
 }
 void BedDefenseManager::tick() {
   if (Config::isForgeEnvironment() || !m_enabled)

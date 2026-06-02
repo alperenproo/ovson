@@ -24,6 +24,8 @@ void pollBody() {
     return;
   if (lc->CheckException())
     return;
+    
+  Config::update();
 
   ULONGLONG now = GetTickCount64();
   if (g_lastChatReadTick == 0 || (now - g_lastChatReadTick) >= 20) {

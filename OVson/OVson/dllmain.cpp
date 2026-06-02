@@ -22,6 +22,7 @@
 #include "Services/DiscordManager.h"
 #include "Utils/Logger.h"
 #include "Utils/ReplaySpammer.h"
+#include "Utils/SafeGuard.h"
 #include "Utils/ThreadTracker.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -63,6 +64,7 @@ void init(void *instance) {
     Logger::initialize();
     ChatSDK::initialize();
     Logger::info("OVson initialized");
+    Logger::info("=== BUILD MARKER: loader-detect-v1 ===");
 
     lc->GetLoadedClasses();
     Config::initialize(static_cast<HMODULE>(instance));
@@ -83,6 +85,56 @@ void init(void *instance) {
         SetEvent(ev);
         CloseHandle(ev);
       }
+
+      wchar_t hintName[64];
+      wsprintfW(hintName, L"Local\\OVsonLoaderHint_%lu",
+                (unsigned long)GetCurrentProcessId());
+      HANDLE hint = OpenEventW(EVENT_MODIFY_STATE | SYNCHRONIZE,
+                               FALSE, hintName);
+      bool viaLoader = false;
+      if (hint) {
+        DWORD wr = WaitForSingleObject(hint, 0);
+        if (wr == WAIT_OBJECT_0) {
+          viaLoader = true;
+          ResetEvent(hint);
+        }
+        CloseHandle(hint);
+      }
+      if (viaLoader) {
+        Logger::info("Loader hint event signaled -> launched via OVsonLoader");
+      } else {
+        Logger::info("Loader hint event unavailable (handle=%p, err=%lu)"
+                     " -> direct inject",
+                     (void *)hint, (unsigned long)GetLastError());
+        Sleep(400);
+        std::string warn =
+            std::string(S) + "0[" + S + "r" + S + "cO" + S + "6V" + S +
+            "es" + S + "ao" + S + "bn" + S + "0]" + S + "r " + S +
+            "eDLL was injected without OVsonLoader.";
+        ChatSDK::showClientMessage(warn);
+
+        Sleep(80);
+        std::string hintMsg =
+            std::string(S) + "7Please use " + S + "fOVsonLoader" + S +
+            "7 to stay up to date with new releases and utilities.";
+        ChatSDK::showClientMessage(hintMsg);
+
+        Sleep(80);
+        const char *kUrl =
+            "https://github.com/alperenproo/ovson/releases/latest";
+        std::string urlJson;
+        urlJson  = "{\"text\":\"Download: \",\"color\":\"gray\",";
+        urlJson += "\"extra\":[{\"text\":\"";
+        urlJson += kUrl;
+        urlJson += "\",\"color\":\"blue\",\"underlined\":true,";
+        urlJson += "\"clickEvent\":{\"action\":\"open_url\",\"value\":\"";
+        urlJson += kUrl;
+        urlJson += "\"},\"hoverEvent\":{\"action\":\"show_text\","
+                   "\"value\":\"Open the OVson releases page\"}}]}";
+        std::string urlFallback =
+            std::string(S) + "7Download: " + S + "9" + kUrl;
+        ChatSDK::showJsonMessage(urlJson, urlFallback);
+      }
     }
 
     Sleep(1000);
@@ -100,8 +152,15 @@ void init(void *instance) {
 
     bool wasEndDown = false;
     while (true) {
-      SHORT endState = GetAsyncKeyState(VK_END);
-      bool isEndDown = (endState & 0x8000) != 0;
+      bool isEndDown = false;
+      if (GetAsyncKeyState(VK_END) & 0x8000) {
+        HWND fg = GetForegroundWindow();
+        DWORD pid = 0;
+        if (fg) GetWindowThreadProcessId(fg, &pid);
+        if (pid == GetCurrentProcessId()) {
+          isEndDown = true;
+        }
+      }
       bool shouldQuit = (!wasEndDown && isEndDown);
       if (!shouldQuit && g_uninjectEvent) {
         if (WaitForSingleObject(g_uninjectEvent, 0) == WAIT_OBJECT_0) {
@@ -109,14 +168,19 @@ void init(void *instance) {
         }
       }
       if (shouldQuit) {
+        ThreadTracker::requestStop();
         ChatSDK::showClientMessage(ChatSDK::formatPrefix() +
                                    std::string("quitting..."));
         break;
       }
       wasEndDown = isEndDown;
-      OVson::poll();
-      RenderHook::poll();
-      Services::DiscordManager::getInstance()->update();
+      SafeGuard::installSehTranslator();
+      SafeGuard::run("dllmain/OVson::poll",  []() { OVson::poll(); });
+      SafeGuard::run("dllmain/RenderHook::poll",
+                     []() { RenderHook::poll(); });
+      SafeGuard::run("dllmain/DiscordManager::update", []() {
+        Services::DiscordManager::getInstance()->update();
+      });
       Sleep(5);
     }
   }

@@ -3,11 +3,12 @@
 #include "../Java.h"
 #include "../Logic/BedDefense/BedDefenseManager.h"
 #include "../Logic/StatsTracker.h"
-#include "../Render/ClickGUI.h"
+#include "../ClickGUI/ClickGUI.h"
 #include "../Services/AbyssService.h"
 #include "../Services/AuroraService.h"
 #include "../Services/Hypixel.h"
 #include "../Services/SeraphService.h"
+#include "../Services/KhadowService.h"
 #include "../Services/UrchinService.h"
 #include "../Utils/BedwarsPrestiges.h"
 #include "../Utils/Logger.h"
@@ -462,6 +463,8 @@ void cmd_stats(const std::string &args) {
             return "§4[CC]";
           if (t.find("CONFIRMED") != std::string::npos)
             return "§5[C]";
+          if (t.find("CHEATER") != std::string::npos)
+            return "§5[C]";
           if (t.find("CAUTION") != std::string::npos)
             return "§e[!]";
           if (t.find("SUSPICIOUS") != std::string::npos)
@@ -471,6 +474,19 @@ void cmd_stats(const std::string &args) {
           return "";
         };
         std::string activeS = Config::getActiveTagService();
+        if (activeS == "Khadow") {
+          auto kh = Khadow::getPlayerAnticheat(realName, true);
+          if (kh) {
+            if (kh->urchinBlacklisted) {
+              std::string abbr = getAbbr(kh->urchinType);
+              tagsStr += " " + (abbr.empty() ? "§4[U]" : abbr);
+            }
+            if (kh->seraphBlacklisted) {
+              std::string abbr = getAbbr(kh->seraphType);
+              tagsStr += " " + (abbr.empty() ? "§4[S]" : abbr);
+            }
+          }
+        }
         if (activeS == "Urchin" || activeS == "Both") {
           auto uT = Urchin::getPlayerTags(realName, true);
           if (uT && !uT->tags.empty()) {

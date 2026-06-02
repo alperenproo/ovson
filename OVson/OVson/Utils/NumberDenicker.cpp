@@ -29,14 +29,14 @@ struct ResolutionContext {
   bool hasFuzzyBeds = false;
 };
 
-static bool s_isSessionActive = false;
 static std::mutex s_trackerMutex;
 static std::unordered_map<std::string, ResolutionContext> s_activeTrackers;
 
-static const std::regex
-    REGEX_FINAL_KILL(R"(^(\w+) was ([\w-]+)'s final #([\d,]+)\. FINAL KILL!$)");
+static const std::regex REGEX_FINAL_KILL(
+    R"(^(\w+) was ([\w-]+)(?:'|\xE2\x80\x99)s final #([\d,]+)\. FINAL KILL!\s*$)",
+    std::regex::icase);
 static const std::regex REGEX_BED_BROKEN(
-    R"(^(?:BED DESTRUCTION > )?(\w+) (?:Bed|bed) was bed #([\d,]+) destroyed by ([\w-]+)!$)");
+    R"(^(?:BED DESTRUCTION > )?(\w+) (?:Bed|bed) was bed #([\d,]+) destroyed by ([\w-]+)!\s*$)");
 
 static std::string StripFormatCodes(const std::string &source) {
   std::string result;
@@ -58,18 +58,6 @@ static std::string FilterCommas(const std::string &input) {
   std::string result = input;
   result.erase(std::remove(result.begin(), result.end(), ','), result.end());
   return result;
-}
-
-static bool DetectMatchStart(const std::string &msg) {
-  if (msg.find("Protect your bed and destroy the enemy beds.") !=
-      std::string::npos)
-    return true;
-  if (msg.find("You will respawn because you still have a bed!") !=
-          std::string::npos &&
-      msg.find(":") == std::string::npos &&
-      msg.find("SHOUT") == std::string::npos)
-    return true;
-  return false;
 }
 
 static bool VerifyPlayerNickState(const std::string &playerName) {
@@ -248,7 +236,6 @@ bool isEnabled() { return Config::isNumberDenickerEnabled(); }
 
 void onWorldChange() {
   std::lock_guard<std::mutex> lock(s_trackerMutex);
-  s_isSessionActive = false;
   s_activeTrackers.clear();
 }
 
@@ -263,15 +250,6 @@ void onChatMessage(const std::string &input) {
   if (startIdx == std::string::npos)
     return;
   cleanMsg = cleanMsg.substr(startIdx, endIdx - startIdx + 1);
-
-  if (DetectMatchStart(cleanMsg)) {
-    std::lock_guard<std::mutex> lock(s_trackerMutex);
-    s_isSessionActive = true;
-    return;
-  }
-
-  if (!s_isSessionActive)
-    return;
 
   std::smatch matchData;
   if (std::regex_match(cleanMsg, matchData, REGEX_FINAL_KILL)) {

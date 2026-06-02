@@ -1,4 +1,5 @@
 #pragma once
+#include "CrashDump.h"
 #include "Logger.h"
 #include <Windows.h>
 #include <eh.h>
@@ -64,6 +65,7 @@ template <typename Fn> inline void run(const char *site, Fn &&body) {
     if (throttle.shouldLog())
       Logger::error("[SafeGuard] %s native crash %s (0x%08X)", site,
                     exceptionName(e.code), e.code);
+    CrashDump::writeOnce("seh");
   } catch (const std::exception &e) {
     if (throttle.shouldLog())
       Logger::error("[SafeGuard] %s C++ exception: %s", site,
@@ -83,6 +85,7 @@ inline T runOr(const char *site, T defaultValue, Fn &&body) {
     if (throttle.shouldLog())
       Logger::error("[SafeGuard] %s native crash %s (0x%08X)", site,
                     exceptionName(e.code), e.code);
+    CrashDump::writeOnce("seh");
   } catch (const std::exception &e) {
     if (throttle.shouldLog())
       Logger::error("[SafeGuard] %s C++ exception: %s", site,

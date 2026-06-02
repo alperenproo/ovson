@@ -9,8 +9,9 @@
 #include "../Utils/ReplaySpammer.h"
 #include "../Utils/SafeGuard.h"
 #include "../Utils/SensitivityFix.h"
+#include "../Utils/Watchdog.h"
 #include "BetterTab.h"
-#include "ClickGUI.h"
+#include "../ClickGUI/ClickGUI.h"
 #include "DefenseRenderer.h"
 #include "NameTagRenderer.h"
 #include "NotificationManager.h"
@@ -18,10 +19,9 @@
 #include "TechOverlay.h"
 #include <fstream>
 #include <functional>
-#include <gl/GL.h>
+#include "GL.h"
 #include <mutex>
 #include <windows.h>
-
 #include "../Utils/Timer.h"
 #include <algorithm>
 #include <functional>
@@ -38,6 +38,30 @@ static float g_frameDelta = 0.0f;
 static std::atomic<bool> g_unloading{false};
 static std::atomic<int> g_threadsInHook{0};
 static std::atomic<bool> g_tabDown{false};
+
+template <class Fn>
+static inline void runSubsystem(const char *site, Fn &&body) {
+  Watchdog::SubsystemScope _wd(site);
+  SafeGuard::run(site, std::forward<Fn>(body));
+}
+
+class FlagReleaser {
+public:
+  explicit FlagReleaser(bool *flag) : m_flag(flag) {}
+  ~FlagReleaser() { if (m_flag) *m_flag = false; }
+  FlagReleaser(const FlagReleaser &) = delete;
+  FlagReleaser &operator=(const FlagReleaser &) = delete;
+
+private:
+  bool *m_flag;
+};
+
+struct HookGuard {
+  HookGuard()  { g_threadsInHook.fetch_add(1, std::memory_order_acq_rel); }
+  ~HookGuard() { g_threadsInHook.fetch_sub(1, std::memory_order_acq_rel); }
+  HookGuard(const HookGuard &) = delete;
+  HookGuard &operator=(const HookGuard &) = delete;
+};
 
 typedef void(__stdcall *PFNGLUSEPROGRAMPROC_LOCAL)(unsigned int);
 static PFNGLUSEPROGRAMPROC_LOCAL g_glUseProgram = nullptr;
@@ -205,11 +229,9 @@ static HWND g_gameHwnd = nullptr;
 
 LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT uMsg, WPARAM wParam,
                                LPARAM lParam) {
-  g_threadsInHook++;
+  HookGuard guard;
   if (g_unloading) {
-    LRESULT res = CallWindowProc(originalWndProc, hwnd, uMsg, wParam, lParam);
-    g_threadsInHook--;
-    return res;
+    return CallWindowProc(originalWndProc, hwnd, uMsg, wParam, lParam);
   }
 
   static thread_local bool s_sehInstalled = false;
@@ -258,13 +280,10 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT uMsg, WPARAM wParam,
   });
 
   if (consume) {
-    g_threadsInHook--;
     return 0;
   }
 
-  LRESULT res = CallWindowProc(originalWndProc, hwnd, uMsg, wParam, lParam);
-  g_threadsInHook--;
-  return res;
+  return CallWindowProc(originalWndProc, hwnd, uMsg, wParam, lParam);
 }
 
 static void renderOverlayWorkBody(HDC hdc) {
@@ -277,15 +296,15 @@ static void renderOverlayWorkBody(HDC hdc) {
     g_glUseProgram(0);
 
   HWND currentHwnd = WindowFromDC(hdc);
-  if (currentHwnd && currentHwnd != g_gameHwnd) {
-    if (g_gameHwnd && originalWndProc) {
+  if (currentHwnd && IsWindow(currentHwnd) && currentHwnd != g_gameHwnd) {
+    if (g_gameHwnd && IsWindow(g_gameHwnd) && originalWndProc) {
       SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC, (LONG_PTR)originalWndProc);
     }
     g_gameHwnd = currentHwnd;
     originalWndProc = (WNDPROC)SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC,
                                                 (LONG_PTR)hookedWndProc);
     writeDebugLog("WndProc hooked (re-hook on HWND change)");
-  } else if (!g_gameHwnd && currentHwnd) {
+  } else if (!g_gameHwnd && currentHwnd && IsWindow(currentHwnd)) {
     g_gameHwnd = currentHwnd;
     originalWndProc = (WNDPROC)SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC,
                                                 (LONG_PTR)hookedWndProc);
@@ -377,48 +396,52 @@ static void renderOverlayWorkBody(HDC hdc) {
     }
   }
 
-  SafeGuard::run("StatsOverlay::render", [hdc]() {
+  runSubsystem("StatsOverlay::render", [hdc]() {
     StatsOverlay::render((void *)hdc);
   });
 
-  SafeGuard::run("DefenseRenderer::render", [hdc]() {
+  runSubsystem("DefenseRenderer::render", [hdc]() {
     BedDefense::DefenseRenderer::getInstance()->render((void *)hdc, 0.0);
   });
 
-  SafeGuard::run("NameTagRenderer::render", [hdc]() {
+  runSubsystem("NameTagRenderer::render", [hdc]() {
     OVson::NameTagRenderer::getInstance()->render((void *)hdc, 0.0);
   });
 
   if (Config::isNotificationsEnabled()) {
-    SafeGuard::run("NotificationManager::render", [hdc]() {
+    runSubsystem("NotificationManager::render", [hdc]() {
       Render::NotificationManager::getInstance()->render(hdc);
     });
   }
 
   if (Config::isTechEnabled()) {
-    SafeGuard::run("TechOverlay::render", [hdc]() {
+    runSubsystem("TechOverlay::render", [hdc]() {
       GLint vp[4];
       glGetIntegerv(GL_VIEWPORT, vp);
       Render::TechOverlay::render(hdc, vp[2], vp[3]);
     });
   }
 
-  SafeGuard::run("OVson::poll", []() {
+  runSubsystem("OVson::poll", []() {
     OVson::poll();
   });
 
   bool wantBetterTab = false;
   bool physicalTab = false;
-  SafeGuard::run("BetterTab/state", [&]() {
+  runSubsystem("BetterTab/state", [&]() {
     wantBetterTab = Config::isBetterTabModeEnabled() &&
                     OVson::isInHypixelGame() &&
                     !OVson::isInPreGameLobby() && !OVson::isChatOpen();
-    physicalTab = (GetAsyncKeyState(VK_TAB) & 0x8000) != 0;
+    HWND hwnd = WindowFromDC((HDC)hdc);
+    if (hwnd && GetForegroundWindow() != hwnd) {
+      physicalTab = false;
+    } else {
+      physicalTab = (GetAsyncKeyState(VK_TAB) & 0x8000) != 0;
+    }
 
     static bool wasWantBetterTab = false;
     if (wantBetterTab != wasWantBetterTab) {
-      HWND hwnd = WindowFromDC((HDC)hdc);
-      if (hwnd) {
+      if (hwnd && IsWindow(hwnd)) {
         if (wantBetterTab) {
           PostMessage(hwnd, WM_KEYUP, VK_TAB, 0xC00F0001);
         } else {
@@ -432,20 +455,20 @@ static void renderOverlayWorkBody(HDC hdc) {
   });
 
   if (wantBetterTab && physicalTab) {
-    SafeGuard::run("BetterTab::render", [hdc]() {
+    runSubsystem("BetterTab::render", [hdc]() {
       BetterTab::render((void *)hdc);
     });
   }
 
-  SafeGuard::run("BedDefenseManager::tick", []() {
+  runSubsystem("BedDefenseManager::tick", []() {
     BedDefense::BedDefenseManager::getInstance()->tick();
   });
 
-  SafeGuard::run("Anticheat::tickFromRenderThread", []() {
+  runSubsystem("Anticheat::tickFromRenderThread", []() {
     Anticheat::tickFromRenderThread();
   });
 
-  SafeGuard::run("ReplaySpammer::tick", []() {
+  runSubsystem("ReplaySpammer::tick", []() {
     Utils::ReplaySpammer::getInstance().tick();
   });
 
@@ -460,11 +483,11 @@ static void renderOverlayWorkBody(HDC hdc) {
       }
     }
     for (auto &task : drained) {
-      SafeGuard::run("RenderHook::queuedTask", [&]() { task(); });
+      runSubsystem("RenderHook::queuedTask", [&]() { task(); });
     }
   }
 
-  SafeGuard::run("ClickGUI::render", [hdc]() {
+  runSubsystem("ClickGUI::render", [hdc]() {
     if (Render::ClickGUI::isOpen()) {
       FocusFix::setIngameFocus(false);
     }
@@ -473,11 +496,17 @@ static void renderOverlayWorkBody(HDC hdc) {
 }
 
 BOOL WINAPI hookedSwapBuffers(HDC hdc) {
-  g_threadsInHook++;
+  static thread_local bool s_inHook = false;
+  if (s_inHook) {
+    return originalSwapBuffers(hdc);
+  }
+  s_inHook = true;
+  FlagReleaser _releaser(&s_inHook);
+
+  HookGuard guard;
+  Watchdog::tickFrame();
   if (g_unloading) {
-    BOOL res = originalSwapBuffers(hdc);
-    g_threadsInHook--;
-    return res;
+    return originalSwapBuffers(hdc);
   }
 
   SafeGuard::installSehTranslator();
@@ -494,7 +523,6 @@ BOOL WINAPI hookedSwapBuffers(HDC hdc) {
     env->PopLocalFrame(nullptr);
   }
 
-  g_threadsInHook--;
   return originalSwapBuffers(hdc);
 }
 
@@ -554,9 +582,13 @@ bool RenderHook::install() {
   writeDebugLog("wglSwapBuffers hooked successfully!");
   g_hookInstalled = true;
 
+  Watchdog::start();
+  writeDebugLog("Watchdog started");
+
   StatsOverlay::init();
   writeDebugLog("StatsOverlay initialized");
 
+  initGLExtensions();
   Render::ClickGUI::init();
 
   g_glUseProgram = (PFNGLUSEPROGRAMPROC_LOCAL)wglGetProcAddress("glUseProgram");
@@ -578,38 +610,59 @@ float RenderHook::getDelta() { return g_frameDelta; }
 void RenderHook::uninstall() {
   writeDebugLog("RenderHook::uninstall() called");
 
+  Watchdog::stop();
+  writeDebugLog("Watchdog stopped");
+
   if (g_hookInstalled) {
     g_unloading = true;
 
-    int retries = 0;
-    while (g_threadsInHook.load() > 0 && retries < 500) {
-      Sleep(10);
-      retries++;
-    }
-
-    if (pMH_DisableHook) {
-      pMH_DisableHook(MH_ALL_HOOKS);
-      writeDebugLog("MinHook disabled");
-    }
-
-    if (g_gameHwnd && originalWndProc) {
+    if (g_gameHwnd && IsWindow(g_gameHwnd) && originalWndProc) {
       SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC, (LONG_PTR)originalWndProc);
       writeDebugLog("WndProc restored");
     }
 
-    Sleep(100);
+    for (int i = 0; i < 3; ++i) {
+      MSG msg;
+      while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+      }
+      Sleep(10);
+    }
 
-    if (pMH_Uninitialize) {
-      pMH_Uninitialize();
+    int retries = 0;
+    while (g_threadsInHook.load(std::memory_order_acquire) > 0 &&
+           retries < 3000) {
+      Sleep(10);
+      retries++;
+    }
+
+    bool drained = (g_threadsInHook.load() == 0);
+    if (!drained) {
+      writeDebugLog(
+          "WARNING: hook threads did NOT drain in 30s — skipping MinHook "
+          "free to avoid a freed-trampoline crash. The DLL will leak; "
+          "process exit will clean it up.");
+    }
+
+    if (drained) {
+      if (pMH_DisableHook) {
+        pMH_DisableHook(MH_ALL_HOOKS);
+        writeDebugLog("MinHook disabled");
+      }
+      Sleep(150);
+      if (pMH_Uninitialize) {
+        pMH_Uninitialize();
+      }
     }
 
     g_hookInstalled = false;
-  }
 
-  if (g_MinHookModule) {
-    FreeLibrary(g_MinHookModule);
-    g_MinHookModule = nullptr;
-    writeDebugLog("MinHook.x64.dll unloaded");
+    if (drained && g_MinHookModule) {
+      FreeLibrary(g_MinHookModule);
+      g_MinHookModule = nullptr;
+      writeDebugLog("MinHook.x64.dll unloaded");
+    }
   }
 
   StatsOverlay::shutdown();

@@ -102,7 +102,7 @@ AnticheatInfo parseResponse(const std::string &body) {
 bool isEnabled() {
   if (!Config::isTagsEnabled()) return false;
   const std::string &svc = Config::getActiveTagService();
-  return svc == "Khadow" || svc == "Tagse";
+  return svc == "Khadow";
 }
 
 bool doFetch(const std::string &username, AnticheatInfo &out) {
@@ -113,7 +113,6 @@ bool doFetch(const std::string &username, AnticheatInfo &out) {
   if (body.empty()) return false;
   if (body.find("\"error\"") != std::string::npos &&
       body.find("\"status\"") == std::string::npos) {
-    // outright error envelope with no anticheat block
     return false;
   }
   out = parseResponse(body);
@@ -176,8 +175,10 @@ std::optional<AnticheatInfo> getPlayerAnticheat(const std::string &username,
   std::thread([username]() {
     SafeGuard::installSehTranslator();
     SafeGuard::run("Khadow::worker", [&]() {
+      if (ThreadTracker::shouldStop()) return;
       AnticheatInfo info;
       bool ok = doFetch(username, info);
+      if (ThreadTracker::shouldStop()) return;
       {
         std::lock_guard<std::mutex> lock(g_cacheMutex);
         pruneLocked();

@@ -1,5 +1,8 @@
 #include "NameTagRenderer.h"
 #include "../Config/Config.h"
+#include "../Config/StatColors.h"
+#include "../Utils/GlGuard.h"
+#include "../Utils/JniGuard.h"
 #include "../Java.h"
 #include "../Logic/StatsTracker.h"
 #include "../Services/Hypixel.h"
@@ -398,9 +401,16 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
     return;
   }
 
+  JniGuard::JniScope _jniScope(env, 256);
+
   initIds();
   if (!m_ids.initialized) {
     if (logThisPass) ntLog("  gate: JNI ids not initialised");
+    return;
+  }
+
+  if (!OVson::isInHypixelGame() || OVson::isInPreGameLobby()) {
+    if (logThisPass) ntLog("  gate: not in active Hypixel game — skip");
     return;
   }
 
@@ -985,6 +995,7 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
                 (float)statsCopy.bedwarsLosses
           : (float)statsCopy.bedwarsWins;
 
+      const char *LBL = "\xC2\xA7" "e";  // label colour
       std::string label;
       for (const auto &slot : slots) {
         if (!slot.second) continue;
@@ -992,15 +1003,27 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
         if (slot.first == "star") {
           part = BedwarsStars::GetFormattedLevel(statsCopy.bedwarsStar);
         } else if (slot.first == "fkdr") {
-          part = "\xC2\xA7" "e" "FKDR " "\xC2\xA7" "f" + fmtF(fkdr);
+          const char *c =
+              StatColors::getMcColor(StatColors::StatType::FKDR, fkdr);
+          part = LBL + std::string("FKDR ") + c + fmtF(fkdr);
         } else if (slot.first == "fk") {
-          part = "\xC2\xA7" "e" "FK " "\xC2\xA7" "f" + fmtI(statsCopy.bedwarsFinalKills);
+          const char *c = StatColors::getMcColor(
+              StatColors::StatType::FinalKills,
+              (double)statsCopy.bedwarsFinalKills);
+          part = LBL + std::string("FK ") + c +
+                 fmtI(statsCopy.bedwarsFinalKills);
         } else if (slot.first == "wins") {
-          part = "\xC2\xA7" "e" "W " "\xC2\xA7" "f" + fmtI(statsCopy.bedwarsWins);
+          const char *c = StatColors::getMcColor(
+              StatColors::StatType::Wins, (double)statsCopy.bedwarsWins);
+          part = LBL + std::string("W ") + c + fmtI(statsCopy.bedwarsWins);
         } else if (slot.first == "wlr") {
-          part = "\xC2\xA7" "e" "WLR " "\xC2\xA7" "f" + fmtF(wlr);
+          const char *c =
+              StatColors::getMcColor(StatColors::StatType::WLR, wlr);
+          part = LBL + std::string("WLR ") + c + fmtF(wlr);
         } else if (slot.first == "ws") {
-          part = "\xC2\xA7" "e" "WS " "\xC2\xA7" "f" + fmtI(statsCopy.winstreak);
+          const char *c = StatColors::getMcColor(
+              StatColors::StatType::WS, (double)statsCopy.winstreak);
+          part = LBL + std::string("WS ") + c + fmtI(statsCopy.winstreak);
         }
         if (part.empty()) continue;
         if (!label.empty()) label += " \xC2\xA7" "7|\xC2\xA7" "f ";
@@ -1031,8 +1054,9 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
               return a.dist > b.dist;
             });
 
-  glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_TRANSFORM_BIT |
-               GL_DEPTH_BUFFER_BIT | GL_LIGHTING_BIT);
+  GlGuard::GlAttribGuard _gAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT |
+                                    GL_TRANSFORM_BIT | GL_DEPTH_BUFFER_BIT |
+                                    GL_LIGHTING_BIT);
   glDisable(GL_DEPTH_TEST);
   glDepthMask(GL_FALSE);
   glDisable(GL_LIGHTING);
@@ -1042,13 +1066,11 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glEnable(GL_TEXTURE_2D);
 
-  glMatrixMode(GL_PROJECTION);
-  glPushMatrix();
+  GlGuard::GlMatrixGuard _gPr(GL_PROJECTION);
   glLoadIdentity();
   glOrtho(0, vpW, vpH, 0, -1, 1);
 
-  glMatrixMode(GL_MODELVIEW);
-  glPushMatrix();
+  GlGuard::GlMatrixGuard _gMv(GL_MODELVIEW);
   glLoadIdentity();
 
   for (const auto &d : draws) {
@@ -1093,12 +1115,9 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
     }); // SafeGuard::run draw
   }
 
-  glMatrixMode(GL_PROJECTION);
-  glPopMatrix();
-  glMatrixMode(GL_MODELVIEW);
-  glPopMatrix();
-  glDepthMask(GL_TRUE);
-  glPopAttrib();
+  // _gMv / _gPr / _gAttrib unwind automatically here (reverse decl
+  // order) depthMask + colour state are inside _gAttrib's mask so
+  // they restore too
 
   if (worldObj) env->DeleteLocalRef(worldObj);
   if (playerList) env->DeleteLocalRef(playerList);

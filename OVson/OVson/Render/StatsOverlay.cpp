@@ -6,6 +6,7 @@
 #include "../Services/Hypixel.h"
 #include "../Services/SeraphService.h"
 #include "../Services/UrchinService.h"
+#include "../Utils/GlGuard.h"
 #include "../Utils/Logger.h"
 #include "FontRenderer.h"
 #include "RenderUtils.h"
@@ -353,16 +354,15 @@ void StatsOverlay::render(void *hdcPtr) {
   if (screenHeight <= 0)
     screenHeight = 1080.0f;
 
-  glMatrixMode(GL_PROJECTION);
-  glPushMatrix();
+  GlGuard::GlMatrixGuard _gPr(GL_PROJECTION);
   glLoadIdentity();
   glOrtho(0, screenWidth, screenHeight, 0, -1, 1);
 
-  glMatrixMode(GL_MODELVIEW);
-  glPushMatrix();
+  GlGuard::GlMatrixGuard _gMv(GL_MODELVIEW);
   glLoadIdentity();
 
-  glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_CURRENT_BIT);
+  GlGuard::GlAttribGuard _gAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT |
+                                    GL_CURRENT_BIT);
   glDisable(GL_DEPTH_TEST);
   glDisable(GL_LIGHTING);
 
@@ -724,11 +724,7 @@ void StatsOverlay::render(void *hdcPtr) {
   glCallList(s_displayList);
   glPopMatrix();
 
-  glPopAttrib();
-  glMatrixMode(GL_PROJECTION);
-  glPopMatrix();
-  glMatrixMode(GL_MODELVIEW);
-  glPopMatrix();
+  // _gAttrib / _gMv / _gPr unwind here automatically
 
   s_rendering = false;
 }

@@ -6,6 +6,7 @@
 #include "../Logic/StatsTracker.h"
 #include "../Services/UrchinService.h"
 #include "../Utils/BedwarsPrestiges.h"
+#include "../Utils/GlGuard.h"
 #include "../Utils/Logger.h"
 #include "../Utils/Timer.h"
 #include "../Utils/Anticheat/Anticheat.h"
@@ -547,9 +548,8 @@ static int measure(RenderCtx &ctx, const std::string &text) {
 }
 
 static std::string fmt2(double v) {
-  std::ostringstream ss;
-  ss << std::fixed << std::setprecision(2) << v;
-  return ss.str();
+  int i = (int)(v * 100.0 + 0.5);
+  return std::to_string(i / 100) + "." + (i % 100 < 10 ? "0" : "") + std::to_string(i % 100);
 }
 
 static std::string fmtCommas(long long n) {
@@ -1637,14 +1637,12 @@ void render(void *hdcPtr) {
   float startX = std::floor((scaledWidth - boxWidth) / 2.0f);
   float startY = 15.0f;
 
-  glPushAttrib(GL_ALL_ATTRIB_BITS);
+  GlGuard::GlAttribGuard _gAttrib(GL_ALL_ATTRIB_BITS);
   glViewport(0, 0, (GLint)screenWidth, (GLint)screenHeight);
-  glMatrixMode(GL_PROJECTION);
-  glPushMatrix();
+  GlGuard::GlMatrixGuard _gPr(GL_PROJECTION);
   glLoadIdentity();
   glOrtho(0, scaledWidth, scaledHeight, 0, -1, 1);
-  glMatrixMode(GL_MODELVIEW);
-  glPushMatrix();
+  GlGuard::GlMatrixGuard _gMv(GL_MODELVIEW);
   glLoadIdentity();
 
   GLboolean wasTexture2D = glIsEnabled(GL_TEXTURE_2D);
@@ -1745,11 +1743,7 @@ void render(void *hdcPtr) {
     glDisable(GL_LIGHTING);
   glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 
-  glMatrixMode(GL_MODELVIEW);
-  glPopMatrix();
-  glMatrixMode(GL_PROJECTION);
-  glPopMatrix();
-  glPopAttrib();
+  // _gMv / _gPr / _gAttrib unwind here automatically.
 
   s_rendering = false;
 }

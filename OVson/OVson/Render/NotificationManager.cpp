@@ -1,5 +1,6 @@
 #include "NotificationManager.h"
 #include "../Config/Config.h"
+#include "../Utils/GlGuard.h"
 #include "../Utils/Timer.h"
 #include "FontRenderer.h"
 #include "RenderHook.h"
@@ -82,11 +83,17 @@ static void drawRect(float x, float y, float w, float h, DWORD color,
   glEnd();
 }
 
-static float easeOutElastic(float x) {
-  const float c4 = (2.0f * 3.14159f) / 3.0f;
-  return x == 0   ? 0
-         : x == 1 ? 1
-                  : (float)(pow(2, -10 * x) * sin((x * 10 - 0.75f) * c4) + 1);
+static float easeOutCubic(float x) {
+  if (x < 0) x = 0;
+  if (x > 1) x = 1;
+  float u = 1.0f - x;
+  return 1.0f - u * u * u;
+}
+
+static float easeInCubic(float x) {
+  if (x < 0) x = 0;
+  if (x > 1) x = 1;
+  return x * x * x;
 }
 
 void NotificationManager::render(HDC hdc) {
@@ -105,10 +112,9 @@ void NotificationManager::render(HDC hdc) {
 
   float dt = RenderHook::getDelta();
 
-  // GL setup
-  glPushMatrix();
-  glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
-               GL_SCISSOR_BIT);
+  GlGuard::GlAttribGuard  _gAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT |
+                                    GL_DEPTH_BUFFER_BIT | GL_SCISSOR_BIT);
+  GlGuard::GlMatrixGuard  _gMv(GL_MODELVIEW);
 
   glDisable(GL_TEXTURE_2D);
   glDisable(GL_LIGHTING);
@@ -121,8 +127,7 @@ void NotificationManager::render(HDC hdc) {
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 
-  glMatrixMode(GL_PROJECTION);
-  glPushMatrix();
+  GlGuard::GlMatrixGuard  _gPr(GL_PROJECTION);
   glLoadIdentity();
 
   HWND hwnd = WindowFromDC(hdc);
@@ -143,47 +148,49 @@ void NotificationManager::render(HDC hdc) {
   }
 
   if (sw <= 0 || sh <= 0) {
-    glPopMatrix();
-    glMatrixMode(GL_MODELVIEW);
-    glPopAttrib();
-    glPopMatrix();
     return;
   }
 
   glOrtho(0, sw, sh, 0, -1, 1);
 
-  glMatrixMode(GL_MODELVIEW);
-  glPushMatrix();
+  GlGuard::GlMatrixGuard _gMvInner(GL_MODELVIEW);
   glLoadIdentity();
 
-  float padding = 20.0f;
-  float notifH = 64.0f;
+  const float padding   = 22.0f;
+  const float notifH    = 62.0f;
+  const float radius    = 12.0f;
+  const float textPadL  = 18.0f;   // text starts this far in from left
+  const float gap       = 10.0f;
+  const float revealDur = 0.35f;
+  const float hideDur   = 0.30f;
+
   float yPos = sh - notifH - padding;
 
   for (auto it = m_notifications.begin(); it != m_notifications.end();) {
     float titleW = g_notifyFont.getStringWidth(it->title);
-    float msgW = g_notifyFont.getStringWidth(it->message);
+    float msgW   = g_notifyFont.getStringWidth(it->message);
     float maxContentW = (titleW > msgW) ? titleW : msgW;
-    float notifW = maxContentW + 40.0f;
-    if (notifW < 240.0f)
-      notifW = 240.0f;
+    float notifW = textPadL + maxContentW + 22.0f;
+    if (notifW < 280.0f) notifW = 280.0f;
+    if (notifW > 460.0f) notifW = 460.0f;
+
     it->timer += dt;
 
     float life = it->timer / it->duration;
-    float revealDuration = 0.5f;
-    float hideDuration = 0.4f;
-
     float alpha = 1.0f;
-    float slide = 1.0f;
+    float slide = 1.0f;   // 0 = off-screen right, 1 = at rest
+    float scale = 1.0f;   // 0.96..1.0 — subtle pop on enter
 
-    if (it->timer < revealDuration) {
-      float t = it->timer / revealDuration;
-      slide = easeOutElastic(t);
+    if (it->timer < revealDur) {
+      float t = it->timer / revealDur;
+      slide = easeOutCubic(t);
+      alpha = easeOutCubic(t);
+      scale = 0.96f + 0.04f * easeOutCubic(t);
+    } else if (it->timer > it->duration - hideDur) {
+      float t = (it->duration - it->timer) / hideDur;
+      slide = 1.0f - easeInCubic(1.0f - t);
       alpha = t;
-    } else if (it->timer > it->duration - hideDuration) {
-      float t = (it->duration - it->timer) / hideDuration;
-      slide = t * t * t;
-      alpha = t;
+      scale = 0.96f + 0.04f * t;
     }
 
     if (it->timer >= it->duration) {
@@ -191,41 +198,65 @@ void NotificationManager::render(HDC hdc) {
       continue;
     }
 
-    float x = sw - (notifW * slide) - padding;
+    const float restX = sw - notifW - padding;
+    float x = restX + (1.0f - slide) * 40.0f;
     float y = yPos;
 
-    glDisable(GL_TEXTURE_2D);
-    RenderUtils::drawRoundedRect(x, y, notifW, notifH, 10.0f, 0xEE111113,
-                                 alpha);
+    float drawW = notifW * scale;
+    float drawH = notifH * scale;
+    float drawX = x + (notifW - drawW);
+    float drawY = y + (notifH - drawH) / 2.0f;
 
-    RenderUtils::drawRoundedRect(x, y, 4, notifH, 2.0f, it->getTitleColor(),
-                                 alpha);
+    DWORD accent = it->getTitleColor();
+
+    glDisable(GL_TEXTURE_2D);
+
+    {
+      const int   kSteps    = 16;
+      const float kStepSpread = 1.0f;
+      const float kBaseAlpha  = 0.045f;
+      const float kFalloff    = 0.85f;   // exponential decay per step
+      float a = kBaseAlpha;
+      for (int s = 0; s < kSteps; ++s) {
+        float spread = (s + 1) * kStepSpread;
+        RenderUtils::drawRoundedRect(
+            drawX - spread, drawY - spread + 3.0f,
+            drawW + 2 * spread, drawH + 2 * spread,
+            radius + spread,
+            0x000000, a * alpha);
+        a *= kFalloff;
+      }
+    }
+
+    RenderUtils::drawRoundedRect(drawX, drawY, drawW, drawH, radius,
+                                  0xFF10131C, 0.95f * alpha);
+
+    RenderUtils::drawRoundedRect(drawX, drawY, drawW, drawH * 0.48f, radius,
+                                  0xFFFFFFFF, 0.05f * alpha);
 
     float progress = 1.0f - life;
     if (progress > 0) {
-      RenderUtils::drawRoundedRect(x + 6, y + notifH - 4,
-                                   (notifW - 12) * progress, 2, 1.0f,
-                                   it->getTitleColor(), alpha * 0.7f);
+      float pillW = (drawW - 28.0f) * progress;
+      RenderUtils::drawRoundedRect(drawX + 14, drawY + drawH - 6, pillW, 2.0f,
+                                    1.0f, accent, 0.85f * alpha);
     }
 
     glEnable(GL_TEXTURE_2D);
-    g_notifyFont.drawString(x + 18.0f, y + 14.0f, it->title,
-                            applyAlpha(it->getTitleColor(), alpha));
-    g_notifyFont.drawString(x + 18.0f, y + 36.0f, it->message,
-                            applyAlpha(it->getBodyColor(), alpha));
+
+    float textX = drawX + textPadL;
+    glDisable(GL_TEXTURE_2D);
+    RenderUtils::drawCircle(textX, drawY + 19.0f, 2.5f, accent, alpha);
+    glEnable(GL_TEXTURE_2D);
+    g_notifyFont.drawString(textX + 8.0f, drawY + 13.0f, it->title,
+                            applyAlpha(accent, alpha));
+    g_notifyFont.drawString(textX, drawY + 33.0f, it->message,
+                            applyAlpha(0xFFC8C8D0, alpha));
+
     glDisable(GL_TEXTURE_2D);
 
-    yPos -= (notifH + 12.0f);
+    yPos -= (notifH + gap);
     ++it;
   }
 
-  glMatrixMode(GL_PROJECTION);
-  glPopMatrix();
-  glMatrixMode(GL_MODELVIEW);
-  glPopMatrix();
-
-  glDepthMask(GL_TRUE);
-  glPopAttrib();
-  glPopMatrix();
 }
 } // namespace Render

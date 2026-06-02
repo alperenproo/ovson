@@ -164,6 +164,7 @@ std::optional<PlayerTags> getPlayerTags(const std::string &username,
   std::thread([username, uuid]() {
     SafeGuard::installSehTranslator();
     SafeGuard::run("Seraph::worker", [&]() {
+      if (ThreadTracker::shouldStop()) return;
       std::string url = "https://api.seraph.si/" + uuid + "/blacklist";
       std::string apiKey = Config::getSeraphApiKey();
       if (apiKey.empty()) {

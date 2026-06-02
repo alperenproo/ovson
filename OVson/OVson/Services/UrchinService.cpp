@@ -215,6 +215,7 @@ std::optional<PlayerTags> getPlayerTags(const std::string &username,
   std::thread([username, now]() {
     SafeGuard::installSehTranslator();
     SafeGuard::run("Urchin::worker", [&]() {
+      if (ThreadTracker::shouldStop()) return;
       std::string url =
           "https://urchin.ws/player/" + username + "?sources=MANUAL";
       std::string apiKey = Config::getUrchinApiKey();
@@ -226,6 +227,7 @@ std::optional<PlayerTags> getPlayerTags(const std::string &username,
       std::string body;
       int maxRetries = 3;
       for (int attempt = 0; attempt < maxRetries; ++attempt) {
+        if (ThreadTracker::shouldStop()) return;
         ok = Http::get(url, body);
         if (body.find("Rate limit exceeded") != std::string::npos ||
             body.find("rate limit") != std::string::npos ||

@@ -1,6 +1,6 @@
 # OVson
 
-A lot changed but im too lazy to update this readme file just try it and see. Report bugs/crashes and make suggestions to alperen1912 on Discord.
+A lot changed but im too lazy to update this readme file just try it and see. REPORT THE BUGS, DUMP FILES, CRASHES TO alperen1912 ON DISCORD IF YOU WANT THIS SHIT TO GET BETTER. I BEG YOU.
 
 
 ## Features

@@ -83,7 +83,6 @@ bool Shader::compile(const std::string& vertexSource, const std::string& fragmen
         return false;
     }
 
-    // Shaders are linked into program, can delete individual shader objects
     glDeleteShader(vs);
     glDeleteShader(fs);
 

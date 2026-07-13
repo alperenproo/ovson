@@ -266,6 +266,10 @@ public:
         {"net.minecraft.scoreboard.ScorePlayerTeam", "aul"},
         {"net.minecraft.scoreboard.ScoreObjective", "auk"},
         {"net.minecraft.scoreboard.Score", "aum"},
+        {"net.minecraft.network.NetworkManager", "ej"},
+        {"net.minecraft.network.play.server.S38PacketPlayerListItem", "ja"},
+        {"net.minecraft.network.play.server.S0CPacketSpawnPlayer", "ik"},
+        {"net.minecraft.network.play.server.S1CPacketEntityMetadata", "id"},
     };
     auto nit = notchMap.find(className);
     if (nit != notchMap.end()) {

@@ -21,6 +21,7 @@
 #include "Render/TextureLoader.h"
 #include "Services/DiscordManager.h"
 #include "Utils/Logger.h"
+#include <ShlObj.h>
 #include "Utils/ReplaySpammer.h"
 #include "Utils/SafeGuard.h"
 #include "Utils/ThreadTracker.h"
@@ -40,6 +41,7 @@ static HANDLE g_aliveEvent = nullptr;
 static HANDLE g_uninjectEvent = nullptr;
 
 void init(void *instance) {
+
   {
     HANDLE ev = OpenEventW(EVENT_MODIFY_STATE, FALSE, L"Local\\OVsonCp1");
     if (ev) {
@@ -201,6 +203,7 @@ void init(void *instance) {
   Logger::info("Exiting main loop, starting cleanup...");
   g_cleaningUp.store(true);
   Sleep(50);
+
 
   try {
     Logger::info("Uninstalling RenderHook...");

@@ -19,6 +19,7 @@ struct PlayerStats {
   int bedwarsWins = 0;
   int bedwarsLosses = 0;
   int inGameHealth = 20;
+  bool healthKnown = false;   // true once a real scoreboard HP was read
   int winstreak = 0;
   int lastPing = -1;
   int auroraPing = -1;

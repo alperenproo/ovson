@@ -1115,9 +1115,6 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
     }); // SafeGuard::run draw
   }
 
-  // _gMv / _gPr / _gAttrib unwind automatically here (reverse decl
-  // order) depthMask + colour state are inside _gAttrib's mask so
-  // they restore too
 
   if (worldObj) env->DeleteLocalRef(worldObj);
   if (playerList) env->DeleteLocalRef(playerList);

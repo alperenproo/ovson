@@ -1,6 +1,7 @@
 #include "RenderHook.h"
 #include "../Config/Config.h"
 #include "../Java.h"
+#include "../SDK/McAccess.h"
 #include "../Logic/BedDefense/BedDefenseManager.h"
 #include "../Logic/StatsTracker.h"
 #include "../Utils/Anticheat/AcInternal.h"
@@ -17,6 +18,7 @@
 #include "NotificationManager.h"
 #include "StatsOverlay.h"
 #include "TechOverlay.h"
+#include "Shader.h"
 #include <fstream>
 #include <functional>
 #include "GL.h"
@@ -27,6 +29,7 @@
 #include <functional>
 #include <mutex>
 #include <queue>
+#include <string>
 #include <vector>
 
 static std::ofstream g_debugLog;
@@ -43,6 +46,161 @@ template <class Fn>
 static inline void runSubsystem(const char *site, Fn &&body) {
   Watchdog::SubsystemScope _wd(site);
   SafeGuard::run(site, std::forward<Fn>(body));
+}
+
+static int g_tabVK = VK_TAB;
+static int g_tabScan = 0x0F;
+static jobject g_tabKbGlobal = nullptr;
+static jfieldID g_tabPressedFid = nullptr;
+static std::atomic<bool> g_suppressVanillaTab{false};
+
+static void suppressVanillaTab() {
+  if (!g_tabKbGlobal || !g_tabPressedFid) return;
+  JNIEnv *env = lc ? lc->getEnv() : nullptr;
+  if (!env) return;
+  env->SetBooleanField(g_tabKbGlobal, g_tabPressedFid, JNI_FALSE);
+  if (env->ExceptionCheck()) env->ExceptionClear();
+}
+
+static int getPlayerListVK() {
+  static ULONGLONG s_last = 0;
+  ULONGLONG now = GetTickCount64();
+  if (now - s_last < 3000) return g_tabVK;
+  s_last = now;
+
+  JNIEnv *env = lc ? lc->getEnv() : nullptr;
+  if (!env) { Logger::info("[TabKey] env null -> fallback VK=0x%X", g_tabVK); return g_tabVK; }
+
+  jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
+  if (!mcCls) { Logger::info("[TabKey] Minecraft class NOT FOUND -> fallback"); return g_tabVK; }
+  jfieldID f_theMc = lc->GetStaticFieldID(
+      mcCls, "theMinecraft", "Lnet/minecraft/client/Minecraft;",
+      "field_71432_P", "S", "Lave;");
+  if (!f_theMc) { if (env->ExceptionCheck()) env->ExceptionClear(); Logger::info("[TabKey] theMinecraft field NOT FOUND -> fallback"); return g_tabVK; }
+  jobject mc = env->GetStaticObjectField(mcCls, f_theMc);
+  if (env->ExceptionCheck()) env->ExceptionClear();
+  if (!mc) { Logger::info("[TabKey] theMinecraft instance null -> fallback"); return g_tabVK; }
+
+  jfieldID f_gs = lc->GetFieldID(
+      mcCls, "gameSettings",
+      "Lnet/minecraft/client/settings/GameSettings;", "field_71474_y", "t", "Lavh;");
+  if (!f_gs) { if (env->ExceptionCheck()) env->ExceptionClear();
+    f_gs = lc->FindFieldBySignature(mcCls, "Lnet/minecraft/client/settings/GameSettings;"); }
+  if (!f_gs) { if (env->ExceptionCheck()) env->ExceptionClear();
+    f_gs = lc->FindFieldBySignature(mcCls, "Lavh;"); }  // 1.8.9 notch type
+  if (!f_gs) { env->DeleteLocalRef(mc); if (env->ExceptionCheck()) env->ExceptionClear(); Logger::info("[TabKey] gameSettings field NOT FOUND (name+sig+notch) -> fallback"); return g_tabVK; }
+  jobject gs = env->GetObjectField(mc, f_gs);
+  env->DeleteLocalRef(mc);
+  if (env->ExceptionCheck()) env->ExceptionClear();
+  if (!gs) { Logger::info("[TabKey] gameSettings instance null -> fallback"); return g_tabVK; }
+
+  jclass gsCls = env->GetObjectClass(gs);
+  jobject kb = nullptr;
+  jfieldID f_kb = lc->GetFieldID(
+      gsCls, "keyBindPlayerList",
+      "Lnet/minecraft/client/settings/KeyBinding;", "field_74321_H", "", "");
+  if (f_kb) { kb = env->GetObjectField(gs, f_kb); if (env->ExceptionCheck()) env->ExceptionClear(); }
+  if (!kb) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    jint fc = 0; jfieldID *pf = nullptr;
+    if (lc->jvmti && lc->jvmti->GetClassFields(gsCls, &fc, &pf) == JVMTI_ERROR_NONE) {
+      for (jint fi = 0; fi < fc && !kb; ++fi) {
+        char *fn = nullptr, *fs = nullptr;
+        if (lc->jvmti->GetFieldName(gsCls, pf[fi], &fn, &fs, nullptr) != JVMTI_ERROR_NONE)
+          continue;
+        std::string sig = fs ? fs : "";
+        bool isKbArr = sig.find("KeyBinding;") != std::string::npos || sig == "[Lavb;";
+        if (isKbArr) {
+          jobjectArray arr = (jobjectArray)env->GetObjectField(gs, pf[fi]);
+          if (env->ExceptionCheck()) env->ExceptionClear();
+          if (arr) {
+            jsize cnt = env->GetArrayLength(arr);
+            Logger::info("[TabKey] KB[] sig=%s len=%d", sig.c_str(), (int)cnt);
+            for (jsize i = 0; i < cnt && !kb; ++i) {
+              jobject k = env->GetObjectArrayElement(arr, i);
+              if (!k) continue;
+              jclass kc = env->GetObjectClass(k);
+              jfieldID f_desc = lc->FindFieldBySignature(kc, "Ljava/lang/String;");
+              env->DeleteLocalRef(kc);
+              bool match = false;
+              if (f_desc) {
+                jstring jd = (jstring)env->GetObjectField(k, f_desc);
+                if (jd) {
+                  const char *d = env->GetStringUTFChars(jd, nullptr);
+                  match = d && std::string(d) == "key.playerlist";
+                  if (d) env->ReleaseStringUTFChars(jd, d);
+                  env->DeleteLocalRef(jd);
+                }
+              }
+              if (match) kb = k;
+              else env->DeleteLocalRef(k);
+            }
+            env->DeleteLocalRef(arr);
+          }
+        }
+        if (fn) lc->jvmti->Deallocate((unsigned char *)fn);
+        if (fs) lc->jvmti->Deallocate((unsigned char *)fs);
+      }
+      if (pf) lc->jvmti->Deallocate((unsigned char *)pf);
+    }
+  }
+  env->DeleteLocalRef(gsCls);
+  env->DeleteLocalRef(gs);
+  if (!kb) { if (env->ExceptionCheck()) env->ExceptionClear(); Logger::info("[TabKey] keyBindPlayerList NOT FOUND (name+srg+array-desc) -> fallback"); return g_tabVK; }
+
+  jclass kbCls = env->GetObjectClass(kb);
+  jint lwjglCode = 0;
+  bool gotCode = false;
+  {
+    jint fc2 = 0; jfieldID *pf2 = nullptr;
+    if (lc->jvmti && lc->jvmti->GetClassFields(kbCls, &fc2, &pf2) == JVMTI_ERROR_NONE) {
+      int intSeen = 0;
+      for (jint fi = 0; fi < fc2; ++fi) {
+        char *fn = nullptr, *fs = nullptr;
+        if (lc->jvmti->GetFieldName(kbCls, pf2[fi], &fn, &fs, nullptr) != JVMTI_ERROR_NONE)
+          continue;
+        if (fs && std::string(fs) == "I") {
+          ++intSeen;
+          jint v = env->GetIntField(kb, pf2[fi]);
+          if (env->ExceptionCheck()) env->ExceptionClear();
+          Logger::info("[TabKey]   KeyBinding int#%d (%s) = %d",
+                       intSeen, fn ? fn : "?", (int)v);
+          if (intSeen == 2) { lwjglCode = v; gotCode = true; }  // keyCode
+        }
+        if (fn) lc->jvmti->Deallocate((unsigned char *)fn);
+        if (fs) lc->jvmti->Deallocate((unsigned char *)fs);
+      }
+      if (pf2) lc->jvmti->Deallocate((unsigned char *)pf2);
+    }
+  }
+  if (!gotCode) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    jmethodID m_code = lc->GetMethodID(kbCls, "getKeyCode", "()I", "func_151463_i", "", "");
+    if (m_code) { lwjglCode = env->CallIntMethod(kb, m_code); if (env->ExceptionCheck()) env->ExceptionClear(); else gotCode = true; }
+  }
+  jfieldID f_pressed = lc->FindFieldBySignature(kbCls, "Z");
+  if (f_pressed) {
+    if (g_tabKbGlobal) env->DeleteGlobalRef(g_tabKbGlobal);
+    g_tabKbGlobal = env->NewGlobalRef(kb);
+    g_tabPressedFid = f_pressed;
+  }
+  env->DeleteLocalRef(kbCls);
+  env->DeleteLocalRef(kb);
+  if (!gotCode) { Logger::info("[TabKey] keyCode read FAILED -> fallback"); return g_tabVK; }
+
+  if (lwjglCode > 0 && lwjglCode < 256) {
+    UINT mapped = MapVirtualKeyA((UINT)lwjglCode, MAPVK_VSC_TO_VK);
+    if (mapped != 0) {
+      g_tabScan = lwjglCode;
+      g_tabVK = (int)mapped;
+    }
+    Logger::info("[TabKey] READ OK lwjglCode=%d -> scan=0x%X vk=0x%X (mapped=%u)",
+                 (int)lwjglCode, g_tabScan, g_tabVK, mapped);
+  } else {
+    Logger::info("[TabKey] keyCode=%d OUT OF RANGE (wrong field/mapping) -> fallback VK=0x%X",
+                 (int)lwjglCode, g_tabVK);
+  }
+  return g_tabVK;
 }
 
 class FlagReleaser {
@@ -263,7 +421,7 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT uMsg, WPARAM wParam,
       }
     }
 
-    if (uMsg == WM_KEYDOWN && wParam == VK_TAB) {
+    if (uMsg == WM_KEYDOWN && (int)wParam == g_tabVK) {
       if (Config::isBetterTabModeEnabled() && OVson::isInHypixelGame() &&
           !OVson::isInPreGameLobby() && !OVson::isChatOpen()) {
         consume = true;
@@ -317,81 +475,156 @@ static void renderOverlayWorkBody(HDC hdc) {
     writeDebugLog(buf);
   }
 
-  if (Config::isMotionBlurEnabled()) {
-    float amount = Config::getMotionBlurAmount();
+  static Shader g_vectorBlurShader;
+  static bool g_vectorBlurInit = false;
+  if (!g_vectorBlurInit) {
+    const char* const VECTOR_BLUR_FRAGMENT_SHADER = 
+#include "../ClickGUI/Shaders/vector_blur_frag.glsl"
+    ;
+    const char* const VECTOR_BLUR_VERTEX_SHADER = 
+#include "../ClickGUI/Shaders/vector_blur_vert.glsl"
+    ;
+    if (g_vectorBlurShader.compile(VECTOR_BLUR_VERTEX_SHADER, VECTOR_BLUR_FRAGMENT_SHADER)) {
+      writeDebugLog("Vector blur shader compiled successfully");
+    } else {
+      writeDebugLog("Failed to compile vector blur shader");
+    }
+    g_vectorBlurInit = true;
+  }
+
+
+  if (Config::isMotionBlurEnabled() && !OVson::isChatOpen() && g_vectorBlurShader.getProgramId() != 0) {
+    float amount = Config::getMotionBlurAmount(); // 0.0 to 1.0
     if (amount > 0.01f) {
-      GLint viewport[4];
-      glGetIntegerv(GL_VIEWPORT, viewport);
-      int sw = viewport[2];
-      int sh = viewport[3];
-
-      static GLuint g_blurTex = 0;
-      static int    g_blurTexW = 0;
-      static int    g_blurTexH = 0;
-      static bool   g_blurHavePrev = false;
-
-      if (sw > 0 && sh > 0) {
-        if (!g_blurTex || g_blurTexW != sw || g_blurTexH != sh) {
-          if (g_blurTex) glDeleteTextures(1, &g_blurTex);
-          glGenTextures(1, &g_blurTex);
-          glBindTexture(GL_TEXTURE_2D, g_blurTex);
-          glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, sw, sh, 0,
-                       GL_RGB, GL_UNSIGNED_BYTE, nullptr);
-          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
-          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
-          g_blurTexW = sw;
-          g_blurTexH = sh;
-          g_blurHavePrev = false;
+      static float lastYaw = 0.0f;
+      static float lastPitch = 0.0f;
+      float currentYaw = 0.0f;
+      float currentPitch = 0.0f;
+      
+      bool hasRot = false;
+      SafeGuard::run("VectorBlurRot", [&]() {
+        if (lc) {
+          JNIEnv* env = lc->getEnv();
+          if (env) {
+            jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
+            if (mcCls) {
+              jobject mc = lc->GetStaticObjectField(mcCls, "theMinecraft", "Lnet/minecraft/client/Minecraft;", "field_71432_P", "S", "Lave;");
+              if (mc) {
+                jobject currentScreen = lc->GetObjectField(mc, "currentScreen", "Lnet/minecraft/client/gui/GuiScreen;", "field_71462_r", "m", "Laxu;");
+                if (currentScreen) {
+                  env->DeleteLocalRef(currentScreen);
+                  env->DeleteLocalRef(mc);
+                  return;
+                }
+                jobject player = lc->GetObjectField(mc, "thePlayer", "Lnet/minecraft/client/entity/EntityPlayerSP;", "field_71439_g", "h", "Lbew;");
+                if (player) {
+                  jclass entityCls = lc->GetClass("net.minecraft.entity.Entity");
+                  if (entityCls) {
+                    jfieldID yawFid = lc->GetFieldID(entityCls, "rotationYaw", "F", "field_70177_z", "y", "F");
+                    if (yawFid) currentYaw = env->GetFloatField(player, yawFid);
+                    
+                    jfieldID pitchFid = lc->GetFieldID(entityCls, "rotationPitch", "F", "field_70125_A", "z", "F");
+                    if (pitchFid) currentPitch = env->GetFloatField(player, pitchFid);
+                    
+                    hasRot = true;
+                  }
+                  env->DeleteLocalRef(player);
+                }
+                env->DeleteLocalRef(mc);
+              }
+            }
+          }
         }
+      });
+      
 
-        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT |
-                     GL_DEPTH_BUFFER_BIT | GL_TEXTURE_BIT |
-                     GL_TRANSFORM_BIT);
-        glDisable(GL_LIGHTING);
-        glDisable(GL_DEPTH_TEST);
-        glDepthMask(GL_FALSE);
-        glDisable(GL_CULL_FACE);
-        glDisable(GL_FOG);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      
+      if (hasRot) {
+        float deltaYaw = currentYaw - lastYaw;
+        float deltaPitch = currentPitch - lastPitch;
+        
+        while (deltaYaw > 180.0f) deltaYaw -= 360.0f;
+        while (deltaYaw < -180.0f) deltaYaw += 360.0f;
+        
+        lastYaw = currentYaw;
+        lastPitch = currentPitch;
+        
+        if (std::abs(deltaYaw) > 0.05f || std::abs(deltaPitch) > 0.05f) {
+          GLint viewport[4];
+          glGetIntegerv(GL_VIEWPORT, viewport);
+          int sw = viewport[2];
+          int sh = viewport[3];
 
-        glMatrixMode(GL_PROJECTION);
-        glPushMatrix();
-        glLoadIdentity();
-        glOrtho(0, sw, 0, sh, -1, 1);
-        glMatrixMode(GL_MODELVIEW);
-        glPushMatrix();
-        glLoadIdentity();
+          static GLuint g_blurTex = 0;
+          static int    g_blurTexW = 0;
+          static int    g_blurTexH = 0;
 
-        if (g_blurHavePrev) {
-          glEnable(GL_TEXTURE_2D);
-          glBindTexture(GL_TEXTURE_2D, g_blurTex);
-          float alpha = amount * 0.85f;
-          if (alpha > 0.92f) alpha = 0.92f;
-          glColor4f(1, 1, 1, alpha);
-          glBegin(GL_QUADS);
-          glTexCoord2f(0, 0); glVertex2f(0,  0);
-          glTexCoord2f(1, 0); glVertex2f((float)sw, 0);
-          glTexCoord2f(1, 1); glVertex2f((float)sw, (float)sh);
-          glTexCoord2f(0, 1); glVertex2f(0, (float)sh);
-          glEnd();
-          glBindTexture(GL_TEXTURE_2D, 0);
-          glDisable(GL_TEXTURE_2D);
+          if (sw > 0 && sh > 0) {
+            if (!g_blurTex || g_blurTexW != sw || g_blurTexH != sh) {
+              if (g_blurTex) glDeleteTextures(1, &g_blurTex);
+              glGenTextures(1, &g_blurTex);
+              glBindTexture(GL_TEXTURE_2D, g_blurTex);
+              glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, sw, sh, 0,
+                           GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+              glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+              glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+              glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+              glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+              g_blurTexW = sw;
+              g_blurTexH = sh;
+            }
+
+            glBindTexture(GL_TEXTURE_2D, g_blurTex);
+            glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, sw, sh);
+
+            glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT |
+                         GL_DEPTH_BUFFER_BIT | GL_TEXTURE_BIT |
+                         GL_TRANSFORM_BIT);
+            glDisable(GL_LIGHTING);
+            glDisable(GL_DEPTH_TEST);
+            glDepthMask(GL_FALSE);
+            glDisable(GL_CULL_FACE);
+            glDisable(GL_FOG);
+            glDisable(GL_BLEND);
+
+            glMatrixMode(GL_PROJECTION);
+            glPushMatrix();
+            glLoadIdentity();
+            glOrtho(0, sw, 0, sh, -1, 1);
+            glMatrixMode(GL_MODELVIEW);
+            glPushMatrix();
+            glLoadIdentity();
+
+            glEnable(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, g_blurTex);
+
+            g_vectorBlurShader.use();
+            g_vectorBlurShader.setUniform1i("u_texture", 0);
+            
+            float velX = -(deltaYaw / 90.0f) * amount * 2.5f;
+            float velY = (deltaPitch / 90.0f) * amount * 2.5f;
+            
+            g_vectorBlurShader.setUniform2f("u_velocity", velX, velY);
+            
+            glColor4f(1, 1, 1, 1);
+            glBegin(GL_QUADS);
+            glTexCoord2f(0, 0); glVertex2f(0,  0);
+            glTexCoord2f(1, 0); glVertex2f((float)sw, 0);
+            glTexCoord2f(1, 1); glVertex2f((float)sw, (float)sh);
+            glTexCoord2f(0, 1); glVertex2f(0, (float)sh);
+            glEnd();
+            
+            g_vectorBlurShader.unuse();
+
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glMatrixMode(GL_PROJECTION);
+            glPopMatrix();
+            glMatrixMode(GL_MODELVIEW);
+            glPopMatrix();
+            glDepthMask(GL_TRUE);
+            glPopAttrib();
+          }
         }
-
-        glBindTexture(GL_TEXTURE_2D, g_blurTex);
-        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, sw, sh);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        g_blurHavePrev = true;
-
-        glMatrixMode(GL_PROJECTION);
-        glPopMatrix();
-        glMatrixMode(GL_MODELVIEW);
-        glPopMatrix();
-        glDepthMask(GL_TRUE);
-        glPopAttrib();
       }
     }
   }
@@ -433,20 +666,22 @@ static void renderOverlayWorkBody(HDC hdc) {
                     OVson::isInHypixelGame() &&
                     !OVson::isInPreGameLobby() && !OVson::isChatOpen();
     HWND hwnd = WindowFromDC((HDC)hdc);
+    int tabVK = getPlayerListVK();
     if (hwnd && GetForegroundWindow() != hwnd) {
       physicalTab = false;
     } else {
-      physicalTab = (GetAsyncKeyState(VK_TAB) & 0x8000) != 0;
+      physicalTab = (GetAsyncKeyState(tabVK) & 0x8000) != 0;
     }
 
     static bool wasWantBetterTab = false;
     if (wantBetterTab != wasWantBetterTab) {
       if (hwnd && IsWindow(hwnd)) {
+        UINT scan = (UINT)g_tabScan;
         if (wantBetterTab) {
-          PostMessage(hwnd, WM_KEYUP, VK_TAB, 0xC00F0001);
+          PostMessage(hwnd, WM_KEYUP, tabVK, ((LPARAM)scan << 16) | 0xC0000001);
         } else {
           if (physicalTab) {
-            PostMessage(hwnd, WM_KEYDOWN, VK_TAB, 0x000F0001);
+            PostMessage(hwnd, WM_KEYDOWN, tabVK, ((LPARAM)scan << 16) | 0x00000001);
           }
         }
       }
@@ -454,7 +689,9 @@ static void renderOverlayWorkBody(HDC hdc) {
     }
   });
 
+  g_suppressVanillaTab.store(wantBetterTab && physicalTab);
   if (wantBetterTab && physicalTab) {
+    runSubsystem("BetterTab/suppressVanilla", []() { suppressVanillaTab(); });
     runSubsystem("BetterTab::render", [hdc]() {
       BetterTab::render((void *)hdc);
     });
@@ -510,6 +747,15 @@ BOOL WINAPI hookedSwapBuffers(HDC hdc) {
   }
 
   SafeGuard::installSehTranslator();
+
+  static bool s_glExtInitialized = false;
+  if (!s_glExtInitialized) {
+    initGLExtensions();
+    g_glUseProgram = (PFNGLUSEPROGRAMPROC_LOCAL)wglGetProcAddress("glUseProgram");
+    StatsOverlay::init();
+    Render::ClickGUI::init();
+    s_glExtInitialized = true;
+  }
 
   JNIEnv *env = (lc ? lc->getEnv() : nullptr);
   bool framePushed = false;
@@ -585,18 +831,6 @@ bool RenderHook::install() {
   Watchdog::start();
   writeDebugLog("Watchdog started");
 
-  StatsOverlay::init();
-  writeDebugLog("StatsOverlay initialized");
-
-  initGLExtensions();
-  Render::ClickGUI::init();
-
-  g_glUseProgram = (PFNGLUSEPROGRAMPROC_LOCAL)wglGetProcAddress("glUseProgram");
-  if (g_glUseProgram)
-    writeDebugLog("glUseProgram loaded successfully");
-  else
-    writeDebugLog("glUseProgram not supported/found");
-
   Render::NotificationManager::getInstance()->add(
       "System", "OVson Client loaded successfully!",
       Render::NotificationType::Success);
@@ -670,7 +904,7 @@ void RenderHook::uninstall() {
 }
 
 void RenderHook::poll() {
-  // not used when hook is active
+  if (g_suppressVanillaTab.load()) suppressVanillaTab();
 }
 
 void RenderHook::enqueueTask(std::function<void()> task) {

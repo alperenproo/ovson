@@ -1049,6 +1049,8 @@ void render(void *hdcPtr) {
     jobject npi;
     GLuint glTexId;
     int ping;
+    std::string lookupName;
+    bool hasRealName;
   };
   std::vector<Decorated> rows;
   bool activeMatch = OVson::isInHypixelGame() && !OVson::isInPreGameLobby();
@@ -1199,7 +1201,6 @@ void render(void *hdcPtr) {
                         }
                       }
 
-                      Hypixel::PlayerStats stats;
                       bool foundInMap = false;
                       {
                         std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
@@ -1215,7 +1216,6 @@ void render(void *hdcPtr) {
                           it = OVson::g_playerStatsMap.find(lowerName);
                         }
                         if (it != OVson::g_playerStatsMap.end()) {
-                          stats = it->second;
                           foundInMap = true;
                         }
                       }
@@ -1231,22 +1231,67 @@ void render(void *hdcPtr) {
                               cleanName.find(mapKey) != std::string::npos ||
                               mapKey.find(name) != std::string::npos ||
                               mapKey.find(cleanName) != std::string::npos) {
-                            stats = *cand.second;
                             foundInMap = true;
                             break;
                           }
                         }
                       }
 
-                      if (!foundInMap) {
+                      std::string lookupName = name;
+                      std::string lookupClean = cleanName;
+                      bool hasRealName = false;
+                      {
+                          std::lock_guard<std::mutex> nLock(OVson::g_nickMapMutex);
+                          auto nit = OVson::g_nickToRealMap.find(name);
+                          if (nit != OVson::g_nickToRealMap.end()) {
+                              lookupName = nit->second;
+                              lookupClean = lookupName; // simplified
+                              hasRealName = true;
+                          }
+                      }
+
+                      Hypixel::PlayerStats stats;
+                      bool foundInMapStat = false;
+                      {
+                        std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
+                        auto it = OVson::g_playerStatsMap.find(lookupName);
+                        if (it == OVson::g_playerStatsMap.end())
+                          it = OVson::g_playerStatsMap.find(lookupClean);
+                        if (it != OVson::g_playerStatsMap.end()) {
+                          stats = it->second;
+                          foundInMapStat = true;
+                        }
+                      }
+
+                      if (!foundInMapStat) {
                         std::lock_guard<std::mutex> lock(
                             OVson::g_pendingStatsMutex);
-                        auto pit = OVson::g_pendingStatsMap.find(name);
+                        auto pit = OVson::g_pendingStatsMap.find(lookupName);
                         if (pit == OVson::g_pendingStatsMap.end())
-                          pit = OVson::g_pendingStatsMap.find(cleanName);
+                          pit = OVson::g_pendingStatsMap.find(lookupClean);
                         if (pit != OVson::g_pendingStatsMap.end()) {
                           stats = pit->second;
-                          foundInMap = true;
+                          foundInMapStat = true;
+                        }
+                      }
+
+                      if (hasRealName && !foundInMapStat) {
+                        OVson::requestStatsForVisiblePlayer(lookupName);
+                      }
+
+                      if (hasRealName) {
+                        std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
+                        auto it = OVson::g_playerStatsMap.find(name);
+                        if (it == OVson::g_playerStatsMap.end())
+                          it = OVson::g_playerStatsMap.find(cleanName);
+                        if (it != OVson::g_playerStatsMap.end()) {
+                          if (!it->second.teamColor.empty()) {
+                            stats.teamColor = it->second.teamColor;
+                          }
+                          if (it->second.healthKnown) {
+                            stats.inGameHealth = it->second.inGameHealth;
+                            stats.healthKnown = true;
+                          }
                         }
                       }
 
@@ -1265,6 +1310,25 @@ void render(void *hdcPtr) {
                                   score, g_jc.m_getScorePoints);
                               if (ctx.env->ExceptionCheck())
                                 ctx.env->ExceptionClear();
+
+                              std::lock_guard<std::mutex> lock(
+                                  OVson::g_statsMutex);
+                              auto mit = OVson::g_playerStatsMap.find(lookupClean);
+                              if (mit == OVson::g_playerStatsMap.end())
+                                mit = OVson::g_playerStatsMap.find(lookupName);
+                              if (mit != OVson::g_playerStatsMap.end()) {
+                                mit->second.inGameHealth = stats.inGameHealth;
+                                mit->second.healthKnown = true;
+                              }
+                              if (hasRealName) {
+                                auto fit = OVson::g_playerStatsMap.find(cleanName);
+                                if (fit == OVson::g_playerStatsMap.end())
+                                  fit = OVson::g_playerStatsMap.find(name);
+                                if (fit != OVson::g_playerStatsMap.end()) {
+                                  fit->second.inGameHealth = stats.inGameHealth;
+                                  fit->second.healthKnown = true;
+                                }
+                              }
                             }
                             ctx.env->DeleteLocalRef(score);
                           }
@@ -1293,9 +1357,14 @@ void render(void *hdcPtr) {
                             ping = (int)v;
                         }
 
-                        rows.push_back({sortKeyFor(stats, sortMode), name,
+                        std::string finalDisplayName = name;
+                        if (hasRealName) {
+                            finalDisplayName = lookupName + " (" + name + ")";
+                        }
+
+                        rows.push_back({sortKeyFor(stats, sortMode), finalDisplayName,
                                         stats, ctx.env->NewLocalRef(npi), glTex,
-                                        ping});
+                                        ping, lookupName, hasRealName});
 
                         {
                           std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
@@ -1380,11 +1449,11 @@ void render(void *hdcPtr) {
     rows.push_back({1.0, "SweatyPro",
                     mkDemo("SweatyPro", 1250, 15000, 1000, 25000, 5000, 2500,
                            500, 1500, 200, 20, "Red"),
-                    nullptr, 0, 42});
+                    nullptr, 0, 42, "SweatyPro", false});
     rows.push_back({0.5, "CasualPlayer",
                     mkDemo("CasualPlayer", 45, 200, 150, 1200, 1000, 85, 100,
                            45, 120, 12, "Blue"),
-                    nullptr, 0, 87});
+                    nullptr, 0, 87, "CasualPlayer", false});
   }
 
   if (!rows.empty()) {
@@ -1430,7 +1499,7 @@ void render(void *hdcPtr) {
       activeIdx.push_back(i);
 
   auto cellFor = [](ColKey k, const Hypixel::PlayerStats &s,
-                    const std::string &name, int ping) -> Cell {
+                    const std::string &name, int ping, const std::string &lookupName, bool hasRealName) -> Cell {
     double fkdr = (s.bedwarsFinalDeaths == 0)
                       ? (double)s.bedwarsFinalKills
                       : (double)s.bedwarsFinalKills / s.bedwarsFinalDeaths;
@@ -1446,17 +1515,17 @@ void render(void *hdcPtr) {
 
     bool hasStats = s.isFetched;
     auto fmtStat = [&](int val) -> std::string {
-      return (hasStats && !s.isNicked) ? fmtCommas(val) : "-";
+      return (hasStats && (!s.isNicked || hasRealName)) ? fmtCommas(val) : "-";
     };
     auto fmtVal2 = [&](double val) -> std::string {
-      return (hasStats && !s.isNicked) ? fmt2(val) : "-";
+      return (hasStats && (!s.isNicked || hasRealName)) ? fmt2(val) : "-";
     };
     uint32_t defaultColor = hasStats ? 0xFFFFFFFF : 0xFFAAAAAA;
     switch (k) {
     case COL_HP:
       return {std::to_string(s.inGameHealth), hpToColor(s.inGameHealth)};
     case COL_STAR: {
-      if (s.isNicked)
+      if (s.isNicked && !hasRealName)
         return {"\xC2\xA7"
                 "4[NICKED]",
                 0xFFFFFFFF};
@@ -1467,7 +1536,7 @@ void render(void *hdcPtr) {
     }
     case COL_NAME: {
       std::string displayName = name;
-      if (Anticheat::isPlayerFlagged(name)) {
+      if (Anticheat::isPlayerFlagged(lookupName)) {
         displayName += " \xC2\xA7" "c\xE2\x9A\xA0"; // " §c⚠"
       }
       return {displayName, teamColorToRGB(s.teamColor)};
@@ -1547,7 +1616,7 @@ void render(void *hdcPtr) {
     rowCells[r].reserve(activeIdx.size());
     for (int idx : activeIdx)
       rowCells[r].push_back(
-          cellFor(cols[idx].key, rows[r].stats, rows[r].name, rows[r].ping));
+          cellFor(cols[idx].key, rows[r].stats, rows[r].name, rows[r].ping, rows[r].lookupName, rows[r].hasRealName));
   }
 
   for (size_t ci = 0; ci < activeIdx.size(); ++ci) {

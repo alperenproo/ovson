@@ -50,6 +50,19 @@ bool  s_isPingModeDropdownOpen = false;
 float s_pingModeDropdownAnim = 0.0f;
 bool  s_isColumnTargetDropdownOpen = false;
 float s_columnTargetDropdownAnim = 0.0f;
+bool  s_isSortColumnDropdownOpen = false;
+float s_sortColumnDropdownAnim = 0.0f;
+bool  s_isTabDisplayDropdownOpen = false;
+float s_tabDisplayDropdownAnim = 0.0f;
+
+float s_accentHue = 224.0f / 360.0f;  // spec navy default
+float s_accentSat = 0.90f;
+float s_accentVal = 0.96f;
+bool  s_accentDragSV = false;
+bool  s_accentDragHue = false;
+bool  s_accentInit = false;
+bool  s_chromaEnabled = false;
+float s_chromaSpeed = 60.0f;
 
 int   s_colorSelectedStat = 0;
 bool  s_colorPickerOpen = false;

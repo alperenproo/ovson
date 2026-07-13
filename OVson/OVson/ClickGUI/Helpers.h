@@ -1,6 +1,14 @@
 #pragma once
+#include <string>
+#include <cstdint>
 namespace Render {
 namespace ClickGUIHelpers {
+
+void drawSectionLabel(float x, float y, const std::string &text, float alpha);
+
+// Dropdown chevron centered at (cx,cy); points down, or up when open.
+void drawChevron(float cx, float cy, float s, bool open, uint32_t col,
+                 float alpha);
 
 void setMouseGrabbed(bool grabbed);
 
@@ -16,10 +24,15 @@ void drawThemePanel(float x, float y, float w, float h, float alpha);
 void drawThemeSidebar(float x, float y, float w, float h, float alpha);
 
 void drawThemeCard(float x, float y, float w, float h, bool hovered,
-                   float alpha);
+                   float alpha, bool active = false);
 
 void drawThemeButton(float x, float y, float w, float h, bool hovered,
                      bool pressed, float alpha);
+
+// Text input field (spec §2.8): inset background, hairline border that
+// becomes accent (a=0.5) when focused. Caller draws the text + cursor.
+void drawTextInput(float x, float y, float w, float h, bool focused,
+                   bool hovered, float alpha);
 
 void drawThemeTabIndicator(float x, float y, float w, float h, float alpha);
 
@@ -31,12 +44,15 @@ void drawThemeBackground(float screenW, float screenH, float alpha);
 namespace Render {
 using ClickGUIHelpers::setMouseGrabbed;
 using ClickGUIHelpers::isIngame;
+using ClickGUIHelpers::drawSectionLabel;
+using ClickGUIHelpers::drawChevron;
 using ClickGUIHelpers::drawSwitch;
 using ClickGUIHelpers::drawSlider;
 using ClickGUIHelpers::drawThemePanel;
 using ClickGUIHelpers::drawThemeSidebar;
 using ClickGUIHelpers::drawThemeCard;
 using ClickGUIHelpers::drawThemeButton;
+using ClickGUIHelpers::drawTextInput;
 using ClickGUIHelpers::drawThemeTabIndicator;
 using ClickGUIHelpers::drawThemeBackground;
 }

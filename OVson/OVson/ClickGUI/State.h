@@ -60,6 +60,21 @@ extern bool  s_isPingModeDropdownOpen;
 extern float s_pingModeDropdownAnim;
 extern bool  s_isColumnTargetDropdownOpen;
 extern float s_columnTargetDropdownAnim;
+extern bool  s_isSortColumnDropdownOpen;
+extern float s_sortColumnDropdownAnim;
+extern bool  s_isTabDisplayDropdownOpen;
+extern float s_tabDisplayDropdownAnim;
+
+// Accent colour picker (spec §3 / §4.5): accent stored as HSV, with a
+// rainbow/chroma cycle. Applied to Config accent (themeColor) live.
+extern float s_accentHue;     // 0..1
+extern float s_accentSat;     // 0..1
+extern float s_accentVal;     // 0..1
+extern bool  s_accentDragSV;
+extern bool  s_accentDragHue;
+extern bool  s_accentInit;
+extern bool  s_chromaEnabled;
+extern float s_chromaSpeed;   // degrees / second
 
 extern int   s_colorSelectedStat;
 extern bool  s_colorPickerOpen;

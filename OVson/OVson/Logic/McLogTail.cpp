@@ -44,7 +44,7 @@ std::vector<std::string> getLogDirectoryCandidates() {
   // Lunar
   std::string up = getUserProfileDir();
   if (!up.empty()) {
-    std::string lunar = up + "\\.lunarclient\\profiles\\lunar\\1.8\\logs";
+    std::string lunar = up + "\\.lunarclient\\profiles\\1.8\\logs";
     DWORD attr = GetFileAttributesA(lunar.c_str());
     if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY))
       candidates.push_back(lunar);

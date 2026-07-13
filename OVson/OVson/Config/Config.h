@@ -94,6 +94,10 @@ void setActiveTagService(const std::string &service);
 // ClickGUI visual theme: "LiquidGlass" (default) | "Minimal".
 const std::string &getClickGuiTheme();
 void setClickGuiTheme(const std::string &theme);
+const std::string &getClickGuiLayout();
+void setClickGuiLayout(const std::string &layout);
+const std::string &getLayoutBData();
+void setLayoutBData(const std::string &data);
 
 bool isLiquidGlassWiggleEnabled();
 void setLiquidGlassWiggleEnabled(bool enabled);

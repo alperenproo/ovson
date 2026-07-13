@@ -79,6 +79,10 @@ JCache g_jCache;
 
 std::unordered_map<std::string, Hypixel::PlayerStats> g_playerStatsMap;
 std::mutex g_statsMutex;
+
+std::unordered_map<std::string, std::string> g_nickToRealMap;
+std::mutex g_nickMapMutex;
+
 std::unordered_map<std::string, std::string> g_playerTeamColor;
 std::unordered_map<std::string, Hypixel::PlayerStats> g_pendingStatsMap;
 std::mutex g_pendingStatsMutex;
@@ -155,7 +159,9 @@ void clearAllCaches() {
   {
     NumberDenicker::onWorldChange();
     std::lock_guard<std::mutex> lock(g_statsMutex);
+    std::lock_guard<std::mutex> nLock(g_nickMapMutex);
     g_playerStatsMap.clear();
+    g_nickToRealMap.clear();
   }
   {
     std::lock_guard<std::mutex> lock(g_cacheMutex);

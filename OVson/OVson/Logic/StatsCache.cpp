@@ -156,8 +156,20 @@ void cleanupStaleStats() {
       bool isNicked = it->second.isNicked;
 
       if (g_inHypixelGame) {
-        if (isNicked && !found)
-          toPrune.push_back(it->first);
+        if (isNicked && !found) {
+            bool isRealName = false;
+            {
+                std::lock_guard<std::mutex> lockNick(OVson::g_nickMapMutex);
+                for (const auto &np : OVson::g_nickToRealMap) {
+                    if (np.second == it->first) {
+                        isRealName = true;
+                        break;
+                    }
+                }
+            }
+            if (!isRealName)
+                toPrune.push_back(it->first);
+        }
       } else {
         if (!found)
           toPrune.push_back(it->first);

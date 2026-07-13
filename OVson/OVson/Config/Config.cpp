@@ -35,7 +35,7 @@ static bool g_clickGuiOn = true;
 static bool g_notificationsEnabled = true;
 static bool g_autoGGEnabled = true;
 static std::string g_autoGGMessage = "gg";
-static DWORD g_themeColor = 0xFF0055A4;
+static DWORD g_themeColor = 0xFF3D6EF5;
 static bool g_motionBlurEnabled = false;
 static float g_motionBlurAmount = 0.5f;
 static bool g_nameTagsEnabled = true;
@@ -98,7 +98,9 @@ static bool g_tagsEnabled = false;
 static std::string g_activeTagService = "Urchin";
 static bool g_chatBypasserEnabled = false;
 // stored as a string for future
-static std::string g_clickGuiTheme = "LiquidGlass";
+static std::string g_clickGuiTheme = "Solid";
+static std::string g_clickGuiLayout = "A";
+static std::string g_layoutBData = "";
 static bool g_liquidGlassWiggle = true;
 static bool g_liquidGlassGlow = true;
 static float g_liquidGlassRefractStrength = 0.7f;
@@ -304,7 +306,7 @@ bool Config::initialize(HMODULE self) {
     g_autoGGMessage = "gg";
 
   if (!parseJsonUInt(all, "themeColor", g_themeColor))
-    g_themeColor = 0xFF0055A4;
+    g_themeColor = 0xFF3D6EF5;
 
   if (!parseJsonBool(all, "motionBlurEnabled", g_motionBlurEnabled))
     g_motionBlurEnabled = false;
@@ -362,7 +364,12 @@ bool Config::initialize(HMODULE self) {
   if (parseJsonLine(all, "clickGuiTheme", val))
     g_clickGuiTheme = val;
   else
-    g_clickGuiTheme = "LiquidGlass";
+    g_clickGuiTheme = "Solid";
+
+  if (parseJsonLine(all, "clickGuiLayout", val))
+    g_clickGuiLayout = val;
+  if (parseJsonLine(all, "layoutBData", val))
+    g_layoutBData = val;
 
   if (!parseJsonBool(all, "liquidGlassWiggle", g_liquidGlassWiggle))
     g_liquidGlassWiggle = true;
@@ -564,6 +571,8 @@ static bool saveImpl() {
       "  \"tagsEnabled\": %s,\n"
       "  \"activeTagService\": \"%s\",\n"
       "  \"clickGuiTheme\": \"%s\",\n"
+      "  \"clickGuiLayout\": \"%s\",\n"
+      "  \"layoutBData\": \"%s\",\n"
       "  \"liquidGlassWiggle\": %s,\n"
       "  \"liquidGlassGlow\": %s,\n"
       "  \"liquidGlassRefractStrength\": %.2f,\n"
@@ -629,6 +638,8 @@ static bool saveImpl() {
       g_seraphEnabled ? "true" : "false", g_seraphApiKey.c_str(),
       g_tagsEnabled ? "true" : "false", g_activeTagService.c_str(),
       g_clickGuiTheme.c_str(),
+      g_clickGuiLayout.c_str(),
+      g_layoutBData.c_str(),
       g_liquidGlassWiggle ? "true" : "false",
       g_liquidGlassGlow ? "true" : "false",
       g_liquidGlassRefractStrength,
@@ -900,6 +911,17 @@ void Config::setActiveTagService(const std::string &service) {
 const std::string &Config::getClickGuiTheme() { return g_clickGuiTheme; }
 void Config::setClickGuiTheme(const std::string &theme) {
   g_clickGuiTheme = theme;
+  save();
+}
+
+const std::string &Config::getClickGuiLayout() { return g_clickGuiLayout; }
+void Config::setClickGuiLayout(const std::string &layout) {
+  g_clickGuiLayout = layout;
+  save();
+}
+const std::string &Config::getLayoutBData() { return g_layoutBData; }
+void Config::setLayoutBData(const std::string &data) {
+  g_layoutBData = data;
   save();
 }
 

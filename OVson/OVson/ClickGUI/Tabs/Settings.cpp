@@ -27,67 +27,12 @@ void renderSettings(TabCtx &ctx) {
   const bool  clickEvent = ctx.clickEvent;
   const float alpha = ctx.alpha;
 
-  g_guiFont.drawString(cx, cy, "Configuration",
-                       applyAlpha(0xFFFFFFFF, alpha));
+  drawSectionLabel(cx, cy, "Configuration", alpha);
   cy += 38;
 
-  g_guiFont.drawString(cx, cy, "Interface Theme",
-                       applyAlpha(0xFFFFFFFF, alpha));
-  cy += 28;
-
-  {
-    struct ThemeChoice {
-      const char *id;        // config value
-      const char *label;
-      const char *blurb;
-      bool       isGlass;    // controls how the preview is drawn
-    };
-    const ThemeChoice themes[] = {
-      {"LiquidGlass", "Liquid Glass",
-       "Translucent panels, soft shadows, glow.", true},
-      {"Minimal", "Minimal",
-       "Flat, clean animated background pattern.", false},
-    };
-    const int kThemeCount =
-        (int)(sizeof(themes) / sizeof(themes[0]));
-    const std::string &current = Config::getClickGuiTheme();
-
-    float panelW = g_w - 200.0f;
-    float cardW  = (panelW - 16.0f) / kThemeCount;
-    float cardH  = 76.0f;
-    float baseX  = mainX + 190.0f;
-
-    for (int i = 0; i < kThemeCount; ++i) {
-      float cardX = baseX + i * (cardW + 16.0f);
-      bool selected = (current == themes[i].id);
-      bool hover    = isHovered(mx, my, cardX, cy, cardW, cardH);
-
-      glDisable(GL_TEXTURE_2D);
-      if (selected) {
-        RenderUtils::drawRoundedRect(cardX - 2, cy - 2, cardW + 4, cardH + 4,
-                                      14.0f,
-                                      applyAlpha(THEME_NAVY, 0.55f * alpha),
-                                      1.0f);
-      }
-      drawThemeCard(cardX, cy, cardW, cardH, hover || selected, alpha);
-      glEnable(GL_TEXTURE_2D);
-
-      float textX = cardX + 16.0f;
-      g_guiFont.drawString(textX, cy + 16.0f, themes[i].label,
-                           applyAlpha(0xFFFFFFFF, alpha));
-      g_guiFont.drawString(textX, cy + 36.0f, themes[i].blurb,
-                           applyAlpha(0xFFA0A0A5, alpha), 0.42f);
-
-      if (clickEvent && hover && !selected) {
-        Config::setClickGuiTheme(themes[i].id);
-        NotificationManager::getInstance()->add(
-            "Theme",
-            std::string("Switched to ") + themes[i].label,
-            NotificationType::Success);
-      }
-    }
-    cy += cardH + 30.0f;
-  }
+  // Theme is chosen from the sidebar-bottom segmented switcher now
+  // (see Render.cpp). Only the LiquidGlass-specific sub-options remain
+  // below, shown when Glass is selected.
 
   if (Config::getClickGuiTheme() == "LiquidGlass") {
     bool wiggleEnabled = Config::isLiquidGlassWiggleEnabled();
@@ -212,9 +157,7 @@ void renderSettings(TabCtx &ctx) {
   (void)hKeyBox;
 
   glDisable(GL_TEXTURE_2D);
-  drawThemeCard(keyX, cy, keyW, 35, s_typingApiKey || hKeyBox, alpha);
-  if (s_typingApiKey)
-    RenderUtils::drawRect(keyX, cy, 2, 35, ClickGUITheme::accent(), alpha);
+  drawTextInput(keyX, cy, keyW, 35, s_typingApiKey, hKeyBox, alpha);
   glEnable(GL_TEXTURE_2D);
 
   if (!s_typingApiKey)
@@ -250,9 +193,7 @@ void renderSettings(TabCtx &ctx) {
   cy += 25;
   bool hAuroraKey = isHovered(mx, my, keyX, cy, keyW, 35);
   glDisable(GL_TEXTURE_2D);
-  drawThemeCard(keyX, cy, keyW, 35, s_typingAuroraApiKey || hAuroraKey, alpha);
-  if (s_typingAuroraApiKey)
-    RenderUtils::drawRect(keyX, cy, 2, 35, ClickGUITheme::accent(), alpha);
+  drawTextInput(keyX, cy, keyW, 35, s_typingAuroraApiKey, hAuroraKey, alpha);
   glEnable(GL_TEXTURE_2D);
 
   if (!s_typingAuroraApiKey)
@@ -304,9 +245,8 @@ void renderSettings(TabCtx &ctx) {
 
   g_guiFont.drawString(cx + 10, cy + 6, pingModes[currentPingMode % 3],
                        applyAlpha(0xFFFFFFFF, alpha));
-  g_guiFont.drawString(cx + pDropW - 20, cy + 10,
-                       s_isPingModeDropdownOpen ? "-" : "+",
-                       applyAlpha(0xFFA0A0A5, alpha));
+  drawChevron(cx + pDropW - 16, cy + pDropH * 0.5f, 4.0f,
+              s_isPingModeDropdownOpen, 0xFFA0A0A5, alpha);
 
   if (clickEvent && hovPDrop)
     s_isPingModeDropdownOpen = !s_isPingModeDropdownOpen;
@@ -386,9 +326,7 @@ void renderSettings(TabCtx &ctx) {
   bool hGG = isHovered(mx, my, ggX, cy, ggW, 35);
 
   glDisable(GL_TEXTURE_2D);
-  drawThemeCard(ggX, cy, ggW, 35, s_typingAutoGG || hGG, alpha);
-  if (s_typingAutoGG)
-    RenderUtils::drawRect(ggX, cy, 2, 35, THEME_NAVY, alpha);
+  drawTextInput(ggX, cy, ggW, 35, s_typingAutoGG, hGG, alpha);
   glEnable(GL_TEXTURE_2D);
 
   if (s_autoGGInput.empty() && !s_typingAutoGG)

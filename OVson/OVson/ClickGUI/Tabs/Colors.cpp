@@ -30,8 +30,177 @@ void renderColors(TabCtx &ctx) {
   const bool  clickEvent = ctx.clickEvent;
   const float alpha = ctx.alpha;
 
-  g_guiFont.drawString(cx, cy, "Stat Color Ranges",
-                       applyAlpha(0xFFFFFFFF, alpha));
+  // ── Accent colour picker (spec §3 / §4.5) ──────────────────────
+  {
+    using namespace ClickGUITheme;
+    auto hsv32 = [](float h, float s, float v) -> uint32_t {
+      float h6 = h * 6.0f; int hi = (int)h6 % 6; float f = h6 - (int)h6;
+      float p = v*(1-s), q = v*(1-f*s), t = v*(1-(1-f)*s); float r,g,b;
+      switch (hi) { case 0: r=v;g=t;b=p;break; case 1: r=q;g=v;b=p;break;
+        case 2: r=p;g=v;b=t;break; case 3: r=p;g=q;b=v;break;
+        case 4: r=t;g=p;b=v;break; default: r=v;g=p;b=q;break; }
+      return 0xFF000000u | ((uint8_t)(r*255)<<16) | ((uint8_t)(g*255)<<8) | (uint8_t)(b*255);
+    };
+    auto rgbToHsv = [](uint32_t c, float &h, float &s, float &v) {
+      float rf=((c>>16)&0xFF)/255.0f, gf=((c>>8)&0xFF)/255.0f, bf=(c&0xFF)/255.0f;
+      float cmax = fmaxf(rf, fmaxf(gf,bf)), cmin = fminf(rf, fminf(gf,bf));
+      float d = cmax - cmin; v = cmax; s = cmax>0 ? d/cmax : 0; float hh=0;
+      if (d > 0.0001f) {
+        if (cmax==rf) hh = fmodf((gf-bf)/d, 6.0f);
+        else if (cmax==gf) hh = (bf-rf)/d + 2.0f;
+        else hh = (rf-gf)/d + 4.0f;
+        hh /= 6.0f; if (hh<0) hh += 1.0f;
+      }
+      h = hh;
+    };
+
+    if (!s_accentInit) {
+      rgbToHsv(Config::getThemeColor(), s_accentHue, s_accentSat, s_accentVal);
+      s_accentInit = true;
+    }
+
+    drawSectionLabel(cx, cy, "Accent Color", alpha);
+    cy += 26;
+
+    // Chroma cycle is updated globally inside ClickGUI::render
+
+    float svX = cx, svY = cy;
+    float svW = g_w - 230.0f; if (svW < 180.0f) svW = 180.0f;
+    float svH = 132.0f;
+    uint32_t hueTop = hsv32(s_accentHue, 1.0f, 1.0f);
+    float hr=((hueTop>>16)&0xFF)/255.0f, hg=((hueTop>>8)&0xFF)/255.0f, hb=(hueTop&0xFF)/255.0f;
+
+    glDisable(GL_TEXTURE_2D); glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); glShadeModel(GL_SMOOTH);
+    // L1: base hue fill.
+    glBegin(GL_QUADS);
+      glColor4f(hr,hg,hb,alpha); glVertex2f(svX,svY); glVertex2f(svX+svW,svY);
+      glVertex2f(svX+svW,svY+svH); glVertex2f(svX,svY+svH);
+    glEnd();
+    // L2: white horizontal (left a=1 -> right a=0).
+    glBegin(GL_QUADS);
+      glColor4f(1,1,1,alpha); glVertex2f(svX,svY); glVertex2f(svX,svY+svH);
+      glColor4f(1,1,1,0);     glVertex2f(svX+svW,svY+svH); glVertex2f(svX+svW,svY);
+    glEnd();
+    // L3: black vertical (top a=0 -> bottom a=1).
+    glBegin(GL_QUADS);
+      glColor4f(0,0,0,0);     glVertex2f(svX,svY); glVertex2f(svX+svW,svY);
+      glColor4f(0,0,0,alpha); glVertex2f(svX+svW,svY+svH); glVertex2f(svX,svY+svH);
+    glEnd();
+    // SV cursor.
+    float curX = svX + s_accentSat*svW, curY = svY + (1.0f-s_accentVal)*svH;
+    glShadeModel(GL_FLAT); glColor4f(1,1,1,alpha); glLineWidth(1.5f);
+    glBegin(GL_LINE_LOOP);
+    for (int a=0;a<18;++a){ float an=a*6.2831853f/18.0f;
+      glVertex2f(curX+cosf(an)*5, curY+sinf(an)*5); }
+    glEnd(); glLineWidth(1.0f);
+
+    bool changed = false;
+    if (isHovered(mx,my,svX,svY,svW,svH) && lClick) s_accentDragSV = true;
+    if (s_accentDragSV) {
+      if (lClick) {
+        s_accentSat = (mx-svX)/svW; s_accentVal = 1.0f-(my-svY)/svH;
+        s_accentSat = s_accentSat<0?0:(s_accentSat>1?1:s_accentSat);
+        s_accentVal = s_accentVal<0?0:(s_accentVal>1?1:s_accentVal);
+        changed = true;
+      } else s_accentDragSV = false;
+    }
+
+    // Hue strip (full width, 13px) with a 6-segment gradient.
+    float hueX = svX, hueY = svY + svH + 10.0f, hueW = svW, hueH = 13.0f;
+    const float stops[7][3] = {{1,0,0},{1,1,0},{0,1,0},{0,1,1},{0,0,1},{1,0,1},{1,0,0}};
+    glShadeModel(GL_SMOOTH);
+    for (int i=0;i<6;++i){
+      float x0=hueX+hueW*i/6.0f, x1=hueX+hueW*(i+1)/6.0f;
+      glBegin(GL_QUADS);
+        glColor4f(stops[i][0],stops[i][1],stops[i][2],alpha);     glVertex2f(x0,hueY);
+        glColor4f(stops[i+1][0],stops[i+1][1],stops[i+1][2],alpha); glVertex2f(x1,hueY);
+        glColor4f(stops[i+1][0],stops[i+1][1],stops[i+1][2],alpha); glVertex2f(x1,hueY+hueH);
+        glColor4f(stops[i][0],stops[i][1],stops[i][2],alpha);     glVertex2f(x0,hueY+hueH);
+      glEnd();
+    }
+    // Hue cursor.
+    float hCurX = hueX + s_accentHue*hueW;
+    glShadeModel(GL_FLAT); glColor4f(1,1,1,alpha); glLineWidth(1.5f);
+    glBegin(GL_LINE_LOOP);
+    for (int a=0;a<16;++a){ float an=a*6.2831853f/16.0f;
+      glVertex2f(hCurX+cosf(an)*5, hueY+hueH*0.5f+sinf(an)*5); }
+    glEnd(); glLineWidth(1.0f);
+    glEnable(GL_TEXTURE_2D);
+
+    if (isHovered(mx,my,hueX,hueY-4,hueW,hueH+8) && lClick && !s_accentDragSV)
+      s_accentDragHue = true;
+    if (s_accentDragHue) {
+      if (lClick) {
+        s_accentHue = (mx-hueX)/hueW;
+        s_accentHue = s_accentHue<0?0:(s_accentHue>0.9999f?0.9999f:s_accentHue);
+        changed = true;
+      } else s_accentDragHue = false;
+    }
+
+    cy = hueY + hueH + 16.0f;
+
+    // Swatch + hex.
+    uint32_t accCol = hsv32(s_accentHue, s_accentSat, s_accentVal);
+    glDisable(GL_TEXTURE_2D);
+    RenderUtils::drawRoundedRect(cx, cy, 26, 26, 8.0f, accCol, alpha);
+    glEnable(GL_TEXTURE_2D);
+    char accHex[12];
+    snprintf(accHex, sizeof(accHex), "#%02X%02X%02X",
+             (accCol>>16)&0xFF, (accCol>>8)&0xFF, accCol&0xFF);
+    g_guiFont.drawString(cx + 34, cy + 7, accHex, applyAlpha(0xFFFFFFFF, alpha), 0.46f);
+
+    // Presets (spec §3.6) — 30x30, gap 8.
+    const uint32_t presets[8] = {
+      0xFF3D6EF5, 0xFF19B0FF, 0xFF2EE6B8, 0xFF43E08B,
+      0xFF9B6BF5, 0xFFFA3EC0, 0xFFFF5436, 0xFFFFA319 };
+    float pX = cx + 150.0f, pY = cy - 2.0f;
+    for (int i=0;i<8;++i){
+      bool hP = isHovered(mx,my,pX,pY,30,30);
+      glDisable(GL_TEXTURE_2D);
+      if (accCol == presets[i] || hP)
+        RenderUtils::drawRoundedRect(pX-2,pY-2,34,34,8.0f,0xFFFFFFFF,
+                                     (accCol==presets[i]?0.9f:0.4f)*alpha);
+      RenderUtils::drawRoundedRect(pX,pY,30,30,8.0f,presets[i],alpha);
+      glEnable(GL_TEXTURE_2D);
+      if (clickEvent && hP) {
+        rgbToHsv(presets[i], s_accentHue, s_accentSat, s_accentVal);
+        changed = true;
+      }
+      pX += 38.0f;
+    }
+    cy += 40.0f;
+
+    // Chroma toggle + speed.
+    bool hChroma = isHovered(mx,my,cx,cy,16,16);
+    glDisable(GL_TEXTURE_2D);
+    drawSwitch(900, cx, cy, s_chromaEnabled, hChroma, alpha);
+    glEnable(GL_TEXTURE_2D);
+    g_guiFont.drawString(cx + 54, cy + 7, "Rainbow / Chroma",
+                         applyAlpha(0xFFFFFFFF, alpha), 0.44f);
+    bool hChromaCard = isHovered(mx,my,cx,cy,52,25);
+    if (clickEvent && hChromaCard) s_chromaEnabled = !s_chromaEnabled;
+    cy += 34.0f;
+    if (s_chromaEnabled) {
+      g_guiFont.drawString(cx, cy + 2, "Speed", applyAlpha(0xFFA0A0A5, alpha), 0.4f);
+      glDisable(GL_TEXTURE_2D);
+      drawSlider(901, cx + 50, cy, 150, 14, s_chromaSpeed, 10.0f, 180.0f,
+                 mx, my, lClick, alpha);
+      glEnable(GL_TEXTURE_2D);
+      char spB[16]; snprintf(spB, sizeof(spB), "%.0f/s", s_chromaSpeed);
+      g_guiFont.drawString(cx + 210, cy + 2, spB, applyAlpha(0xFFFFFFFF, alpha), 0.4f);
+      cy += 28.0f;
+    }
+
+    // Apply live + persist on change.
+    if (changed) {
+      Config::setThemeColor(hsv32(s_accentHue, s_accentSat, s_accentVal));
+      Config::save();
+    }
+    cy += 18.0f;
+  }
+
+  drawSectionLabel(cx, cy, "Stat Color Ranges", alpha);
   cy += 35;
 
   const int statCount = (int)StatColors::StatType::COUNT;
@@ -219,11 +388,13 @@ void renderColors(TabCtx &ctx) {
   float rstW = 140.0f;
   bool hRst = isHovered(mx, my, rstX, cy, rstW, 30);
   glDisable(GL_TEXTURE_2D);
+  DWORD rstCol = hRst ? 0xFF991111 : THEME_CARD;
+  float rstAlpha = (((rstCol >> 24) & 0xFF) / 255.0f) * alpha;
   if (ClickGUITheme::style() == ClickGUITheme::Style::LiquidGlass) {
     RenderUtils::drawRoundedRect(rstX, cy, rstW, 30, 5.0f, 0xFF0A0A12, 0.55f * alpha);
-    Render::LiquidGlass::drawRect(rstX, cy, rstW, 30, 5.0f, alpha, hRst ? 0xFF991111 : THEME_CARD);
+    Render::LiquidGlass::drawRect(rstX, cy, rstW, 30, 5.0f, alpha, rstCol);
   } else {
-    RenderUtils::drawRoundedRect(rstX, cy, rstW, 30, 5.0f, hRst ? 0xFF991111 : THEME_CARD, alpha);
+    RenderUtils::drawRoundedRect(rstX, cy, rstW, 30, 5.0f, rstCol, rstAlpha);
   }
   glEnable(GL_TEXTURE_2D);
   g_guiFont.drawString(rstX + 8, cy + 6, "Reset Defaults",

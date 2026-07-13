@@ -24,7 +24,17 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
   if (msg == WM_MOUSEWHEEL) {
     short delta = GET_WHEEL_DELTA_WPARAM(wParam);
-    s_targetScroll -= (float)delta * 0.5f;
+    if (Config::getClickGuiLayout() == "B") {
+      POINT pt;
+      GetCursorPos(&pt);
+      HWND hwnd = GetActiveWindow();
+      if (hwnd) {
+        ScreenToClient(hwnd, &pt);
+        ClickGUI::handleScrollB((float)pt.x, (float)pt.y, (int)delta);
+      }
+    } else {
+      s_targetScroll -= (float)delta * 0.5f;
+    }
     return;
   }
 

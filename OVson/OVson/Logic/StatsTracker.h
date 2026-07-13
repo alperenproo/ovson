@@ -12,7 +12,11 @@ namespace OVson {
 void initialize();
 void poll();
 
-void requestStatsForVisiblePlayer(const std::string &name);
+// forcedUuid: when known (e.g. a de-nicked player whose UUID we
+// already resolved), pass it so the fetch skips the Mojang
+// name->uuid lookup (which would otherwise rate-limit and fail).
+void requestStatsForVisiblePlayer(const std::string &name,
+                                  const std::string &forcedUuid = "");
 void shutdown();
 bool handleEnterKeyPress();
 
@@ -21,6 +25,9 @@ void setMode(int mode);
 
 extern std::unordered_map<std::string, Hypixel::PlayerStats> g_playerStatsMap;
 extern std::mutex g_statsMutex;
+
+extern std::unordered_map<std::string, std::string> g_nickToRealMap;
+extern std::mutex g_nickMapMutex;
 
 extern std::unordered_map<std::string, std::string> g_playerTeamColor;
 

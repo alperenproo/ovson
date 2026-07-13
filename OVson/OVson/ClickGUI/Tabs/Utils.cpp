@@ -29,7 +29,7 @@ void renderUtils(TabCtx &ctx) {
   drawThemeCard(mainX + 190, cy - 10, g_w - 210, 95, hCard, alpha);
   glEnable(GL_TEXTURE_2D);
 
-  g_guiFont.drawString(cx, cy, "Bed Defense", applyAlpha(0xFFFFFFFF, alpha));
+  drawSectionLabel(cx, cy, "Bed Defense", alpha);
 
   g_guiFont.drawString(cx, cy + 18,
                        "X-Ray style outlines for bed defense blocks",
@@ -105,7 +105,7 @@ void renderUtils(TabCtx &ctx) {
   }
   cy += 135;
 
-  g_guiFont.drawString(cx, cy, "Faster Stats", applyAlpha(0xFFFFFFFF, alpha));
+  drawSectionLabel(cx, cy, "Faster Stats", alpha);
   bool hNicked = isHovered(mx, my, mainX + 190, cy + 30, g_w - 210, 60);
   glDisable(GL_TEXTURE_2D);
   drawThemeCard(mainX + 190, cy + 30, g_w - 210, 60, hNicked, alpha);
@@ -140,18 +140,23 @@ void renderUtils(TabCtx &ctx) {
 
   glEnable(GL_TEXTURE_2D);
   g_guiFont.drawString(cx, cy + 40, "Replay Report Spammer",
-                       applyAlpha(0xFFFFFFFF, alpha));
+                       applyAlpha(0xFF808085, alpha));
   g_guiFont.drawString(cx, cy + 58,
-                       "Auto reporting for cheating (requires Anvil menu)",
+                       "Disabled",
                        applyAlpha(0xFFA0A0A5, alpha));
 
-  bool replaySpammer = Utils::ReplaySpammer::getInstance().isEnabled();
+  // Replay spammer is disabled: force it off if it was on, and render the
+  // switch as a dimmed, non-interactive OFF so it can't be toggled on.
+  if (Utils::ReplaySpammer::getInstance().isEnabled())
+    Utils::ReplaySpammer::getInstance().toggle();
   glDisable(GL_TEXTURE_2D);
   float replaySwX = mainX + g_w - 65;
-  drawSwitch(21, replaySwX, cy + 40, replaySpammer, hReplay, alpha);
+  drawSwitch(21, replaySwX, cy + 40, false, false, alpha * 0.4f);
   glEnable(GL_TEXTURE_2D);
   if (clickEvent && hReplay) {
-    Utils::ReplaySpammer::getInstance().toggle();
+    NotificationManager::getInstance()->add(
+        "Utils", "Replay Spammer is disabled",
+        NotificationType::Warning);
   }
   cy += 110;
 
@@ -165,7 +170,7 @@ void renderUtils(TabCtx &ctx) {
   g_guiFont.drawString(cx, cy + 40, "Number Denicker",
                        applyAlpha(0xFFFFFFFF, alpha));
   g_guiFont.drawString(cx, cy + 58,
-                       "Reveal nicks via game statistics (Powered by Aurora)",
+                       "Reveal nicks via game statistics",
                        applyAlpha(0xFFA0A0A5, alpha));
 
   bool denickEnabled = Config::isNumberDenickerEnabled();
@@ -186,8 +191,9 @@ void renderUtils(TabCtx &ctx) {
   }
   cy += 110;
 
-  g_guiFont.drawString(cx, cy, "Anticheat", applyAlpha(0xFFFFFFFF, alpha));
-  const float acCardH = 222.0f;
+
+  drawSectionLabel(cx, cy, "Anticheat", alpha);
+  const float acCardH = 262.0f;
   bool hAc = isHovered(mx, my, mainX + 190, cy + 30, g_w - 210, acCardH);
   glDisable(GL_TEXTURE_2D);
   drawThemeCard(mainX + 190, cy + 30, g_w - 210, acCardH, hAc, alpha);
@@ -232,8 +238,8 @@ void renderUtils(TabCtx &ctx) {
       {"Check Self", &Config::isAnticheatCheckSelfEnabled,
        &Config::setAnticheatCheckSelfEnabled, 46},
   };
-  const float subStartY = cy + 78;
-  const float subRowH = 22.0f;
+  const float subStartY = cy + 84;
+  const float subRowH = 32.0f;
   for (size_t i = 0; i < sizeof(kSubs) / sizeof(kSubs[0]); ++i) {
     float ry = subStartY + (float)i * subRowH;
     bool hSub = hAc && my >= ry - 2 && my < ry + subRowH - 2;

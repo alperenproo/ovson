@@ -77,9 +77,8 @@ void renderTags(TabCtx &ctx) {
 
     g_guiFont.drawString(cx + 10, cy + 6, currentService,
                          applyAlpha(0xFFFFFFFF, alpha));
-    g_guiFont.drawString(cx + dropW - 20, cy + 10,
-                         s_isTagsDropdownOpen ? "-" : "+",
-                         applyAlpha(0xFFA0A0A5, alpha));
+    drawChevron(cx + dropW - 16, cy + dropH * 0.5f, 4.0f,
+                s_isTagsDropdownOpen, 0xFFA0A0A5, alpha);
 
     if (clickEvent && hovDrop) {
       s_isTagsDropdownOpen = !s_isTagsDropdownOpen;
@@ -117,9 +116,8 @@ void renderTags(TabCtx &ctx) {
                          applyAlpha(0xFFA0A0A5, alpha));
     cy += 20;
     glDisable(GL_TEXTURE_2D);
-    drawThemeCard(cx, cy, 100, 35, s_typingPrefix || isHovered(mx, my, cx, cy, 100, 35), alpha);
-    if (s_typingPrefix)
-      RenderUtils::drawRect(cx, cy, 2, 35, THEME_NAVY, alpha);
+    drawTextInput(cx, cy, 100, 35, s_typingPrefix,
+                  isHovered(mx, my, cx, cy, 100, 35), alpha);
     glEnable(GL_TEXTURE_2D);
 
     std::string dispPrefix =
@@ -145,9 +143,8 @@ void renderTags(TabCtx &ctx) {
                          applyAlpha(0xFFA0A0A5, alpha));
     cy += 20;
     glDisable(GL_TEXTURE_2D);
-    drawThemeCard(cx, cy, 350, 35, s_typingUrchinKey || isHovered(mx, my, cx, cy, 350, 35), alpha);
-    if (s_typingUrchinKey)
-      RenderUtils::drawRect(cx, cy, 2, 35, THEME_NAVY, alpha);
+    drawTextInput(cx, cy, 350, 35, s_typingUrchinKey,
+                  isHovered(mx, my, cx, cy, 350, 35), alpha);
     glEnable(GL_TEXTURE_2D);
 
     std::string dispUrchinKey =
@@ -174,9 +171,8 @@ void renderTags(TabCtx &ctx) {
                          applyAlpha(0xFFA0A0A5, alpha));
     cy += 20;
     glDisable(GL_TEXTURE_2D);
-    drawThemeCard(cx, cy, 350, 35, s_typingSeraphKey || isHovered(mx, my, cx, cy, 350, 35), alpha);
-    if (s_typingSeraphKey)
-      RenderUtils::drawRect(cx, cy, 2, 35, THEME_NAVY, alpha);
+    drawTextInput(cx, cy, 350, 35, s_typingSeraphKey,
+                  isHovered(mx, my, cx, cy, 350, 35), alpha);
     glEnable(GL_TEXTURE_2D);
 
     std::string dispSeraphKey =

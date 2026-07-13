@@ -12,6 +12,7 @@ public:
   static void toggle();
   static void updateInput(HWND hwnd);
   static void handleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
+  static void handleScrollB(float mx, float my, int delta);
   static std::string getKeyName(int vk);
 };
 } // namespace Render

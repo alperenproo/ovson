@@ -1248,7 +1248,7 @@ void updateTabListStats() {
                   };
 
                   if (dMode == "fk")
-                    fullTabString += fullTabString +=
+                    fullTabString +=
                         StatColors::getMcColor(
                             StatColors::StatType::FinalKills,
                             (double)stats.bedwarsFinalKills) +

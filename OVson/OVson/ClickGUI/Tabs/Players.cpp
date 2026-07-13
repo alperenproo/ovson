@@ -36,10 +36,7 @@ void renderPlayers(TabCtx &ctx) {
   float searchX = mainX + 186;
   bool hSearch = isHovered(mx, my, searchX, cy, searchW, searchH);
   glDisable(GL_TEXTURE_2D);
-  drawThemeCard(searchX, cy, searchW, searchH, hSearch || s_typingSearch, alpha);
-  if (s_typingSearch)
-    RenderUtils::drawRoundedOutline(searchX, cy, searchW, searchH, 8.0f, 1.5f,
-                                    THEME_NAVY, 0.8f * alpha);
+  drawTextInput(searchX, cy, searchW, searchH, s_typingSearch, hSearch, alpha);
   glEnable(GL_TEXTURE_2D);
 
   std::string dispSearch = s_playerSearch;

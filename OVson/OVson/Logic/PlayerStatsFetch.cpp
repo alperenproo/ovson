@@ -37,7 +37,8 @@ static const int MAX_CONCURRENT_FETCHES = 15;
 static std::mutex g_renderRequestMutex;
 static std::unordered_map<std::string, ULONGLONG> g_renderRequestLast;
 
-void requestStatsForVisiblePlayer(const std::string &name) {
+void requestStatsForVisiblePlayer(const std::string &name,
+                                  const std::string &forcedUuid) {
   if (name.empty() || name.length() > 16) return;
   for (char c : name) {
     if (!isalnum((unsigned char)c) && c != '_') return;
@@ -54,7 +55,10 @@ void requestStatsForVisiblePlayer(const std::string &name) {
       return;
     g_renderRequestLast[name] = now;
   }
-  std::thread(fetchWorker, name, std::string("")).detach();
+  // Pass the known UUID through so the worker skips the Mojang
+  // name->uuid step (avoids a second rate-limited lookup for
+  // de-nicked players).
+  std::thread(fetchWorker, name, forcedUuid).detach();
 }
 
 void fetchWorker(std::string name, std::string forcedUuid) {
@@ -454,7 +458,22 @@ void processPendingStats() {
       break;
     }
   }
-  if (!online && !forceOutput)
+  // A de-nicked player's REAL name is never in g_onlinePlayers (tab
+  // shows the nick), so without this it would be dropped here —
+  // erased from pending but never written to the stats map — making
+  // its stats flicker in and out. Treat real names like online
+  // players so their fetched stats persist.
+  bool isRealName = false;
+  if (!online) {
+    std::lock_guard<std::mutex> lockNick(g_nickMapMutex);
+    for (const auto &np : g_nickToRealMap) {
+      if (np.second == name) {
+        isRealName = true;
+        break;
+      }
+    }
+  }
+  if (!online && !forceOutput && !isRealName)
     return;
 
   double fkdr =

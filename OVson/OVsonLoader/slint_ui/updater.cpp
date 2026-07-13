@@ -15,7 +15,7 @@
 
 namespace Updater {
 
-const char *kBuildVersion = "3.0.2";
+const char *kBuildVersion = "3.0.3";
 
 const char *kRepoOwner    = "alperenproo";
 const char *kRepoName     = "ovson";

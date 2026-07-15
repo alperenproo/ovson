@@ -1,6 +1,6 @@
 # OVson
 
-A lot changed but im too lazy to update this readme file just try it and see. dont use auto replay spammer u will get banned. REPORT THE BUGS, DUMP FILES, CRASHES TO alperen1912 ON DISCORD IF YOU WANT THIS SHIT TO GET BETTER. I BEG YOU. update soon in 3 days. a lot of fixes are coming
+A lot changed but im too lazy to update this readme file just try it and see. REPORT THE BUGS, DUMP FILES, CRASHES TO alperen1912 ON DISCORD IF YOU WANT THIS SHIT TO GET BETTER. I BEG YOU. defender flagging it will be fixed soon.
 
 
 ## Features

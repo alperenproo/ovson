@@ -10,6 +10,7 @@
 #include "../Utils/Logger.h"
 #include "../Utils/Timer.h"
 #include "../Utils/Anticheat/Anticheat.h"
+#include "../ClickGUI/ClickGUI.h"
 #include <GL/gl.h>
 #include <algorithm>
 #include <iomanip>
@@ -23,6 +24,130 @@
 #include <vector>
 
 namespace BetterTab {
+
+static bool g_resizeMode = false;
+static bool g_draggingTab = false;
+static bool g_resizingTab = false;
+static float g_dragOffsetX = 0.0f;
+static float g_dragOffsetY = 0.0f;
+static float g_hoverScaleSize = 10.0f; // size of the corner draggable area
+static int g_mouseX = 0;
+static int g_mouseY = 0;
+
+static float g_currentBoxWidth = 0.0f;
+static float g_currentBoxHeight = 0.0f;
+static float g_lastScaleFactor = 2.0f;
+static float g_lastScaledWidth = 1920.0f;
+static float g_lastScaledHeight = 1080.0f;
+
+bool isResizeMode() { return g_resizeMode; }
+void setResizeMode(bool resize) { 
+  g_resizeMode = resize; 
+  if (resize) {
+    ShowCursor(TRUE);
+    Render::ClickGUI::setOpen(false);
+  } else {
+    ShowCursor(FALSE);
+  }
+}
+
+static int hitTestCorner(float mx, float my, float bx, float by, float bw, float bh, float hs) {
+  if (mx >= bx - hs && mx <= bx + hs && my >= by - hs && my <= by + hs) return 0;
+  if (mx >= bx + bw - hs && mx <= bx + bw + hs && my >= by - hs && my <= by + hs) return 1;
+  if (mx >= bx - hs && mx <= bx + hs && my >= by + bh - hs && my <= by + bh + hs) return 2;
+  if (mx >= bx + bw - hs && mx <= bx + bw + hs && my >= by + bh - hs && my <= by + bh + hs) return 3;
+  return -1;
+}
+
+static void updateCursorForCorner(int corner) {
+  if (corner == 0 || corner == 3)
+    SetCursor(LoadCursor(NULL, IDC_SIZENWSE));
+  else if (corner == 1 || corner == 2)
+    SetCursor(LoadCursor(NULL, IDC_SIZENESW));
+  else
+    SetCursor(LoadCursor(NULL, IDC_ARROW));
+}
+
+void handleMouseClick(int btn, int state, int x, int y) {
+  float mx = (float)x / g_lastScaleFactor;
+  float my = (float)y / g_lastScaleFactor;
+  g_mouseX = (int)mx;
+  g_mouseY = (int)my;
+  if (!g_resizeMode || btn != 0) return;
+
+  float startX = Config::getBetterTabX();
+  if (startX < 0.0f)
+    startX = std::floor((g_lastScaledWidth - g_currentBoxWidth * Config::getBetterTabScale()) / 2.0f);
+  float startY = Config::getBetterTabY();
+  if (startY < 0.0f) startY = 15.0f;
+  float scale  = Config::getBetterTabScale();
+  float scaledBoxW = g_currentBoxWidth  * scale;
+  float scaledBoxH = g_currentBoxHeight * scale;
+
+  if (state == 1) { // mouse down
+    float doneBtnW = 50.0f, doneBtnH = 16.0f;
+    float btnGap = 6.0f;
+    float resetBtnW = 50.0f, resetBtnH = 16.0f;
+    float totalW = doneBtnW + btnGap + resetBtnW;
+    float doneBtnX = startX + scaledBoxW / 2.0f - totalW / 2.0f;
+    float doneBtnY = startY + scaledBoxH + 14.0f;
+    float resetBtnX = doneBtnX + doneBtnW + btnGap;
+    float resetBtnY = doneBtnY;
+
+    if (mx >= doneBtnX && mx <= doneBtnX + doneBtnW &&
+        my >= doneBtnY && my <= doneBtnY + doneBtnH) {
+      setResizeMode(false);
+      return;
+    }
+    if (mx >= resetBtnX && mx <= resetBtnX + resetBtnW &&
+        my >= resetBtnY && my <= resetBtnY + resetBtnH) {
+      Config::setBetterTabX(-1.0f);
+      Config::setBetterTabY(-1.0f);
+      Config::setBetterTabScale(1.0f);
+      return;
+    }
+    float hs = g_hoverScaleSize;
+    int corner = hitTestCorner(mx, my, startX, startY, scaledBoxW, scaledBoxH, hs);
+    if (corner >= 0) {
+      g_resizingTab = true;
+    }
+  } else { // mouse up
+    g_resizingTab = false;
+  }
+}
+
+void handleMouseMove(int x, int y) {
+  float mx = (float)x / g_lastScaleFactor;
+  float my = (float)y / g_lastScaleFactor;
+  g_mouseX = (int)mx;
+  g_mouseY = (int)my;
+  if (!g_resizeMode) return;
+
+  float startX = Config::getBetterTabX();
+  if (startX < 0.0f)
+    startX = std::floor((g_lastScaledWidth - g_currentBoxWidth * Config::getBetterTabScale()) / 2.0f);
+  float startY = Config::getBetterTabY();
+  if (startY < 0.0f) startY = 15.0f;
+  float scale  = Config::getBetterTabScale();
+  float scaledBoxW = g_currentBoxWidth  * scale;
+  float scaledBoxH = g_currentBoxHeight * scale;
+
+  if (g_resizingTab) {
+    float centerX = startX + scaledBoxW / 2.0f;
+    float distX = std::abs(mx - centerX);
+    if (g_currentBoxWidth > 0.0f) {
+      float newScale = (distX * 2.0f) / g_currentBoxWidth;
+      if (newScale < 0.5f) newScale = 0.5f;
+      if (newScale > 3.0f) newScale = 3.0f;
+      Config::setBetterTabScale(newScale);
+    }
+  } else {
+    float hs = g_hoverScaleSize;
+    int corner = hitTestCorner(mx, my, startX, startY, scaledBoxW, scaledBoxH, hs);
+    updateCursorForCorner(corner);
+  }
+}
+
 
 struct JCache {
   bool initialized = false;
@@ -1029,6 +1154,9 @@ void render(void *hdcPtr) {
   }
   float scaledWidth = screenWidth / scaleFactor;
   float scaledHeight = screenHeight / scaleFactor;
+  g_lastScaleFactor = (float)scaleFactor;
+  g_lastScaledWidth = scaledWidth;
+  g_lastScaledHeight = scaledHeight;
 
   static bool loggedOnce = false;
   if (!loggedOnce) {
@@ -1336,7 +1464,7 @@ void render(void *hdcPtr) {
                         }
                       }
 
-                      if (!(activeMatch && stats.inGameHealth <= 0)) {
+                      if (!(activeMatch && stats.inGameHealth <= 0 && !stats.isFetched)) {
                         GLuint glTex =
                             cacheLookupOrFetch(ctx.env, tmForRows, npi, name);
 
@@ -1427,7 +1555,7 @@ void render(void *hdcPtr) {
   if (scoreboard)
     ctx.env->DeleteLocalRef(scoreboard);
 
-  if (rows.empty() && Config::isGlobalDebugEnabled()) {
+  if (rows.empty() && (Config::isGlobalDebugEnabled() || g_resizeMode)) {
     auto mkDemo = [](const std::string &n, int star, int fk, int fd, int k,
                      int d, int bb, int bl, int w, int l, int hp,
                      const std::string &team) {
@@ -1703,8 +1831,19 @@ void render(void *hdcPtr) {
   if (!footerLines.empty())
     boxHeight += std::floor((footerLines.size() * rowHeight) + 6.0f);
 
-  float startX = std::floor((scaledWidth - boxWidth) / 2.0f);
-  float startY = 15.0f;
+  float startX = Config::getBetterTabX();
+  float startY = Config::getBetterTabY();
+  float scale = Config::getBetterTabScale();
+  
+  if (startX < 0.0f) {
+      startX = std::floor((scaledWidth - (boxWidth * scale)) / 2.0f);
+  }
+  if (startY < 0.0f) {
+      startY = 15.0f;
+  }
+
+  g_currentBoxWidth = boxWidth;
+  g_currentBoxHeight = boxHeight;
 
   GlGuard::GlAttribGuard _gAttrib(GL_ALL_ATTRIB_BITS);
   glViewport(0, 0, (GLint)screenWidth, (GLint)screenHeight);
@@ -1713,6 +1852,24 @@ void render(void *hdcPtr) {
   glOrtho(0, scaledWidth, scaledHeight, 0, -1, 1);
   GlGuard::GlMatrixGuard _gMv(GL_MODELVIEW);
   glLoadIdentity();
+  
+  if (g_resizeMode) {
+      glDisable(GL_TEXTURE_2D);
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      glColor4f(0.0f, 0.0f, 0.0f, 0.7f);
+      glBegin(GL_QUADS);
+      glVertex2f(0, 0);
+      glVertex2f(0, scaledHeight);
+      glVertex2f(scaledWidth, scaledHeight);
+      glVertex2f(scaledWidth, 0);
+      glEnd();
+      glEnable(GL_TEXTURE_2D);
+  }
+
+  glTranslatef(startX, startY, 0.0f);
+  glScalef(scale, scale, 1.0f);
+  glTranslatef(-startX, -startY, 0.0f);
 
   GLboolean wasTexture2D = glIsEnabled(GL_TEXTURE_2D);
   GLboolean wasBlend = glIsEnabled(GL_BLEND);
@@ -1811,6 +1968,78 @@ void render(void *hdcPtr) {
   else
     glDisable(GL_LIGHTING);
   glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+
+  if (g_resizeMode) {
+      glMatrixMode(GL_MODELVIEW);
+      glLoadIdentity();
+      
+      std::string instr = "DRAG CORNER TO RESIZE";
+      int instrW = measure(ctx, instr);
+      drawString(ctx, instr, (scaledWidth - instrW) / 2.0f, 3.0f, 0xFFFFAA00);
+      
+      float scaledBoxW = boxWidth * scale;
+      float scaledBoxH = boxHeight * scale;
+      glDisable(GL_TEXTURE_2D);
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+      
+      float ts = 10.0f; // triangle size
+      glColor4f(1.0f, 1.0f, 1.0f, 0.5f);
+      glBegin(GL_TRIANGLES);
+      glVertex2f(startX + scaledBoxW, startY + scaledBoxH);
+      glVertex2f(startX + scaledBoxW - ts, startY + scaledBoxH);
+      glVertex2f(startX + scaledBoxW, startY + scaledBoxH - ts);
+      glEnd();
+      glBegin(GL_TRIANGLES);
+      glVertex2f(startX, startY + scaledBoxH);
+      glVertex2f(startX + ts, startY + scaledBoxH);
+      glVertex2f(startX, startY + scaledBoxH - ts);
+      glEnd();
+      glBegin(GL_TRIANGLES);
+      glVertex2f(startX + scaledBoxW, startY);
+      glVertex2f(startX + scaledBoxW - ts, startY);
+      glVertex2f(startX + scaledBoxW, startY + ts);
+      glEnd();
+      glBegin(GL_TRIANGLES);
+      glVertex2f(startX, startY);
+      glVertex2f(startX + ts, startY);
+      glVertex2f(startX, startY + ts);
+      glEnd();
+      
+      float doneBtnW = 50.0f, doneBtnH = 16.0f;
+      float btnGap = 6.0f;
+      float resetBtnW = 50.0f, resetBtnH = 16.0f;
+      float totalW = doneBtnW + btnGap + resetBtnW;
+      float doneBtnX = startX + scaledBoxW / 2.0f - totalW / 2.0f;
+      float doneBtnY = startY + scaledBoxH + 14.0f;
+      float resetBtnX = doneBtnX + doneBtnW + btnGap;
+      float resetBtnY = doneBtnY;
+      
+      glColor4f(0.15f, 0.65f, 0.15f, 0.85f);
+      glBegin(GL_QUADS);
+      glVertex2f(doneBtnX, doneBtnY);
+      glVertex2f(doneBtnX, doneBtnY + doneBtnH);
+      glVertex2f(doneBtnX + doneBtnW, doneBtnY + doneBtnH);
+      glVertex2f(doneBtnX + doneBtnW, doneBtnY);
+      glEnd();
+      
+      glColor4f(0.6f, 0.15f, 0.15f, 0.85f);
+      glBegin(GL_QUADS);
+      glVertex2f(resetBtnX, resetBtnY);
+      glVertex2f(resetBtnX, resetBtnY + resetBtnH);
+      glVertex2f(resetBtnX + resetBtnW, resetBtnY + resetBtnH);
+      glVertex2f(resetBtnX + resetBtnW, resetBtnY);
+      glEnd();
+      
+      glEnable(GL_TEXTURE_2D);
+      std::string doneTxt = "Done";
+      int dw = measure(ctx, doneTxt);
+      drawString(ctx, doneTxt, doneBtnX + (doneBtnW - dw) / 2.0f, doneBtnY + 4.0f, 0xFFFFFFFF);
+      
+      std::string resetTxt = "Reset";
+      int rw = measure(ctx, resetTxt);
+      drawString(ctx, resetTxt, resetBtnX + (resetBtnW - rw) / 2.0f, resetBtnY + 4.0f, 0xFFFFFFFF);
+  }
 
   // _gMv / _gPr / _gAttrib unwind here automatically.
 

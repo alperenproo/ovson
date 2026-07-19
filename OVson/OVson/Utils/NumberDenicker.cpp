@@ -138,17 +138,6 @@ static void InitiateResolutionTask(const std::string &statType,
       if (!currentLine.empty())
         snippets.push_back(currentLine);
 
-      if (!snippets.empty()) {
-        ChatSDK::showPrefixed("\xA7"
-                              "aPossible " +
-                              taskType + " origins:");
-        for (const auto &s : snippets) {
-          ChatSDK::showPrefixed(" \xA7"
-                                "7> " +
-                                s);
-        }
-      }
-
       {
         std::lock_guard<std::mutex> lock(s_trackerMutex);
         auto it = s_activeTrackers.find(taskAlias);

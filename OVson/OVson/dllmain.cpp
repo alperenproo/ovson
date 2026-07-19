@@ -19,6 +19,9 @@
 #include "Config/Config.h"
 #include "Render/RenderHook.h"
 #include "Render/TextureLoader.h"
+#include "Plugins/PluginLoader.h"
+#include "Chat/ChatAPI_Bridge.h"
+#include "JavaHook/JavaHook.h"
 #include "Services/DiscordManager.h"
 #include "Utils/Logger.h"
 #include <ShlObj.h>
@@ -74,6 +77,10 @@ void init(void *instance) {
     RegisterDefaultCommands();
     OVson::initialize();
     Anticheat::initialize();
+    
+    PluginLoader::initialize();
+    JavaHook::initialize();
+    
     Logger::info("ChatHook disabled (safe mode)");
 
     {
@@ -155,7 +162,7 @@ void init(void *instance) {
     bool wasEndDown = false;
     while (true) {
       bool isEndDown = false;
-      if (GetAsyncKeyState(VK_END) & 0x8000) {
+      if (Config::isUninjectKeyEnabled() && (GetAsyncKeyState(Config::getUninjectKey()) & 0x8000)) {
         HWND fg = GetForegroundWindow();
         DWORD pid = 0;
         if (fg) GetWindowThreadProcessId(fg, &pid);
@@ -201,10 +208,7 @@ void init(void *instance) {
   }
 
   Logger::info("Exiting main loop, starting cleanup...");
-  g_cleaningUp.store(true);
-  Sleep(50);
-
-
+  
   try {
     Logger::info("Uninstalling RenderHook...");
     RenderHook::uninstall();
@@ -229,6 +233,23 @@ void init(void *instance) {
     Logger::info("DiscordManager shut down.");
   } catch (...) {
   }
+  
+  try {
+      Logger::info("Shutting down Plugins...");
+      PluginLoader::shutdown();
+  } catch(...) {
+      Logger::error("CRASH: Exception in PluginLoader::shutdown");
+  }
+  
+  try {
+      Logger::info("Shutting down JavaHook...");
+      JavaHook::shutdown();
+  } catch(...) {
+      Logger::error("CRASH: Exception in JavaHook::shutdown");
+  }
+
+  g_cleaningUp.store(true);
+  Sleep(50);
 
   Logger::info("Waiting for threads...");
   ThreadTracker::waitForAll();

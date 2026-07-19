@@ -270,6 +270,9 @@ public:
         {"net.minecraft.network.play.server.S38PacketPlayerListItem", "ja"},
         {"net.minecraft.network.play.server.S0CPacketSpawnPlayer", "ik"},
         {"net.minecraft.network.play.server.S1CPacketEntityMetadata", "id"},
+        {"net.minecraft.util.ChatStyle", "ez"},
+        {"net.minecraft.event.HoverEvent", "ew"},
+        {"net.minecraft.event.HoverEvent$Action", "ew$a"},
     };
     auto nit = notchMap.find(className);
     if (nit != notchMap.end()) {

@@ -86,7 +86,7 @@ AnticheatInfo parseResponse(const std::string &body) {
   findJsonBool(body, "seraph_blacklisted", info.seraphBlacklisted);
   if (info.seraphBlacklisted) {
     findJsonString(body, "seraph_report_type", info.seraphType);
-    findJsonString(body, "seraph_reason",      info.seraphReason);
+    findJsonString(body, "reason",      info.seraphReason);
   }
 
   std::string urchStatus;
@@ -115,6 +115,7 @@ bool doFetch(const std::string &username, AnticheatInfo &out) {
       body.find("\"status\"") == std::string::npos) {
     return false;
   }
+  Logger::info("KhadowService raw body: %s", body.c_str());
   out = parseResponse(body);
   return true;
 }

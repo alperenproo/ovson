@@ -63,23 +63,26 @@ static void suppressVanillaTab() {
 }
 
 static int getPlayerListVK() {
+  static bool s_logged = false;
   static ULONGLONG s_last = 0;
   ULONGLONG now = GetTickCount64();
   if (now - s_last < 3000) return g_tabVK;
   s_last = now;
 
+  #define TABLOG(...) do { if (!s_logged) Logger::info(__VA_ARGS__); } while(0)
+
   JNIEnv *env = lc ? lc->getEnv() : nullptr;
-  if (!env) { Logger::info("[TabKey] env null -> fallback VK=0x%X", g_tabVK); return g_tabVK; }
+  if (!env) { TABLOG("[TabKey] env null -> fallback VK=0x%X", g_tabVK); return g_tabVK; }
 
   jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
-  if (!mcCls) { Logger::info("[TabKey] Minecraft class NOT FOUND -> fallback"); return g_tabVK; }
+  if (!mcCls) { TABLOG("[TabKey] Minecraft class NOT FOUND -> fallback"); return g_tabVK; }
   jfieldID f_theMc = lc->GetStaticFieldID(
       mcCls, "theMinecraft", "Lnet/minecraft/client/Minecraft;",
       "field_71432_P", "S", "Lave;");
-  if (!f_theMc) { if (env->ExceptionCheck()) env->ExceptionClear(); Logger::info("[TabKey] theMinecraft field NOT FOUND -> fallback"); return g_tabVK; }
+  if (!f_theMc) { if (env->ExceptionCheck()) env->ExceptionClear(); TABLOG("[TabKey] theMinecraft field NOT FOUND -> fallback"); return g_tabVK; }
   jobject mc = env->GetStaticObjectField(mcCls, f_theMc);
   if (env->ExceptionCheck()) env->ExceptionClear();
-  if (!mc) { Logger::info("[TabKey] theMinecraft instance null -> fallback"); return g_tabVK; }
+  if (!mc) { TABLOG("[TabKey] theMinecraft instance null -> fallback"); return g_tabVK; }
 
   jfieldID f_gs = lc->GetFieldID(
       mcCls, "gameSettings",
@@ -88,11 +91,11 @@ static int getPlayerListVK() {
     f_gs = lc->FindFieldBySignature(mcCls, "Lnet/minecraft/client/settings/GameSettings;"); }
   if (!f_gs) { if (env->ExceptionCheck()) env->ExceptionClear();
     f_gs = lc->FindFieldBySignature(mcCls, "Lavh;"); }  // 1.8.9 notch type
-  if (!f_gs) { env->DeleteLocalRef(mc); if (env->ExceptionCheck()) env->ExceptionClear(); Logger::info("[TabKey] gameSettings field NOT FOUND (name+sig+notch) -> fallback"); return g_tabVK; }
+  if (!f_gs) { env->DeleteLocalRef(mc); if (env->ExceptionCheck()) env->ExceptionClear(); TABLOG("[TabKey] gameSettings field NOT FOUND (name+sig+notch) -> fallback"); return g_tabVK; }
   jobject gs = env->GetObjectField(mc, f_gs);
   env->DeleteLocalRef(mc);
   if (env->ExceptionCheck()) env->ExceptionClear();
-  if (!gs) { Logger::info("[TabKey] gameSettings instance null -> fallback"); return g_tabVK; }
+  if (!gs) { TABLOG("[TabKey] gameSettings instance null -> fallback"); return g_tabVK; }
 
   jclass gsCls = env->GetObjectClass(gs);
   jobject kb = nullptr;
@@ -115,7 +118,7 @@ static int getPlayerListVK() {
           if (env->ExceptionCheck()) env->ExceptionClear();
           if (arr) {
             jsize cnt = env->GetArrayLength(arr);
-            Logger::info("[TabKey] KB[] sig=%s len=%d", sig.c_str(), (int)cnt);
+            TABLOG("[TabKey] KB[] sig=%s len=%d", sig.c_str(), (int)cnt);
             for (jsize i = 0; i < cnt && !kb; ++i) {
               jobject k = env->GetObjectArrayElement(arr, i);
               if (!k) continue;
@@ -146,7 +149,7 @@ static int getPlayerListVK() {
   }
   env->DeleteLocalRef(gsCls);
   env->DeleteLocalRef(gs);
-  if (!kb) { if (env->ExceptionCheck()) env->ExceptionClear(); Logger::info("[TabKey] keyBindPlayerList NOT FOUND (name+srg+array-desc) -> fallback"); return g_tabVK; }
+  if (!kb) { if (env->ExceptionCheck()) env->ExceptionClear(); TABLOG("[TabKey] keyBindPlayerList NOT FOUND (name+srg+array-desc) -> fallback"); return g_tabVK; }
 
   jclass kbCls = env->GetObjectClass(kb);
   jint lwjglCode = 0;
@@ -163,9 +166,9 @@ static int getPlayerListVK() {
           ++intSeen;
           jint v = env->GetIntField(kb, pf2[fi]);
           if (env->ExceptionCheck()) env->ExceptionClear();
-          Logger::info("[TabKey]   KeyBinding int#%d (%s) = %d",
+          TABLOG("[TabKey]   KeyBinding int#%d (%s) = %d",
                        intSeen, fn ? fn : "?", (int)v);
-          if (intSeen == 2) { lwjglCode = v; gotCode = true; }  // keyCode
+          if (intSeen == 2) { lwjglCode = v; gotCode = true; }
         }
         if (fn) lc->jvmti->Deallocate((unsigned char *)fn);
         if (fs) lc->jvmti->Deallocate((unsigned char *)fs);
@@ -186,7 +189,7 @@ static int getPlayerListVK() {
   }
   env->DeleteLocalRef(kbCls);
   env->DeleteLocalRef(kb);
-  if (!gotCode) { Logger::info("[TabKey] keyCode read FAILED -> fallback"); return g_tabVK; }
+  if (!gotCode) { TABLOG("[TabKey] keyCode read FAILED -> fallback"); return g_tabVK; }
 
   if (lwjglCode > 0 && lwjglCode < 256) {
     UINT mapped = MapVirtualKeyA((UINT)lwjglCode, MAPVK_VSC_TO_VK);
@@ -194,12 +197,15 @@ static int getPlayerListVK() {
       g_tabScan = lwjglCode;
       g_tabVK = (int)mapped;
     }
-    Logger::info("[TabKey] READ OK lwjglCode=%d -> scan=0x%X vk=0x%X (mapped=%u)",
+    TABLOG("[TabKey] READ OK lwjglCode=%d -> scan=0x%X vk=0x%X (mapped=%u)",
                  (int)lwjglCode, g_tabScan, g_tabVK, mapped);
   } else {
-    Logger::info("[TabKey] keyCode=%d OUT OF RANGE (wrong field/mapping) -> fallback VK=0x%X",
+    TABLOG("[TabKey] keyCode=%d OUT OF RANGE (wrong field/mapping) -> fallback VK=0x%X",
                  (int)lwjglCode, g_tabVK);
   }
+  
+  s_logged = true;
+  #undef TABLOG
   return g_tabVK;
 }
 
@@ -400,6 +406,39 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT uMsg, WPARAM wParam,
 
   bool consume = false;
   SafeGuard::run("hookedWndProc/decision", [&]() {
+    if (BetterTab::isResizeMode()) {
+      if (uMsg == WM_LBUTTONDOWN) {
+        POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+        BetterTab::handleMouseClick(0, 1, pt.x, pt.y);
+      } else if (uMsg == WM_LBUTTONUP) {
+        POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+        BetterTab::handleMouseClick(0, 0, pt.x, pt.y);
+      } else if (uMsg == WM_MOUSEMOVE) {
+        POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+        BetterTab::handleMouseMove(pt.x, pt.y);
+      } else if (uMsg == WM_KEYDOWN && wParam == VK_ESCAPE) {
+        BetterTab::setResizeMode(false);
+      }
+      
+      switch (uMsg) {
+      case WM_LBUTTONDOWN:
+      case WM_LBUTTONUP:
+      case WM_RBUTTONDOWN:
+      case WM_RBUTTONUP:
+      case WM_MBUTTONDOWN:
+      case WM_MBUTTONUP:
+      case WM_MOUSEMOVE:
+      case WM_MOUSEWHEEL:
+      case WM_KEYDOWN:
+      case WM_KEYUP:
+      case WM_CHAR:
+      case WM_SYSKEYDOWN:
+      case WM_SYSKEYUP:
+        consume = true;
+        return;
+      }
+    }
+
     if (Render::ClickGUI::isOpen()) {
       Render::ClickGUI::handleMessage(uMsg, wParam, lParam);
       switch (uMsg) {
@@ -430,9 +469,11 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT uMsg, WPARAM wParam,
     }
 
     if (uMsg == WM_KEYDOWN && wParam == VK_RETURN) {
-      if (OVson::handleEnterKeyPress()) {
-        consume = true;
-        return;
+      if ((lParam & 0x40000000) == 0) {
+        if (OVson::handleEnterKeyPress()) {
+          consume = true;
+          return;
+        }
       }
     }
   });
@@ -690,7 +731,7 @@ static void renderOverlayWorkBody(HDC hdc) {
   });
 
   g_suppressVanillaTab.store(wantBetterTab && physicalTab);
-  if (wantBetterTab && physicalTab) {
+  if ((wantBetterTab && physicalTab) || BetterTab::isResizeMode()) {
     runSubsystem("BetterTab/suppressVanilla", []() { suppressVanillaTab(); });
     runSubsystem("BetterTab::render", [hdc]() {
       BetterTab::render((void *)hdc);

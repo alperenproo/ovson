@@ -3,15 +3,16 @@
 #include <optional>
 #include <string>
 
-namespace AbyssService {
+namespace PrismService {
 enum class LastError {
   None,
   HttpFailure,
   NoPlayerData,
-  RateLimited
+  RateLimited,
+  InternalServerError
 };
 
 std::optional<Hypixel::PlayerStats> getPlayerStats(const std::string &uuid);
 LastError lastError();
 
-} // namespace AbyssService
+} // namespace PrismService

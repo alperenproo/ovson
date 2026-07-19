@@ -14,6 +14,9 @@
 
 #include <Windows.h>
 #include <cctype>
+#include "../Chat/ChatHook.h"
+
+#include <chrono>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -67,6 +70,7 @@ std::unordered_set<std::string> g_chatPrintedPlayers;
 std::unordered_map<std::string, ULONGLONG> g_retryUntil;
 std::mutex g_retryMutex;
 std::unordered_map<std::string, int> g_playerFetchRetries;
+std::unordered_map<std::string, int> g_player500Retries;
 std::unordered_set<std::string> g_eliminatedPlayers;
 std::mutex g_eliminatedMutex;
 std::unordered_map<std::string, std::string> g_playerUuidMap;
@@ -189,6 +193,7 @@ void clearAllCaches() {
     std::lock_guard<std::mutex> rLock(g_retryMutex);
     g_retryUntil.clear();
     g_playerFetchRetries.clear();
+    g_player500Retries.clear();
   }
   {
     std::lock_guard<std::mutex> lock(g_alertedMutex);
@@ -326,7 +331,7 @@ bool handleEnterKeyPress() {
       env->DeleteLocalRef(empty);
     }
 
-    CommandRegistry::instance().tryDispatch(cmdText);
+    ChatHook::onClientSendMessage(cmdText);
 
     jmethodID mDisplay = lc->GetMethodID(
         mcCls, "displayGuiScreen", "(Lnet/minecraft/client/gui/GuiScreen;)V",

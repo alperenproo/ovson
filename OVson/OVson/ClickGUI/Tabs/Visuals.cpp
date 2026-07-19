@@ -5,7 +5,9 @@
 #include "../../Render/RenderUtils.h"
 #include "../../Render/StatsOverlay.h"
 #include "../../Render/NotificationManager.h"
+#include "../../Render/BetterTab.h"
 #include "../../Config/Config.h"
+#include "../ClickGUI.h"
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -75,8 +77,6 @@ void renderVisuals(TabCtx &ctx) {
     Config::setTechEnabled(techEnabled);
   }
 
-  // Motion Blur — the intensity slider is nested INSIDE the same card,
-  // revealed below a divider when the module is on (spec mock §photo 3).
   bool blurEnabled = Config::isMotionBlurEnabled();
   {
     const float panelX = mainX + 190;
@@ -127,8 +127,6 @@ void renderVisuals(TabCtx &ctx) {
     cy += cardH + 10.0f;
   }
 
-  // ── NameTags: master toggle + Label Height + stat chips, all nested in
-  //    ONE card (same pattern as Motion Blur). ─────────────────────────
   bool nameTagsEnabled = Config::isNameTagsEnabled();
   {
     const float panelX = mainX + 190;
@@ -156,7 +154,6 @@ void renderVisuals(TabCtx &ctx) {
     const float chipH = 30.0f, gap = 9.0f, padX = 13.0f, numW = 14.0f;
     const float tscale = 0.45f;
 
-    // Lay out chips (wrapping flow) to find the card height.
     struct Rc { float x, y, w; };
     std::vector<Rc> rc(slots.size());
     {
@@ -203,7 +200,6 @@ void renderVisuals(TabCtx &ctx) {
                             0xFFFFFFFF, 0.06f * alpha);
       glEnable(GL_TEXTURE_2D);
 
-      // Label height (slider).
       float h = Config::getNameTagHeight();
       g_guiFont.drawString(lx, heightRowY + heightRowH * 0.5f - 6.0f,
                            "Label height", applyAlpha(0xFFFFFFFF, alpha), 0.45f);
@@ -220,7 +216,6 @@ void renderVisuals(TabCtx &ctx) {
       glEnable(GL_TEXTURE_2D);
       if (ch) Config::setNameTagHeight(hv);
 
-      // Stats caption + hint.
       drawSectionLabel(lx, statsLabelY, "Stats", alpha);
       g_guiFont.drawString(lx + 58, statsLabelY + 2,
                            "click to toggle  -  drag to reorder",
@@ -239,7 +234,6 @@ void renderVisuals(TabCtx &ctx) {
         return -1;
       };
 
-      // Per-stat animated position (relative to lx, chipsTop)
       static std::map<std::string, float> s_ax, s_ay;
       int enRank = 0;
       for (size_t r = 0; r < slots.size(); ++r) {
@@ -288,7 +282,6 @@ void renderVisuals(TabCtx &ctx) {
                              tscale);
       }
 
-      // Input (applied next frame so this frame stays consistent).
       if (clickEvent) {
         int hit = chipAt(mx, my);
         if (hit >= 0) { s_chipDrag = hit; s_chipPress = hit; s_chipMoved = false; }
@@ -326,9 +319,7 @@ void renderVisuals(TabCtx &ctx) {
   static float s_dropdownPaneY = 0.0f;
   s_dropdownPaneY = cy;
 
-  // ── Split-Pane Layout ──────────────────────────────────────────
   {
-    // Layout dimensions
     float totalW = g_w - 240.0f;
     float leftW  = 195.0f;
     float pGap   = 16.0f;
@@ -337,14 +328,12 @@ void renderVisuals(TabCtx &ctx) {
     float rightX = cx + leftW + pGap;
     float paneY  = cy;
 
-    // Card / dropdown metrics
     float cPad   = 12.0f;
     float idH    = 28.0f;   // inner dropdown height
     float cardH  = 62.0f;
     float cGap   = 10.0f;
     float leftH  = 3 * cardH + 2 * cGap;
 
-    // ── Build column toggles (needed for right-pane height) ──
     struct ColToggle {
       std::string name;
       bool enabled;
@@ -404,7 +393,6 @@ void renderVisuals(TabCtx &ctx) {
                   [](bool b) { Config::setProShowHp(b); }}};
     }
 
-    // Pill metrics
     float pPadX  = 10.0f;
     float pGapX  = 6.0f;
     float pGapY  = 6.0f;
@@ -415,11 +403,9 @@ void renderVisuals(TabCtx &ctx) {
     float rightH = 40.0f + pRows * (pillH + pGapY) + 8.0f;
     float maxH   = (leftH > rightH) ? leftH : rightH;
 
-    // ── LEFT PANE BACKGROUND ──
     float totalLeftH = 3 * cardH + 2 * cGap;
     drawThemeCard(leftX, paneY, leftW, totalLeftH, false, alpha);
 
-    // ── LEFT PANE: Sort Column ──
     {
       float cY = paneY;
       g_guiFont.drawString(leftX + cPad, cY + 8, "SORT COLUMN",
@@ -441,7 +427,6 @@ void renderVisuals(TabCtx &ctx) {
       }
     }
 
-    // ── LEFT PANE: Sort Order ──
     {
       float cY = paneY + cardH + cGap;
       g_guiFont.drawString(leftX + cPad, cY + 8, "SORT ORDER",
@@ -464,7 +449,6 @@ void renderVisuals(TabCtx &ctx) {
       }
     }
 
-    // ── LEFT PANE: Tab List Display ──
     {
       float cY = paneY + 2 * (cardH + cGap);
       g_guiFont.drawString(leftX + cPad, cY + 8, "TAB DISPLAY",
@@ -486,14 +470,12 @@ void renderVisuals(TabCtx &ctx) {
       }
     }
 
-    // ── RIGHT PANE: Visible Columns ──
     {
       drawThemeCard(rightX, paneY, rightW, maxH, false, alpha);
 
       g_guiFont.drawString(rightX + 14, paneY + 12, "Visible Columns",
                            applyAlpha(0xFFFFFFFF, alpha), 0.46f);
 
-      // Segmented target selector (Overlay / Tab List)
       float segW  = 128.0f;
       float segH  = 22.0f;
       float segX  = rightX + rightW - segW - 14;
@@ -521,7 +503,6 @@ void renderVisuals(TabCtx &ctx) {
       if (clickEvent && hovTab && s_columnTargetMode != 1)
         s_columnTargetMode = 1;
 
-      // Pill toggles (2-column grid)
       for (size_t i = 0; i < toggles.size(); ++i) {
         int col = (int)(i % 2);
         int row = (int)(i / 2);
@@ -532,7 +513,6 @@ void renderVisuals(TabCtx &ctx) {
 
         drawThemeButton(px, py, pillW, pillH, hov, on, alpha);
 
-        // Indicator dot
         float dcx = px + pillW - 14;
         float dcy = py + pillH * 0.5f;
         glDisable(GL_TEXTURE_2D);
@@ -593,7 +573,30 @@ void renderVisuals(TabCtx &ctx) {
     drawSwitch(33, tabSwX, cy + 42, proEnabled, hPro && tabEnabled, proAlpha);
     glEnable(GL_TEXTURE_2D);
 
-    if (clickEvent && hTab) {
+    bool resizeClicked = false;
+    if (tabEnabled && proEnabled) {
+        float btnW = 70.0f;
+        float btnH = 22.0f;
+        float btnX = tabSwX - btnW - 8.0f;
+        float btnY = cy + 38.0f;
+        
+        bool hResizeBtn = isHovered(mx, my, btnX, btnY, btnW, btnH);
+        glDisable(GL_TEXTURE_2D);
+        uint32_t btnBg = hResizeBtn ? ClickGUITheme::accent() : 0xFF2A2A35;
+        float btnAlpha = alpha * (hResizeBtn ? 0.9f : 0.7f);
+        RenderUtils::drawRoundedRect(btnX, btnY, btnW, btnH, 6.0f, btnBg, btnAlpha);
+        glEnable(GL_TEXTURE_2D);
+        g_guiFont.drawString(btnX + 12, btnY + 4, "\xE2\x87\xB1 Resize",
+                             applyAlpha(0xFFFFFFFF, alpha), 0.40f);
+        
+        if (clickEvent && hResizeBtn) {
+            BetterTab::setResizeMode(true);
+            ClickGUI::setOpen(false);
+            resizeClicked = true;
+        }
+    }
+
+    if (clickEvent && hTab && !resizeClicked) {
       if (my < cy + 30) {
         Config::setTabEnabled(!tabEnabled);
         NotificationManager::getInstance()->add(
@@ -609,6 +612,7 @@ void renderVisuals(TabCtx &ctx) {
                         : NotificationType::Warning);
       }
     }
+    
     cy += 95;
 
     bool hChatStats = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 62);
@@ -709,7 +713,6 @@ void renderVisuals(TabCtx &ctx) {
   }
   cy += 20;
 
-  // ── Dropdown menus (drawn last → on top) ──
   {
     float leftX = cx;
     float leftW = 195.0f;
@@ -719,7 +722,6 @@ void renderVisuals(TabCtx &ctx) {
     float cGap = 10.0f;
     float paneY = s_dropdownPaneY;
 
-    // Sort Column menu
     s_sortColumnDropdownAnim +=
         (s_isSortColumnDropdownOpen ? 1.0f - s_sortColumnDropdownAnim
                                     : 0.0f - s_sortColumnDropdownAnim) *
@@ -762,7 +764,6 @@ void renderVisuals(TabCtx &ctx) {
       }
     }
 
-    // Sort Order menu
     s_sortOrderDropdownAnim +=
         (s_isSortOrderDropdownOpen ? 1.0f - s_sortOrderDropdownAnim
                                    : 0.0f - s_sortOrderDropdownAnim) *
@@ -804,7 +805,6 @@ void renderVisuals(TabCtx &ctx) {
       }
     }
 
-    // Tab Display menu
     s_tabDisplayDropdownAnim +=
         (s_isTabDisplayDropdownOpen ? 1.0f - s_tabDisplayDropdownAnim
                                     : 0.0f - s_tabDisplayDropdownAnim) *

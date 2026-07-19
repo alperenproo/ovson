@@ -100,6 +100,7 @@ extern std::unordered_set<std::string> g_chatPrintedPlayers;
 extern std::unordered_map<std::string, ULONGLONG> g_retryUntil;
 extern std::mutex g_retryMutex;
 extern std::unordered_map<std::string, int> g_playerFetchRetries;
+extern std::unordered_map<std::string, int> g_player500Retries;
 extern std::unordered_set<std::string> g_eliminatedPlayers;
 extern std::mutex g_eliminatedMutex;
 extern std::unordered_map<std::string, std::string> g_playerUuidMap;

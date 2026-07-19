@@ -145,8 +145,6 @@ void renderUtils(TabCtx &ctx) {
                        "Disabled",
                        applyAlpha(0xFFA0A0A5, alpha));
 
-  // Replay spammer is disabled: force it off if it was on, and render the
-  // switch as a dimmed, non-interactive OFF so it can't be toggled on.
   if (Utils::ReplaySpammer::getInstance().isEnabled())
     Utils::ReplaySpammer::getInstance().toggle();
   glDisable(GL_TEXTURE_2D);

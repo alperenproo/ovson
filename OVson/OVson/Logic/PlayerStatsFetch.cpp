@@ -6,6 +6,7 @@
 #include "../Config/StatColors.h"
 #include "../Render/NotificationManager.h"
 #include "../Services/AbyssService.h"
+#include "../Services/PrismService.h"
 #include "../Render/RenderHook.h"
 #include "../Services/AuroraService.h"
 #include "../Services/Hypixel.h"
@@ -55,9 +56,6 @@ void requestStatsForVisiblePlayer(const std::string &name,
       return;
     g_renderRequestLast[name] = now;
   }
-  // Pass the known UUID through so the worker skips the Mojang
-  // name->uuid step (avoids a second rate-limited lookup for
-  // de-nicked players).
   std::thread(fetchWorker, name, forcedUuid).detach();
 }
 
@@ -115,6 +113,8 @@ void fetchWorkerBody(const std::string &name, const std::string &forcedUuid) {
   bool fetchError = false;
   std::string uuidToF;
   Hypixel::PlayerStats fetchedStats;
+  AbyssService::LastError lastErr = AbyssService::LastError::None;
+  PrismService::LastError prismErr = PrismService::LastError::None;
 
   if (!cacheFound) {
     double apiStart = TimeUtil::getTime();
@@ -126,36 +126,47 @@ void fetchWorkerBody(const std::string &name, const std::string &forcedUuid) {
       std::optional<Hypixel::PlayerStats> statsOpt;
 
       if (keyless) {
-        static std::atomic<int> abyssFailCount{0};
-        static std::atomic<ULONGLONG> lastAbyssSuggest{0};
+        static std::atomic<int> apiFailCount{0};
+        static std::atomic<ULONGLONG> lastApiSuggest{0};
 
         statsOpt = AbyssService::getPlayerStats(*uuid);
-        AbyssService::LastError lastErr = AbyssService::lastError();
+        lastErr = AbyssService::lastError();
         Logger::info(
             "Abyss fetch for %s uuid=%s -> %s (lastErr=%d)", name.c_str(),
             uuid->c_str(),
             statsOpt ? "ok" : "nullopt", (int)lastErr);
 
-        if (lastErr == AbyssService::LastError::HttpFailure) {
-          int fails = ++abyssFailCount;
-          ULONGLONG nowMs = GetTickCount64();
-          ULONGLONG lastShown = lastAbyssSuggest.load();
-          Logger::info("Abyss HTTP failure #%d for %s (since last warn: %llu ms)",
-                       fails, name.c_str(),
-                       (unsigned long long)(nowMs - lastShown));
-          if (fails >= 5 && (nowMs - lastShown > 300000)) {
-            lastAbyssSuggest.store(nowMs);
-            abyssFailCount = 0;
-            Logger::info("Abyss: posting 'API failing' notice to chat "
-                         "(5 consecutive HTTP failures)");
-            RenderHook::enqueueTask([]() {
-              ChatSDK::showPrefixed(
-                  "§cAbyss API is failing. §eSuggestion: Use a personal "
-                  "Hypixel API key (.api new <key>) for better reliability.");
-            });
+        if (!statsOpt) {
+          statsOpt = PrismService::getPlayerStats(*uuid);
+          prismErr = PrismService::lastError();
+          Logger::info(
+              "Prism fetch fallback for %s uuid=%s -> %s (prismErr=%d)", name.c_str(),
+              uuid->c_str(),
+              statsOpt ? "ok" : "nullopt", (int)prismErr);
+              
+          if (lastErr == AbyssService::LastError::HttpFailure && prismErr == PrismService::LastError::HttpFailure) {
+            int fails = ++apiFailCount;
+            ULONGLONG nowMs = GetTickCount64();
+            ULONGLONG lastShown = lastApiSuggest.load();
+            Logger::info("Keyless API HTTP failure #%d for %s (since last warn: %llu ms)",
+                         fails, name.c_str(),
+                         (unsigned long long)(nowMs - lastShown));
+            if (fails >= 5 && (nowMs - lastShown > 300000)) {
+              lastApiSuggest.store(nowMs);
+              apiFailCount = 0;
+              Logger::info("Keyless APIs: posting 'API failing' notice to chat "
+                           "(5 consecutive HTTP failures)");
+              RenderHook::enqueueTask([]() {
+                ChatSDK::showPrefixed(
+                    "§cKeyless APIs are failing. §eSuggestion: Use a personal "
+                    "Hypixel API key (.api new <key>) for better reliability.");
+              });
+            }
+          } else if (prismErr != PrismService::LastError::HttpFailure) {
+            apiFailCount = 0;
           }
         } else {
-          abyssFailCount = 0;
+          apiFailCount = 0;
         }
       } else {
         statsOpt = Hypixel::getPlayerStats(apiKey, *uuid);
@@ -258,6 +269,9 @@ void fetchWorkerBody(const std::string &name, const std::string &forcedUuid) {
       if (t.find("SNIPER") != std::string::npos)
         return "\xC2\xA7"
                "6[S]";
+      if (t.find("INFO") != std::string::npos)
+        return "\xC2\xA7"
+               "a[I]";
       return "";
     };
 
@@ -342,11 +356,22 @@ void fetchWorkerBody(const std::string &name, const std::string &forcedUuid) {
     bool shouldNick = false;
     {
       std::lock_guard<std::mutex> lock(g_retryMutex);
-      int count = ++g_playerFetchRetries[name];
-      if (count < 5) {
-        g_retryUntil[name] = now + 2000;
+      if (lastErr == AbyssService::LastError::RateLimited || prismErr == PrismService::LastError::RateLimited) {
+        g_retryUntil[name] = GetTickCount64() + 3000;
+      } else if (prismErr == PrismService::LastError::InternalServerError) {
+        int count = ++g_player500Retries[name];
+        if (count < 3) {
+          g_retryUntil[name] = GetTickCount64() + 2000;
+        } else {
+          shouldNick = true;
+        }
       } else {
-        shouldNick = true;
+        int count = ++g_playerFetchRetries[name];
+        if (count < 5) {
+          g_retryUntil[name] = GetTickCount64() + 2000;
+        } else {
+          shouldNick = true;
+        }
       }
     }
     if (shouldNick) {
@@ -458,11 +483,6 @@ void processPendingStats() {
       break;
     }
   }
-  // A de-nicked player's REAL name is never in g_onlinePlayers (tab
-  // shows the nick), so without this it would be dropped here —
-  // erased from pending but never written to the stats map — making
-  // its stats flicker in and out. Treat real names like online
-  // players so their fetched stats persist.
   bool isRealName = false;
   if (!online) {
     std::lock_guard<std::mutex> lockNick(g_nickMapMutex);
@@ -682,7 +702,7 @@ void processPendingStats() {
     }
   }
 
-  if (stats.bedwarsStar == 0 && stats.bedwarsFinalKills == 0 &&
+  if (stats.bedwarsStar <= 1 && stats.bedwarsFinalKills == 0 &&
       stats.bedwarsWins == 0) {
     stats.isNicked = true;
   }
@@ -711,7 +731,67 @@ void processPendingStats() {
     });
   }
 
-  if (Config::isTagsEnabled() && !stats.rawTags.empty()) {
+  static auto isPlayerTagAlertMuted = [](const std::string &pname) -> bool {
+    if (!Config::isMuteTagAlertsEnabled()) return false;
+
+    if (Config::isMuteSelfTagAlertsEnabled()) {
+      JNIEnv *env = lc->getEnv();
+      if (env) {
+        CMinecraft mc;
+        CPlayer lp = mc.GetLocalPlayer();
+        if (lp.Get()) {
+          jclass epCls = lc->GetClass("net.minecraft.entity.Entity");
+          jmethodID m_getName = nullptr;
+          if (epCls) {
+            const char *nameMethods[] = {
+                "getName", "func_70005_c_",
+                "h_", "e_", "f_", "g_", "i_", "j_", "k_", nullptr};
+            for (int i = 0; nameMethods[i]; i++) {
+              m_getName = env->GetMethodID(epCls, nameMethods[i], "()Ljava/lang/String;");
+              if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+              } else if (m_getName) {
+                break;
+              }
+            }
+          }
+          if (m_getName) {
+            jstring js = (jstring)env->CallObjectMethod(lp.Get(), m_getName);
+            if (js) {
+              const char *utf = env->GetStringUTFChars(js, nullptr);
+              if (utf) {
+                std::string localName = utf;
+                env->ReleaseStringUTFChars(js, utf);
+
+                std::string lowerPName = pname;
+                std::string lowerLocalName = localName;
+                for (auto &c : lowerPName) c = std::tolower(c);
+                for (auto &c : lowerLocalName) c = std::tolower(c);
+                if (lowerPName == lowerLocalName) {
+                  lp.Cleanup();
+                  env->DeleteLocalRef(js);
+                  return true;
+                }
+              }
+              env->DeleteLocalRef(js);
+            }
+          }
+          lp.Cleanup();
+        }
+      }
+    }
+
+    std::string lowerName = pname;
+    for (auto &c : lowerName) c = std::tolower(c);
+    for (const auto &p : Config::getMutedTagPlayers()) {
+      std::string lp = p;
+      for (auto &c : lp) c = std::tolower(c);
+      if (lp == lowerName) return true;
+    }
+    return false;
+  };
+
+  if (Config::isTagsEnabled() && !stats.rawTags.empty() && !isPlayerTagAlertMuted(name)) {
     auto splitTagPayload = [](const std::string &payload)
         -> std::pair<std::string, std::string> {
       auto sep = payload.find('\x1F');

@@ -37,6 +37,7 @@ extern std::string s_urchinKeyInput;
 extern std::string s_seraphKeyInput;
 extern std::string s_auroraApiKeyInput;
 extern std::string s_prefixInput;
+extern std::string s_muteTagPlayerInput;
 
 extern bool s_typingSearch;
 extern bool s_typingApiKey;
@@ -45,6 +46,7 @@ extern bool s_typingUrchinKey;
 extern bool s_typingSeraphKey;
 extern bool s_typingAuroraApiKey;
 extern bool s_typingPrefix;
+extern bool s_typingMuteTagPlayer;
 
 extern float s_scrollOffset;
 extern float s_targetScroll;
@@ -65,8 +67,6 @@ extern float s_sortColumnDropdownAnim;
 extern bool  s_isTabDisplayDropdownOpen;
 extern float s_tabDisplayDropdownAnim;
 
-// Accent colour picker (spec §3 / §4.5): accent stored as HSV, with a
-// rainbow/chroma cycle. Applied to Config accent (themeColor) live.
 extern float s_accentHue;     // 0..1
 extern float s_accentSat;     // 0..1
 extern float s_accentVal;     // 0..1
@@ -114,6 +114,7 @@ extern bool  s_dragging;
 extern float s_dragOffsetX;
 extern float s_dragOffsetY;
 extern bool  s_waitingForKey;
+extern bool  s_waitingForUninjectKey;
 
 struct SwitchAnim {
   float currX = 0.0f;

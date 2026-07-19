@@ -4,11 +4,6 @@
 #include <cstdint>
 #include <string>
 
-// ── OVSON ClickGUI theme tokens (design spec v3) ───────────────────
-// Single SOLID theme (no glass/blur). Colours are ARGB DWORDs here; the
-// renderer converts to glColor4f. Token values come straight from the
-// spec (§1). LiquidGlass / Minimal are kept as legacy fallbacks so older
-// configs still load, but Solid is the default.
 namespace Render {
 namespace ClickGUITheme {
 
@@ -18,71 +13,66 @@ inline Style style() {
   const std::string &s = Config::getClickGuiTheme();
   if (s == "LiquidGlass") return Style::LiquidGlass;
   if (s == "Minimal")     return Style::Minimal;
-  return Style::Solid; // "Solid" + default
+  return Style::Solid;
 }
 
-// Accent: user-selected; spec default navy #3D6EF5. Stored ARGB in
-// config; force full alpha so derivatives are predictable.
 inline DWORD accent() { return Config::getThemeColor() | 0xFF000000; }
 #define THEME_NAVY (Render::ClickGUITheme::accent())
 
-// ── Neutral / surface tokens (§1.1) ──
 inline DWORD panelBg() {
   switch (style()) {
   case Style::LiquidGlass: return 0x2210131C;
   case Style::Minimal:     return 0xF40B0B0E;
-  default:                 return 0xEB0E1119; // #0E1119 @ a=0.92
+  default:                 return 0xEB0E1119;
   }
 }
 inline DWORD sidebarBg() {
   switch (style()) {
   case Style::LiquidGlass: return 0x22161929;
   case Style::Minimal:     return 0xFF111114;
-  default:                 return 0xF20B0E15; // #0B0E15 @ a=0.95
+  default:                 return 0xF20B0E15;
   }
 }
 inline DWORD cardBg() {
   switch (style()) {
   case Style::LiquidGlass: return 0x301F2334;
   case Style::Minimal:     return 0xFF16161A;
-  default:                 return 0x0AFFFFFF; // surface-1: white @ 4%
+  default:                 return 0x0AFFFFFF;
   }
 }
 inline DWORD cardHover() {
   switch (style()) {
   case Style::LiquidGlass: return 0x452A3148;
   case Style::Minimal:     return 0xFF1F1F24;
-  default:                 return 0x12FFFFFF; // surface-2: white @ 7%
+  default:                 return 0x12FFFFFF;
   }
 }
 inline DWORD border() {
   switch (style()) {
   case Style::LiquidGlass: return 0x22FFFFFF;
   case Style::Minimal:     return 0xFF202024;
-  default:                 return 0x0CFFFFFF; // hairline: thin
+  default:                 return 0x0CFFFFFF;
   }
 }
-inline DWORD textPrimary()   { return 0xFFFFFFFF; }              // #FFFFFF
-inline DWORD textSecondary() { return 0xFFA8A8B0; }              // dim
-inline DWORD textMuted()     { return 0xFF707078; }              // faint
+inline DWORD textPrimary()   { return 0xFFFFFFFF; }
+inline DWORD textSecondary() { return 0xFFA8A8B0; }
+inline DWORD textMuted()     { return 0xFF707078; }
 
-// Extra spec tokens (style-independent solid values).
-inline DWORD surface1()       { return 0x0AFFFFFF; } // white @ 4%
-inline DWORD surface2()       { return 0x12FFFFFF; } // white @ 7%
-inline DWORD hairline()       { return 0x09FFFFFF; } // white @ ~3.5% (very thin)
-inline DWORD hairlineStrong() { return 0x15FFFFFF; } // white @ ~8%
-inline DWORD inset()          { return 0x47000000; } // black @ 28%
-inline DWORD online()         { return 0xFF3DDC84; } // #3DDC84
-inline DWORD danger()         { return 0xFFFF5A64; } // #FF5A64
+inline DWORD surface1()       { return 0x0AFFFFFF; }
+inline DWORD surface2()       { return 0x12FFFFFF; }
+inline DWORD hairline()       { return 0x09FFFFFF; }
+inline DWORD hairlineStrong() { return 0x15FFFFFF; }
+inline DWORD inset()          { return 0x47000000; }
+inline DWORD online()         { return 0xFF3DDC84; }
+inline DWORD danger()         { return 0xFFFF5A64; }
 
-// ── Radii (§1.3) ──
 inline float panelRadius() {
   return style() == Style::LiquidGlass ? 18.0f : 12.0f;
 }
 inline float cardRadius() {
   return style() == Style::LiquidGlass ? 14.0f : 12.0f;
 }
-inline float buttonRadius() {           // a.k.a. control radius
+inline float buttonRadius() {
   return style() == Style::LiquidGlass ? 10.0f : 9.0f;
 }
 inline float controlRadius() { return buttonRadius(); }
@@ -103,10 +93,9 @@ inline uint32_t applyAlpha(uint32_t color, float alpha) {
   return (uint32_t)((a << 24) | (color & 0x00FFFFFF));
 }
 
-// ── Accent derivatives (§1.2): same RGB, fixed alpha ──
-inline DWORD accentSoft()   { return (accent() & 0x00FFFFFF) | 0x29000000; } // a=0.16
-inline DWORD accentBorder() { return (accent() & 0x00FFFFFF) | 0x5C000000; } // a=0.36
-inline DWORD accentGlow()   { return (accent() & 0x00FFFFFF) | 0x73000000; } // a=0.45
+inline DWORD accentSoft()   { return (accent() & 0x00FFFFFF) | 0x29000000; }
+inline DWORD accentBorder() { return (accent() & 0x00FFFFFF) | 0x5C000000; }
+inline DWORD accentGlow()   { return (accent() & 0x00FFFFFF) | 0x73000000; }
 
 inline bool isHovered(float mx, float my, float x, float y, float w, float h) {
   return mx >= x && mx <= x + w && my >= y && my <= y + h;

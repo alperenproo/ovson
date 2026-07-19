@@ -124,22 +124,16 @@ void drawSwitch(int id, float x, float y, bool enabled, bool hovered,
     return;
   }
 
-  // ── Solid theme (spec §2.1): track 44×25, knob 19 ──
   w = 44.0f;
   h = 25.0f;
   const float r = h * 0.5f;
-  // ON glow halo behind the track (additive — subtle).
   if (t > 0.01f)
     RenderUtils::drawGlow(x, y, w, h, r, accent(), 0.22f * t * alpha);
-  // Track: OFF surface-2 -> ON accent.
   DWORD track = RenderUtils::lerpColor(surface2(), accent(), t);
   RenderUtils::drawRoundedRect(x, y, w, h, r, track, colorA(track) * alpha);
-  // Thin border always: hairline-strong when OFF, fading toward a faint
-  // accent-bright outline when ON (keeps the toggle crisp either way).
   DWORD bd = RenderUtils::lerpColor(hairlineStrong(), 0xFF5E86F7, t);
   RenderUtils::drawRoundedOutline(x, y, w, h, r, 1.0f, bd,
                                   colorA(bd) * (0.5f + 0.3f * (1.0f - t)) * alpha);
-  // Knob: 19px white, travels OFF x+2 .. ON x+23, with a 2px drop shadow.
   const float knobR = 9.5f;
   float kcx = x + 2.0f + t * 21.0f + knobR;
   float kcy = y + h * 0.5f;
@@ -172,7 +166,6 @@ bool drawSlider(int id, float x, float y, float w, float h, float &val, float mi
     RenderUtils::drawCircle(kx, y + h/2.0f, knobR, 0xFFFFFFFF, alpha);
   } else {
     using namespace ClickGUITheme;
-    // Sleek thin track (3px) with dark gray inactive color
     RenderUtils::drawRoundedRect(x, y + h/2.0f - 1.5f, w, 3.0f, 1.5f,
                                  0xFF202025, alpha * 0.7f);
     if (w * pct > 0.5f) {
@@ -180,7 +173,6 @@ bool drawSlider(int id, float x, float y, float w, float h, float &val, float mi
                                    accent(), alpha);
     }
     float kx = x + w * pct;
-    // Smooth solid white circle knob (radius 6.0px) with drop shadow
     RenderUtils::drawCircle(kx, y + h/2.0f + 0.5f, 6.0f, 0x44000000, 0.5f * alpha);
     RenderUtils::drawCircle(kx, y + h/2.0f, 6.0f, 0xFFFFFFFF, alpha);
   }
@@ -197,36 +189,28 @@ void drawThemePanel(float x, float y, float w, float h, float alpha) {
     return;
   }
 
-  // Soft drop shadow (spec §0.3f): expanding translucent black layers,
-  // darkest at the panel edge and fading outward.
   for (int i = 6; i >= 1; --i) {
     float sp = i * 2.0f;
     RenderUtils::drawRoundedRect(x - sp, y - sp, w + 2.0f * sp, h + 2.0f * sp,
                                  r + sp, 0x000000,
                                  0.05f * (1.0f - i / 7.0f) * alpha);
   }
-  // Panel outline is hairline-strong (spec §1.1/§5.1).
   DWORD bd = hairlineStrong();
   DWORD bg = panelBg();
   RenderUtils::drawRoundedRect(x - 1, y - 1, w + 2, h + 2, r,
                                 bd, colorA(bd) * alpha);
   RenderUtils::drawRoundedRect(x, y, w, h, r, bg, colorA(bg) * alpha);
 
-  // Animated colour wash (spec mock): slow drifting purple / blue / pink
-  // radial glows that blend into a soft gradient backdrop.
   float t = (float)GetTickCount64() / 1000.0f;
   float ph1 = (sinf(t / 2.6f) + 1.0f) * 0.5f;
   float ph2 = (sinf(t / 3.4f + 2.0f) + 1.0f) * 0.5f;
   float ph3 = (sinf(t / 4.1f + 4.0f) + 1.0f) * 0.5f;
-  // Purple, bottom-right (biggest).
   RenderUtils::drawRadialGlow(x + w * 0.85f, y + h * 0.82f, h * 1.2f,
                               RenderUtils::lerpColor(0xFF8A5BE8, 0xFFB44DE0, ph1),
                               0.40f * alpha);
-  // Blue, top-left.
   RenderUtils::drawRadialGlow(x + w * 0.12f, y + h * 0.18f, h * 0.8f,
                               RenderUtils::lerpColor(0xFF4D6FE0, 0xFF5B8AF0, ph2),
                               0.28f * alpha);
-  // Pink, bottom-centre.
   RenderUtils::drawRadialGlow(x + w * 0.45f, y + h * 1.02f, h * 0.95f,
                               RenderUtils::lerpColor(0xFFD8559E, 0xFF8A5BE8, ph3),
                               0.20f * alpha);
@@ -249,13 +233,12 @@ void drawThemeCard(float x, float y, float w, float h, bool hovered,
   using namespace ClickGUITheme;
   const float r = cardRadius();
 
-  // Smooth hover (position-keyed) so cards fade in/out instead of snapping.
   static std::unordered_map<int, float> s_hov;
   int key = (int)(x * 2.0f) * 131071 + (int)(y * 2.0f);
   float &hv = s_hov[key];
   hv += ((hovered ? 1.0f : 0.0f) - hv) * 0.18f;
   float act = active ? 1.0f : 0.0f;
-  float strip = hv > act ? hv : act;  // strip shows on hover OR while ON
+  float strip = hv > act ? hv : act;
 
   DWORD fill = RenderUtils::lerpColor(cardBg(), cardHover(), hv);
 
@@ -268,11 +251,9 @@ void drawThemeCard(float x, float y, float w, float h, bool hovered,
   }
 
   RenderUtils::drawRoundedRect(x, y, w, h, r, fill, colorA(fill) * alpha);
-  // Thin hairline border, lerped toward hairline-strong on hover/active.
   DWORD bd = RenderUtils::lerpColor(hairline(), hairlineStrong(), strip);
   RenderUtils::drawRoundedOutline(x, y, w, h, r, 1.0f, bd, colorA(bd) * alpha);
   if (strip > 0.01f) {
-    // Accent strip inside the card's left edge (fades with hover/active).
     RenderUtils::drawGlow(x + 3.0f, y + 9.0f, 3.0f, h - 18.0f, 1.5f, accent(),
                           0.18f * strip * alpha);
     RenderUtils::drawRoundedRect(x + 3.0f, y + 9.0f, 3.0f, h - 18.0f, 1.5f,
@@ -294,8 +275,6 @@ void drawThemeButton(float x, float y, float w, float h, bool hovered,
     Render::LiquidGlass::drawRect(x, y, w, h, r, alpha, fill);
     return;
   }
-  // Ghost button (spec §2.5): surface-2 fill, hairline-strong border,
-  // brighter on hover.
   DWORD fill = (hovered || pressed) ? surface2() : surface1();
   RenderUtils::drawRoundedRect(x, y, w, h, r, fill, colorA(fill) * alpha);
   DWORD bd = (hovered || pressed) ? hairlineStrong() : hairline();
@@ -303,7 +282,6 @@ void drawThemeButton(float x, float y, float w, float h, bool hovered,
 }
 
 void drawSectionLabel(float x, float y, const std::string &text, float alpha) {
-  // Spec §1.4: small, UPPERCASE, faint section labels.
   std::string up = text;
   for (auto &c : up)
     if (c >= 'a' && c <= 'z') c = (char)(c - 32);
@@ -342,11 +320,9 @@ void drawChevron(float ccx, float ccy, float s, bool open, uint32_t col,
 void drawTextInput(float x, float y, float w, float h, bool focused,
                    bool hovered, float alpha) {
   using namespace ClickGUITheme;
-  // Inset (sunken) background.
   DWORD ins = inset();
   RenderUtils::drawRoundedRect(x, y, w, h, controlRadius(), ins,
                                colorA(ins) * alpha);
-  // Border: accent (a=0.5) when focused, else hairline(-strong on hover).
   DWORD bd = focused ? ((accent() & 0x00FFFFFF) | 0x80000000)
                      : (hovered ? hairlineStrong() : hairline());
   RenderUtils::drawRoundedOutline(x, y, w, h, controlRadius(), 1.0f, bd,
@@ -365,8 +341,6 @@ void drawThemeTabIndicator(float x, float y, float w, float h, float alpha) {
                                   accent(), alpha);
     return;
   }
-  // Sidebar pill (spec §2.6): accent-soft fill + accent-border + glow,
-  // 3px accent strip (8px inset top/bottom), 1px white top sheen.
   const float pr = pillRadius();
   RenderUtils::drawGlow(x, y, w, h, pr, accent(), 0.16f * alpha);
   DWORD soft = accentSoft();
@@ -381,14 +355,9 @@ void drawThemeTabIndicator(float x, float y, float w, float h, float alpha) {
 
 void drawThemeBackground(float screenW, float screenH, float alpha) {
   using namespace ClickGUITheme;
-  // Liquid Glass supplies its own backdrop; only the solid/min themes get
-  // the colour-wash background.
   if (style() == Style::LiquidGlass)
     return;
 
-  // Slow-drifting full-screen radial washes: a purple bloom anchored to the
-  // right edge, a blue bloom on the left, and a violet drift at the bottom —
-  // soft gradient transitions behind the panel (spec mock).
   float t = (float)GetTickCount64() / 1000.0f;
   float ph1 = (sinf(t / 3.0f) + 1.0f) * 0.5f;
   float ph2 = (sinf(t / 3.8f + 2.0f) + 1.0f) * 0.5f;
@@ -403,7 +372,7 @@ void drawThemeBackground(float screenW, float screenH, float alpha) {
   RenderUtils::drawRadialGlow(screenW * 0.78f, screenH * 1.05f, screenH * 1.05f,
                               RenderUtils::lerpColor(0xFFD8559E, 0xFF8A5BE8, ph3),
                               0.18f * alpha);
-  // extra purple bloom hugging the top-right edge for a fuller right side.
+  // extra purple bloom hugging the top-right edge for a fuller right side
   RenderUtils::drawRadialGlow(screenW * 1.02f, screenH * 0.12f, screenH * 0.85f,
                               RenderUtils::lerpColor(0xFFB44DE0, 0xFF8A5BE8, ph1),
                               0.16f * alpha);

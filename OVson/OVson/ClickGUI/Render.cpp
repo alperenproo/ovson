@@ -2,6 +2,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #endif
 #include "ClickGUI.h"
+#include "ClickGUI_Bridge.h"
 #include "State.h"
 #include "Theme.h"
 #include "Helpers.h"
@@ -37,8 +38,6 @@ using ClickGUITheme::textSecondary;
 using ClickGUITheme::textMuted;
 using ClickGUITheme::easeOut;
 
-// Current server IP from Minecraft (ServerData.serverIP), 1s-cached so we
-// don't hit JNI every frame. "Singleplayer" when not on a server.
 static std::string getServerIp() {
   static std::string cached = "Singleplayer";
   static ULONGLONG last = 0;
@@ -95,9 +94,6 @@ static std::string getServerIp() {
   return cached;
 }
 
-// Minimal line-style icons for the 7 sidebar tabs (raw GL11), so the
-// sidebar matches the spec mock (eye / people / tag / gear / palette /
-// monitor / wrench). x,y = top-left of an s×s box.
 static void drawTabIcon(int idx, float x, float y, float s, DWORD col,
                         float a) {
   float r = ((col >> 16) & 0xFF) / 255.0f;
@@ -129,7 +125,7 @@ static void drawTabIcon(int idx, float x, float y, float s, DWORD col,
     glEnd();
   };
   switch (idx) {
-  case 0: // Visuals — eye
+  case 0:
     glBegin(GL_LINE_LOOP);
     for (int i = 0; i <= 12; ++i) {
       float t = -1.0f + 2.0f * i / 12.0f;
@@ -142,7 +138,7 @@ static void drawTabIcon(int idx, float x, float y, float s, DWORD col,
     glEnd();
     disc(cx, cy, s * 0.12f);
     break;
-  case 1: // Players — two heads + shoulders
+  case 1:
     ring(cx - s * 0.17f, cy - s * 0.13f, s * 0.12f);
     ring(cx + s * 0.17f, cy - s * 0.13f, s * 0.12f);
     glBegin(GL_LINE_STRIP);
@@ -152,7 +148,7 @@ static void drawTabIcon(int idx, float x, float y, float s, DWORD col,
     glVertex2f(cx + s * 0.36f, cy + s * 0.32f);
     glEnd();
     break;
-  case 2: // Tags — rotated square + hole
+  case 2:
     glBegin(GL_LINE_LOOP);
     glVertex2f(cx + s * 0.02f, cy - s * 0.36f);
     glVertex2f(cx + s * 0.38f, cy);
@@ -161,7 +157,7 @@ static void drawTabIcon(int idx, float x, float y, float s, DWORD col,
     glEnd();
     disc(cx - s * 0.10f, cy - s * 0.10f, s * 0.05f);
     break;
-  case 3: // Settings — gear (ring + spokes)
+  case 3:
     ring(cx, cy, s * 0.18f);
     glBegin(GL_LINES);
     for (int i = 0; i < 8; ++i) {
@@ -171,13 +167,13 @@ static void drawTabIcon(int idx, float x, float y, float s, DWORD col,
     }
     glEnd();
     break;
-  case 4: // Colors — palette (ring + three dots)
+  case 4:
     ring(cx, cy, s * 0.34f);
     disc(cx - s * 0.14f, cy - s * 0.06f, s * 0.06f);
     disc(cx + s * 0.12f, cy - s * 0.12f, s * 0.06f);
     disc(cx + s * 0.06f, cy + s * 0.14f, s * 0.06f);
     break;
-  case 5: // Debug — monitor
+  case 5:
     glBegin(GL_LINE_LOOP);
     glVertex2f(cx - s * 0.36f, cy - s * 0.28f);
     glVertex2f(cx + s * 0.36f, cy - s * 0.28f);
@@ -191,13 +187,28 @@ static void drawTabIcon(int idx, float x, float y, float s, DWORD col,
     glVertex2f(cx + s * 0.14f, cy + s * 0.30f);
     glEnd();
     break;
-  default: // Utils — wrench
+  case 6:
     glLineWidth(2.0f);
     glBegin(GL_LINE_STRIP);
     glVertex2f(cx - s * 0.28f, cy + s * 0.30f);
     glVertex2f(cx + s * 0.12f, cy - s * 0.10f);
     glEnd();
     ring(cx + s * 0.20f, cy - s * 0.20f, s * 0.13f);
+    break;
+  default:
+    glBegin(GL_LINE_LOOP);
+    glVertex2f(cx - s * 0.30f, cy - s * 0.30f);
+    glVertex2f(cx + s * 0.05f, cy - s * 0.30f);
+    glVertex2f(cx + s * 0.05f, cy + s * 0.05f);
+    glVertex2f(cx - s * 0.30f, cy + s * 0.05f);
+    glEnd();
+    glBegin(GL_LINE_LOOP);
+    glVertex2f(cx - s * 0.05f, cy - s * 0.05f);
+    glVertex2f(cx + s * 0.30f, cy - s * 0.05f);
+    glVertex2f(cx + s * 0.30f, cy + s * 0.30f);
+    glVertex2f(cx - s * 0.05f, cy + s * 0.30f);
+    glEnd();
+    disc(cx, cy, s * 0.08f);
     break;
   }
   glLineWidth(1.0f);
@@ -227,10 +238,6 @@ static void drawCaret(float cx, float cy, float s, bool open, uint32_t col, floa
   glEnable(GL_TEXTURE_2D);
 }
 
-// ── Layout B: classic ClickGUI (draggable category windows) ────────
-// A module's sub-setting. Kinds: a section header (Label), a sub-toggle,
-// a value slider, or a click-cycle dropdown (Choice). Revealed below the
-// module row when the module is expanded (right-click).
 enum class LbKind { Toggle, Slider, Choice, Label, Input };
 struct LbSub {
   const char *name;
@@ -240,12 +247,12 @@ struct LbSub {
   std::function<float()> fget;
   std::function<void(float)> fset;
   float fmin = 0.0f, fmax = 1.0f;
-  const char *unit = "";   // slider value suffix, e.g. "m"
-  bool pct = false;        // render slider value as a percentage
+  const char *unit = "";
+  bool pct = false;
   std::vector<const char *> choices;
   std::function<const char *()> cget;
   std::function<void(const char *)> cset;
-  bool open = false;       // dropdown expanded (Choice only)
+  bool open = false;
   bool *typingStatePtr = nullptr;
   std::string *inputBufPtr = nullptr;
   std::function<std::string()> sget;
@@ -290,7 +297,6 @@ static void setNameTagStat(const std::string &key, bool val) {
 static std::vector<LbWindow> s_lbWins;
 static bool s_lbInit = false;
 
-// Helper builders so the module table stays readable.
 static LbSub subToggle(const char *n, std::function<bool()> g,
                        std::function<void(bool)> s) {
   LbSub sb; sb.name = n; sb.kind = LbKind::Toggle; sb.bget = g; sb.bset = s;
@@ -328,8 +334,6 @@ static LbSub subInput(const char *n, bool *typingState, std::string *buf,
 
 static const float kDdOptH = 26.0f;  // dropdown option row height
 
-// Per-kind row height of a sub-setting (Choice grows while its dropdown
-// is open so the option list fits inline).
 static float lbSubH(const LbSub &s) {
   switch (s.kind) {
     case LbKind::Label:  return 26.0f;
@@ -337,12 +341,10 @@ static float lbSubH(const LbSub &s) {
     case LbKind::Choice:
       return 60.0f + (s.open ? (float)s.choices.size() * kDdOptH : 0.0f);
     case LbKind::Input:  return 60.0f;
-    default:             return 32.0f;   // Toggle
+    default:             return 32.0f;
   }
 }
 
-// Total drawn height of a window (title + each module row + any revealed
-// sub-setting rows when expanded).
 static float lbWinHeight(const LbWindow &w, float titleH, float rowH) {
   float wh = titleH;
   if (w.open) {
@@ -366,8 +368,6 @@ static float lbWinHeight(const LbWindow &w, float titleH, float rowH) {
   return wh;
 }
 
-// Persist Layout B window positions into config.json, serialized as
-// "x,y,open;x,y,open;...".
 static void saveLayoutB(const std::vector<LbWindow> &wins) {
   std::string s;
   for (const auto &w : wins) {
@@ -380,8 +380,6 @@ static void saveLayoutB(const std::vector<LbWindow> &wins) {
 static void loadLayoutB(std::vector<LbWindow> &wins) {
   const std::string &s = Config::getLayoutBData();
   if (s.empty()) return;
-  // Ignore stale data saved for a different window set (count mismatch) so
-  // windows fall back to clean defaults instead of clustering.
   if (std::count(s.begin(), s.end(), ';') != (long long)wins.size()) return;
   size_t i = 0, wi = 0;
   while (i < s.size() && wi < wins.size()) {
@@ -396,14 +394,9 @@ static void loadLayoutB(std::vector<LbWindow> &wins) {
   }
 }
 
-// Build the shared category/module list once. Used by Layouts B and C.
 static void ensureLbWindows() {
   if (s_lbInit) return;
   s_lbInit = true;
-    // Windows mirror the real sidebar categories (Layout A). Players &
-    // Colors are list/picker views with no on/off modules, so they have
-    // no classic window here.
-    // ── VISUALS ──────────────────────────────────────────────────
     {
       LbWindow w{"VISUALS", 30, 44, true, {}};
       w.mods.push_back({"Stats Overlay", &::StatsOverlay::isEnabled,
@@ -479,7 +472,6 @@ static void ensureLbWindows() {
                         &Config::setNotificationsEnabled, {}});
       s_lbWins.push_back(std::move(w));
     }
-    // ── UTILS ────────────────────────────────────────────────────
     {
       LbWindow w{"UTILS", 264, 44, true, {}};
       w.mods.push_back({"Bed Defense", &Config::isBedDefenseEnabled,
@@ -510,7 +502,6 @@ static void ensureLbWindows() {
                         &Config::setNumberDenickerEnabled, {}});
       s_lbWins.push_back(std::move(w));
     }
-    // ── SETTINGS ─────────────────────────────────────────────────
     {
       LbWindow w{"SETTINGS", 498, 44, true, {}};
       w.mods.push_back({"Auto GG", &Config::isAutoGGEnabled,
@@ -590,7 +581,6 @@ static void ensureLbWindows() {
                         [](bool) { ClickGUIState::s_waitingForKey = true; }, {}});
       s_lbWins.push_back(std::move(w));
     }
-    // ── TAGS ─────────────────────────────────────────────────────
     {
       LbWindow w{"TAGS", 732, 44, true, {}};
       w.mods.push_back({"Enable Tags", &Config::isTagsEnabled,
@@ -613,7 +603,6 @@ static void ensureLbWindows() {
                                   [](const std::string &v) { Config::setSeraphApiKey(v); }, true)}});
       s_lbWins.push_back(std::move(w));
     }
-    // ── DEBUG ────────────────────────────────────────────────────
     {
       using DC = Config::DebugCategory;
       LbWindow w{"DEBUG", 732, 232, true, {}};
@@ -642,6 +631,92 @@ static void ensureLbWindows() {
                             [](bool b) { Config::setDebugEnabled(DC::BedDefense, b); })}});
       s_lbWins.push_back(std::move(w));
     }
+
+    [&]() {
+      const auto &javaMods = ClickGUIBridge::getCachedModules();
+      for (const auto &mod : javaMods) {
+        LbWindow *targetWin = nullptr;
+        for (auto &w : s_lbWins) {
+          if (w.title && std::string(w.title) == mod.category) {
+            targetWin = &w;
+            break;
+          }
+        }
+
+        if (!targetWin) {
+          float nx = 100.0f + s_lbWins.size() * 60.0f;
+          float ny = 100.0f;
+          if (nx > 900.0f) nx = 100.0f;
+          
+          LbWindow nw;
+          nw.title = mod.category.c_str();
+          nw.x = nx;
+          nw.y = ny;
+          nw.open = true;
+          s_lbWins.push_back(std::move(nw));
+          targetWin = &s_lbWins.back();
+        }
+
+        LbModule lm;
+        lm.name = mod.name.c_str();
+        lm.get = [moduleObj = mod.moduleObj]() {
+          return ClickGUIBridge::getToggleValue(moduleObj);
+        };
+        lm.set = [moduleObj = mod.moduleObj](bool b) {
+          ClickGUIBridge::setModuleEnabled(moduleObj, b);
+        };
+
+        for (const auto &set : mod.settings) {
+          LbSub sub;
+          sub.name = set.name.c_str();
+          if (set.kind == "toggle") {
+            sub.kind = LbKind::Toggle;
+            sub.bget = [settingObj = set.settingObj]() {
+              return ClickGUIBridge::getToggleValue(settingObj);
+            };
+            sub.bset = [settingObj = set.settingObj](bool b) {
+              ClickGUIBridge::setToggleValue(settingObj, b);
+            };
+          } else if (set.kind == "slider") {
+            sub.kind = LbKind::Slider;
+            sub.fmin = set.minVal;
+            sub.fmax = set.maxVal;
+            sub.fget = [settingObj = set.settingObj]() {
+              return ClickGUIBridge::getSliderValue(settingObj);
+            };
+            sub.fset = [settingObj = set.settingObj](float f) {
+              ClickGUIBridge::setSliderValue(settingObj, f);
+            };
+          } else if (set.kind == "choice") {
+            sub.kind = LbKind::Choice;
+            for (const auto &ch : set.choices) {
+              sub.choices.push_back(ch.c_str());
+            }
+            sub.cget = [settingObj = set.settingObj]() -> const char* {
+              static thread_local std::string s_val;
+              s_val = ClickGUIBridge::getChoiceValue(settingObj);
+              return s_val.c_str();
+            };
+            sub.cset = [settingObj = set.settingObj](const char* s) {
+              ClickGUIBridge::setChoiceValue(settingObj, s);
+            };
+          } else if (set.kind == "input") {
+            sub.kind = LbKind::Input;
+            sub.typingStatePtr = const_cast<bool*>(&set.typingState);
+            sub.inputBufPtr = const_cast<std::string*>(&set.inputBuf);
+            sub.sget = [settingObj = set.settingObj]() {
+              return ClickGUIBridge::getInputValue(settingObj);
+            };
+            sub.sset = [settingObj = set.settingObj](const std::string &s) {
+              ClickGUIBridge::setInputValue(settingObj, s);
+            };
+          }
+          lm.subs.push_back(sub);
+        }
+        targetWin->mods.push_back(lm);
+      }
+    }();
+
     loadLayoutB(s_lbWins);  // restore saved window positions
 }
 
@@ -658,12 +733,9 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
   const float ww = 252.0f, titleH = 42.0f, rowH = 38.0f;
 
   if (!lClick) s_dragWin = -1;
-  // Save positions when a drag finishes.
   if (s_prevDrag >= 0 && s_dragWin < 0) saveLayoutB(s_lbWins);
   s_prevDrag = s_dragWin;
 
-  // Z-order: bring the clicked window to the end of the list (drawn last).
-  // Keep s_dragWin pointing at the same window after the reorder.
   if (s_bringFront >= 0 && s_bringFront < (int)s_lbWins.size()) {
     LbWindow w = s_lbWins[s_bringFront];
     s_lbWins.erase(s_lbWins.begin() + s_bringFront);
@@ -675,7 +747,6 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
     s_bringFront = -1;
   }
 
-  // Hit-test windows top-most first (reverse) so only the front one reacts.
   int hitWin = -1;
   for (int wi = (int)s_lbWins.size() - 1; wi >= 0 && hitWin < 0; --wi) {
     LbWindow &w = s_lbWins[wi];
@@ -694,7 +765,6 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
     bool needsScroll = (wh > maxWinH && win.open);
     if (needsScroll) drawnH = maxWinH;
 
-    // Calculate maximum scroll and smooth scroll
     float contentHeight = wh - titleH;
     float visibleHeight = drawnH - titleH;
     win.maxScroll = (contentHeight > visibleHeight) ? (contentHeight - visibleHeight + 10.0f) : 0.0f;
@@ -703,10 +773,8 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
     if (win.targetScroll < 0.0f) win.targetScroll = 0.0f;
     win.scrollOffset += (win.targetScroll - win.scrollOffset) * 0.18f;
 
-    // Any click on this (front-most) window raises it next frame.
     if (clickEvent && isHit) s_bringFront = (int)wi;
 
-    // Drag via the title bar.
     if (clickEvent && isHit && s_dragWin < 0 &&
         isHovered(mx, my, win.x, win.y, ww - 30, titleH)) {
       s_dragWin = (int)wi;
@@ -720,17 +788,14 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
 
     float A = s_animAlpha;  // fade everything with the open animation
     glDisable(GL_TEXTURE_2D);
-    // Full themed panel: drop shadow + animated accent colour wash + border
-    // (identical look to Layout A panels).
     drawThemePanel(win.x, win.y, ww, drawnH, A);
-    glDisable(GL_TEXTURE_2D);  // panel's radial glow may re-enable texturing
+    glDisable(GL_TEXTURE_2D);
 
     if (win.open) {
       DWORD dv = hairline();
       RenderUtils::drawRect(win.x + 1.0f, win.y + titleH - 1.0f, ww - 2.0f, 1.0f,
                             dv, (((dv >> 24) & 0xFF) / 255.0f) * A);
     }
-    // title: accent dot + label + collapse caret
     RenderUtils::drawCircle(win.x + 15.0f, win.y + titleH * 0.5f, 3.5f, accent(), A);
     glEnable(GL_TEXTURE_2D);
     g_guiFont.drawString(win.x + 28.0f, win.y + titleH * 0.5f - 6.0f, win.title,
@@ -738,12 +803,10 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
     drawCaret(win.x + ww - 16.0f, win.y + titleH * 0.5f, 3.5f, win.open,
               textMuted(), s_animAlpha);
 
-    // chevron / title-right toggles collapse.
     if (clickEvent && isHit && isHovered(mx, my, win.x + ww - 30, win.y, 30, titleH))
       win.open = !win.open;
 
     if (win.open) {
-      // Draw content with scissor test
       glEnable(GL_SCISSOR_TEST);
       glScissor((int)win.x, (int)(sh - (win.y + drawnH)), (int)ww, (int)(drawnH - titleH));
 
@@ -772,8 +835,6 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
         float &rhv = s_rowHov[rk];
         rhv += ((hov ? 1.0f : 0.0f) - rhv) * 0.2f;
         glDisable(GL_TEXTURE_2D);
-        // Expanded module keeps a highlight box + accent border (mock style);
-        // otherwise a fading hover background.
         if (m.expanded) {
           DWORD eb = surface2();
           RenderUtils::drawRoundedRect(win.x + 4, ry + 1, ww - 8, rowH - 2, 6.0f,
@@ -787,7 +848,6 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
                                        (((hb >> 24) & 0xFF) / 255.0f) * 0.7f *
                                            rhv * A);
         }
-        // enabled-indicator dot (accent circle when on, solid muted gray circle when off).
         float dcx = win.x + ww - 20.0f, dcy = ry + rowH * 0.5f;
         if (on) {
           RenderUtils::drawCircle(dcx, dcy, 3.0f, accent(), A);
@@ -795,7 +855,6 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
           RenderUtils::drawCircle(dcx, dcy, 3.0f, 0xFF505058, A);
         }
 
-        // chevron hint for modules with settings (right-click to expand).
         if (hasSubs)
           drawChevron(win.x + ww - 36, dcy, 4.0f, m.expanded,
                       m.expanded ? accent() : textMuted(), s_animAlpha);
@@ -803,7 +862,6 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
         g_guiFont.drawString(win.x + 16, ry + rowH * 0.5f - 6.5f, m.name,
                              applyAlpha(on ? textPrimary() : textSecondary(),
                                         s_animAlpha), 0.5f);
-        // left-click toggles the module; right-click reveals sub-settings.
         if (clickEvent && isHit && hov && s_dragWin < 0)
           m.set(!on);
         if (rClickEvent && isHit && hov && hasSubs)
@@ -811,11 +869,8 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
         ry += rowH;
         if (!m.expanded) continue;
 
-        // ── Expanded settings area (mock layout): plain section headers,
-        //    dot toggles, full-width sliders, full-width dropdowns. ───────
         float blockTop = ry;
 
-        // Calculate the height of visible sub-settings
         float subsSum = 0.0f;
         bool sectionVisible = true;
         for (const auto &s : m.subs) {
@@ -829,16 +884,14 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
 
         float subFade = s_animAlpha * (on ? 1.0f : 0.5f);
         glDisable(GL_TEXTURE_2D);
-        // Draw a darker background backdrop for the settings block
         RenderUtils::drawRoundedRect(win.x + 4.0f, blockTop, ww - 8.0f, subsSum + 18.0f, 6.0f, 0x000000, 0.15f * A);
 
-        // Draw a thin separator line under the module row (only a thin line separates them)
         DWORD divCol = hairline();
         RenderUtils::drawRect(win.x + 12.0f, blockTop, ww - 24.0f, 1.0f, divCol,
                               (((divCol >> 24) & 0xFF) / 255.0f) * 0.7f * A);
         ry += 10.0f;
-        const float lx = win.x + 16.0f;       // content left (symmetric 10px inset)
-        const float rx = win.x + ww - 16.0f;  // content right (symmetric 10px inset)
+        const float lx = win.x + 16.0f;
+        const float rx = win.x + ww - 16.0f;
 
         bool sectionRender = true;
         for (size_t si = 0; si < m.subs.size(); ++si) {
@@ -853,7 +906,6 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
           int sid = 9000 + (int)(unsigned char)win.title[0] * 97 +
                     (int)mi * 17 + (int)si;
 
-          // ── Section header (clearly just a caption, not a row) ──
           if (sb.kind == LbKind::Label) {
             bool lhov = inVisibleArea && isHovered(mx, my, win.x + 10, ry, ww - 20, sh) && isHit;
             glEnable(GL_TEXTURE_2D);
@@ -862,7 +914,6 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
                                  applyAlpha(labelColor, 0.85f * s_animAlpha),
                                  0.4f);
 
-            // Draw a modern, sleek chevron
             drawChevron(rx - 10.0f, ry + sh * 0.5f - 1.0f, 3.5f, sb.open, labelColor, s_animAlpha);
             glDisable(GL_TEXTURE_2D);
 
@@ -874,7 +925,6 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
             continue;
           }
 
-          // ── Sub-toggle: name + indicator dot ──
           if (sb.kind == LbKind::Toggle) {
             bool son = sb.bget();
             bool shov = inVisibleArea && isHovered(mx, my, win.x + 10, ry, ww - 20, sh) && isHit;
@@ -905,7 +955,6 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
             continue;
           }
 
-          // ── Slider: "Name — value" caption, full-width track below ──
           if (sb.kind == LbKind::Slider) {
             float sval = sb.fget();
             char vb[24];
@@ -921,7 +970,6 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
                                  applyAlpha(accent(), subFade), 0.42f);
             glDisable(GL_TEXTURE_2D);
 
-            // Slider drag only if within visible area of the window content
             bool sch = drawSlider(sid, lx, ry + 28.0f, rx - lx, 8.0f, sval,
                                   sb.fmin, sb.fmax, mx, my,
                                   lClick && isHit && inVisibleArea, subFade);
@@ -930,7 +978,6 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
             continue;
           }
 
-          // ── Dropdown: caption + full-width box; inline option list ──
           if (sb.kind == LbKind::Choice) {
             const char *cur = sb.cget ? sb.cget() : "";
             glEnable(GL_TEXTURE_2D);
@@ -954,7 +1001,6 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
             glDisable(GL_TEXTURE_2D);
             if (clickEvent && isHit && bhov && s_dragWin < 0)
               sb.open = !sb.open;
-            // open option list (inline; grows the panel).
             if (sb.open) {
               for (size_t k = 0; k < sb.choices.size(); ++k) {
                 float oy = boxY + boxH + (float)k * kDdOptH;
@@ -987,7 +1033,6 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
             continue;
           }
 
-          // ── Input: caption + full-width text input box ──
           if (sb.kind == LbKind::Input) {
             bool typing = sb.typingStatePtr ? *(sb.typingStatePtr) : false;
             std::string &buf = *(sb.inputBufPtr);
@@ -1052,7 +1097,6 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
       glDisable(GL_SCISSOR_TEST);
     }
 
-    // Draw scrollbar
     if (win.open && win.maxScroll > 1.0f) {
       float sbX = win.x + ww - 6.0f;
       float sbY = win.y + titleH + 4.0f;
@@ -1100,7 +1144,6 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
     }
   }
 
-  // Layout selector (top-left) so you can switch back to A.
   {
     static const char *lyLbl[] = {"A", "B"};
     const std::string &cur = Config::getClickGuiLayout();
@@ -1249,6 +1292,26 @@ void ClickGUI::render(HDC hdc) {
     }
   }
 
+  if (s_open && s_waitingForUninjectKey) {
+    for (int k = 1; k < 255; ++k) {
+      if (k == VK_LBUTTON || k == VK_RBUTTON || k == VK_MBUTTON)
+        continue;
+      if ((GetAsyncKeyState(k) & 0x8000) != 0) {
+        if (k == VK_ESCAPE) {
+          s_waitingForUninjectKey = false;
+        } else {
+          Config::setUninjectKey(k);
+          Config::save();
+          NotificationManager::getInstance()->add(
+              "Settings", "Uninject bind set to " + getKeyName(k),
+              NotificationType::Success);
+          s_waitingForUninjectKey = false;
+        }
+        break;
+      }
+    }
+  }
+
   float alphaDiff = s_targetAlpha - s_animAlpha;
   s_animAlpha += alphaDiff * 0.18f;
   s_openingScale = 0.94f + 0.06f * easeOut(s_animAlpha);
@@ -1299,7 +1362,6 @@ void ClickGUI::render(HDC hdc) {
   bool rClickEvent = rClick && !s_lastRButton;
   s_lastRButton = rClick;
 
-  // Layout B (classic windows) is a fully separate renderer.
   if (Config::getClickGuiLayout() == "B") {
     RenderUtils::drawRect(0, 0, sw, sh, applyAlpha(0xB0000000, s_animAlpha));
     renderLayoutB(mx, my, lClick, clickEvent, rClickEvent, sw, sh);
@@ -1341,7 +1403,7 @@ void ClickGUI::render(HDC hdc) {
 
   const float mainX = g_x;
   const float mainY = g_y;
-  const float sidebarW = 180.0f;  // wider sidebar for the redesign
+  const float sidebarW = 180.0f;
 
   drawThemePanel(mainX, mainY, g_w, g_h, s_animAlpha);
   drawThemeSidebar(mainX, mainY, sidebarW, g_h, s_animAlpha);
@@ -1349,13 +1411,11 @@ void ClickGUI::render(HDC hdc) {
   RenderUtils::drawRect(mainX + sidebarW, mainY + 60, g_w - sidebarW, 1,
                         applyAlpha(0x18FFFFFF, s_animAlpha));
 
-  // Logo mark: 30px accent square with a vertical sheen (spec §5.1).
   {
     float lmX = mainX + 16.0f, lmY = mainY + 15.0f, lmS = 30.0f;
     glDisable(GL_TEXTURE_2D);
     RenderUtils::drawGlow(lmX, lmY, lmS, lmS, 8.0f, accent(), 0.22f * s_animAlpha);
     RenderUtils::drawRoundedRect(lmX, lmY, lmS, lmS, 8.0f, accent(), s_animAlpha);
-    // top white sheen for a glossy mark
     RenderUtils::drawRoundedRect(lmX + 3, lmY + 2, lmS - 6, lmS * 0.45f, 6.0f,
                                  0xFFFFFFFF, 0.12f * s_animAlpha);
     glEnable(GL_TEXTURE_2D);
@@ -1368,11 +1428,10 @@ void ClickGUI::render(HDC hdc) {
   g_guiFont.drawString(mainX + 56, mainY + 40.0f, "CLIENT",
                        applyAlpha(accent(), s_animAlpha), 0.45f);
 
-  // ── Content header: breadcrumb (left) + server status chip (right) ──
   {
     static const char *tabNm[] = {"Visuals", "Players", "Tags", "Settings",
-                                  "Colors", "Debug", "Utils"};
-    int ti = (s_targetTab >= 0 && s_targetTab < 7) ? s_targetTab : 0;
+                                  "Colors", "Debug", "Utils", "Plugins"};
+    int ti = (s_targetTab >= 0 && s_targetTab < 8) ? s_targetTab : 0;
     float hbX = mainX + sidebarW + 30.0f, hbY = mainY + 22.0f;
     // getStringWidth() is measured at scale 0.5, so visual width of
     // drawString(text, S) == getStringWidth(text) * (S / 0.5).
@@ -1468,6 +1527,7 @@ void ClickGUI::render(HDC hdc) {
       s_contentSlide = 18.0f;
       s_targetScroll = 0.0f;
       s_scrollOffset = 0.0f;
+      s_maxScroll = 0.0f;
     }
   } else {
     s_contentAlpha += 0.20f;
@@ -1483,13 +1543,12 @@ void ClickGUI::render(HDC hdc) {
   s_scrollOffset += (s_targetScroll - s_scrollOffset) * 0.18f;
 
   const char *tabs[] = {"Visuals", "Players", "Tags",  "Settings",
-                        "Colors",  "Debug",   "Utils", nullptr};
+                        "Colors",  "Debug",   "Utils", "Plugins", nullptr};
   float ty = mainY + tabStartY;
   for (int i = 0; tabs[i]; ++i) {
     bool hover = isHovered(mx, my, mainX + 12, ty - 10, sidebarW - 24, 42);
     
-    // Smooth hover fade for non-active tabs.
-    static float s_tabHov[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    static float s_tabHov[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
     float wantHov = (hover && s_targetTab != i) ? 1.0f : 0.0f;
     s_tabHov[i] += (wantHov - s_tabHov[i]) * 0.2f;
     if (s_tabHov[i] > 0.01f) {
@@ -1525,7 +1584,6 @@ void ClickGUI::render(HDC hdc) {
     ty += tabRowH;
   }
 
-  // ── Layout selector (A/B) just above the theme selector ──
   {
     static const char *lyLbl[] = {"A", "B"};
     const std::string &cur = Config::getClickGuiLayout();
@@ -1560,7 +1618,6 @@ void ClickGUI::render(HDC hdc) {
     glEnable(GL_TEXTURE_2D);
   }
 
-  // ── Theme selector pinned to the sidebar bottom (spec mock) ──
   {
     static const char *thLbl[] = {"Solid", "Glass", "Min"};
     static const char *thId[]  = {"Solid", "LiquidGlass", "Minimal"};
@@ -1626,6 +1683,7 @@ void ClickGUI::render(HDC hdc) {
   case 4: Tabs::renderColors  (ctx); break;
   case 5: Tabs::renderDebug   (ctx); break;
   case 6: Tabs::renderUtils   (ctx); break;
+  case 7: Tabs::renderPlugins (ctx); break;
   default: break;
   }
 
@@ -1637,7 +1695,6 @@ void ClickGUI::render(HDC hdc) {
 
   glDisable(GL_SCISSOR_TEST);
 
-  // Scrollbar (spec §5.1): thin white thumb, only when scrollable.
   if (s_maxScroll > 1.0f) {
     float trackX = mainX + g_w - 13.0f;
     float trackY = mainY + 72.0f;
@@ -1683,4 +1740,10 @@ void ClickGUI::render(HDC hdc) {
   }
 }
 
+void ClickGUI::resetLayoutB() {
+  s_lbInit = false;
+  s_lbWins.clear();
+}
+
 } // namespace Render
+

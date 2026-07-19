@@ -1,9 +1,10 @@
 #include "ClickGUI.h"
 #include "State.h"
 #include "Helpers.h"
+#include "../Config/Config.h"
+#include "../Render/BetterTab.h"
 #include "../Render/StatsOverlay.h"
 #include "../Render/NotificationManager.h"
-#include "../Config/Config.h"
 #include "../Utils/SensitivityFix.h"
 #include "../Utils/Timer.h"
 #include <Windows.h>
@@ -39,8 +40,9 @@ std::string ClickGUI::getKeyName(int vk) {
   return "Key " + std::to_string(vk);
 }
 
-void ClickGUI::toggle() {
-  s_open = !s_open;
+void ClickGUI::setOpen(bool open) {
+  if (s_open == open) return;
+  s_open = open;
   s_targetAlpha = s_open ? 1.0f : 0.0f;
 
   if (s_open) {
@@ -54,13 +56,16 @@ void ClickGUI::toggle() {
     setMouseGrabbed(false);
     FocusFix::setIngameFocus(false);
   } else {
-    if (isIngame()) {
+    FocusFix::setIngameFocus(true);
+    if (isIngame() && !BetterTab::isResizeMode()) {
       ShowCursor(FALSE);
       setMouseGrabbed(true);
-      FocusFix::setIngameFocus(true);
     }
-    s_dragging = false;
   }
+}
+
+void ClickGUI::toggle() {
+  setOpen(!s_open);
 }
 
 void ClickGUI::updateInput(HWND hwnd) {

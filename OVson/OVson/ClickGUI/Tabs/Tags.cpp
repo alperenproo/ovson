@@ -112,33 +112,6 @@ void renderTags(TabCtx &ctx) {
     }
     cy += 50;
 
-    g_guiFont.drawString(cx, cy, "Command Prefix",
-                         applyAlpha(0xFFA0A0A5, alpha));
-    cy += 20;
-    glDisable(GL_TEXTURE_2D);
-    drawTextInput(cx, cy, 100, 35, s_typingPrefix,
-                  isHovered(mx, my, cx, cy, 100, 35), alpha);
-    glEnable(GL_TEXTURE_2D);
-
-    std::string dispPrefix =
-        s_typingPrefix ? s_prefixInput : Config::getCommandPrefix();
-    if (s_typingPrefix && (GetTickCount64() / 500) % 2 == 0)
-      dispPrefix += "|";
-
-    g_guiFont.drawString(cx + 10, cy + 8, dispPrefix,
-                         applyAlpha(0xFFFFFFFF, alpha));
-
-    if (clickEvent && isHovered(mx, my, cx, cy, 100, 35)) {
-      s_typingPrefix = true;
-      s_typingSeraphKey = s_typingUrchinKey = s_typingSearch =
-          s_typingApiKey = s_typingAutoGG = false;
-      s_prefixInput = Config::getCommandPrefix();
-    } else if (clickEvent && s_typingPrefix) {
-      Config::setCommandPrefix(s_prefixInput);
-      s_typingPrefix = false;
-    }
-    cy += 50;
-
     g_guiFont.drawString(cx, cy, "Urchin API Key",
                          applyAlpha(0xFFA0A0A5, alpha));
     cy += 20;
@@ -196,9 +169,112 @@ void renderTags(TabCtx &ctx) {
         NotificationManager::getInstance()->add("Seraph", "API Key Saved",
                                                 NotificationType::Success);
       }
-      s_typingSeraphKey = false;
     }
-    cy += 70;
+    cy += 45;
+
+  g_guiFont.drawString(cx, cy, "Muted Tag Chat Alerts", applyAlpha(0xFFFFFFFF, alpha));
+  cy += 35;
+
+  bool hMuteCard = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 85);
+  glDisable(GL_TEXTURE_2D);
+  drawThemeCard(mainX + 190, cy - 10, g_w - 210, 85, hMuteCard, alpha);
+  glEnable(GL_TEXTURE_2D);
+
+  bool muteEnabled = Config::isMuteTagAlertsEnabled();
+  g_guiFont.drawString(cx, cy, "Mute Tag Warnings", applyAlpha(0xFFFFFFFF, alpha));
+  g_guiFont.drawString(cx, cy + 18, "Disable chat warnings/notifications for specified players",
+                       applyAlpha(0xFFA0A0A5, alpha), 0.45f);
+
+  glDisable(GL_TEXTURE_2D);
+  drawSwitch(13, mainX + g_w - 65, cy, muteEnabled, hMuteCard && (my < cy + 30), alpha);
+  glEnable(GL_TEXTURE_2D);
+
+  if (clickEvent && hMuteCard && (my < cy + 30)) {
+    Config::setMuteTagAlertsEnabled(!muteEnabled);
+  }
+
+  bool muteSelfEnabled = Config::isMuteSelfTagAlertsEnabled();
+  float muteSelfAlpha = alpha * (muteEnabled ? 1.0f : 0.4f);
+
+  g_guiFont.drawString(cx + 10, cy + 45, "Mute Self Warnings", applyAlpha(0xFFFFFFFF, muteSelfAlpha), 0.42f);
+
+  glDisable(GL_TEXTURE_2D);
+  drawSwitch(144, mainX + g_w - 65, cy + 42, muteSelfEnabled, hMuteCard && (my >= cy + 30) && muteEnabled, muteSelfAlpha);
+  glEnable(GL_TEXTURE_2D);
+
+  if (clickEvent && hMuteCard && (my >= cy + 30) && muteEnabled) {
+    Config::setMuteSelfTagAlertsEnabled(!muteSelfEnabled);
+  }
+  cy += 90;
+
+  float activeMuteAlpha = alpha * (muteEnabled ? 1.0f : 0.4f);
+  g_guiFont.drawString(cx, cy, "Add Player to Mute List", applyAlpha(0xFFFFFFFF, activeMuteAlpha));
+  cy += 20;
+
+  glDisable(GL_TEXTURE_2D);
+  drawTextInput(cx, cy, 250, 35, s_typingMuteTagPlayer,
+                muteEnabled && isHovered(mx, my, cx, cy, 250, 35), activeMuteAlpha);
+  glEnable(GL_TEXTURE_2D);
+
+  std::string dispMuteInput = s_typingMuteTagPlayer ? s_muteTagPlayerInput : "Enter player name...";
+  if (s_typingMuteTagPlayer && (GetTickCount64() / 500) % 2 == 0)
+    dispMuteInput += "|";
+  g_guiFont.drawString(cx + 10, cy + 8, dispMuteInput,
+                       applyAlpha(s_typingMuteTagPlayer ? 0xFFFFFFFF : 0xFF808085, activeMuteAlpha));
+
+  if (clickEvent && muteEnabled && isHovered(mx, my, cx, cy, 250, 35)) {
+    s_typingMuteTagPlayer = true;
+    s_typingSeraphKey = s_typingUrchinKey = s_typingSearch = s_typingApiKey = s_typingAutoGG = false;
+    s_muteTagPlayerInput = "";
+  } else if (clickEvent && s_typingMuteTagPlayer) {
+    if (!s_muteTagPlayerInput.empty()) {
+      Config::addMutedTagPlayer(s_muteTagPlayerInput);
+      NotificationManager::getInstance()->add("Tags", "Player added to mute list: " + s_muteTagPlayerInput,
+                                              NotificationType::Success);
+      s_muteTagPlayerInput.clear();
+    }
+    s_typingMuteTagPlayer = false;
+  }
+  cy += 50;
+
+  const auto &mutedPlayers = Config::getMutedTagPlayers();
+  if (!mutedPlayers.empty()) {
+    g_guiFont.drawString(cx, cy, "Muted Players:", applyAlpha(0xFFA0A0A5, activeMuteAlpha));
+    cy += 20;
+    for (const auto &p : mutedPlayers) {
+      bool hDel = muteEnabled && isHovered(mx, my, cx + 180, cy - 2, 20, 20);
+      g_guiFont.drawString(cx, cy, p, applyAlpha(0xFFFFFFFF, activeMuteAlpha));
+      
+      float rx = cx + 180;
+      float ry = cy - 2;
+      float rw = 18.0f;
+      float rh = 18.0f;
+      glDisable(GL_TEXTURE_2D);
+      RenderUtils::drawRoundedRect(rx, ry, rw, rh, 4.0f, hDel ? 0xFFD32F2F : 0xFF2A2A2D, activeMuteAlpha);
+      glDisable(GL_TEXTURE_2D);
+      
+      glColor4f(1.0f, 1.0f, 1.0f, activeMuteAlpha);
+      glLineWidth(1.5f);
+      glBegin(GL_LINES);
+      glVertex2f(rx + 6.0f, ry + 6.0f);
+      glVertex2f(rx + rw - 6.0f, ry + rh - 6.0f);
+      glVertex2f(rx + rw - 6.0f, ry + 6.0f);
+      glVertex2f(rx + 6.0f, ry + rh - 6.0f);
+      glEnd();
+      glEnable(GL_TEXTURE_2D);
+
+      if (clickEvent && hDel) {
+        Config::removeMutedTagPlayer(p);
+        NotificationManager::getInstance()->add("Tags", "Removed " + p + " from mute list",
+                                                NotificationType::Warning);
+        break; // break loop because vector modified
+      }
+      cy += 25;
+    }
+    cy += 15;
+  } else {
+    cy += 10;
+  }
   }
 
   g_guiFont.drawString(cx, cy, "Players in Current Game",

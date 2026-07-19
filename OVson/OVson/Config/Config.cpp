@@ -32,6 +32,8 @@ static bool g_debugging = false;
 static bool g_bedDefenseEnabled = false;
 static int g_clickGuiKey = 45; // INSERT
 static bool g_clickGuiOn = true;
+static int g_uninjectKey = 35; // END
+static bool g_uninjectKeyEnabled = true;
 static bool g_notificationsEnabled = true;
 static bool g_autoGGEnabled = true;
 static std::string g_autoGGMessage = "gg";
@@ -40,6 +42,34 @@ static bool g_motionBlurEnabled = false;
 static float g_motionBlurAmount = 0.5f;
 static bool g_nameTagsEnabled = true;
 static float g_nameTagHeight = 2.4f; // world-Y offset above feet
+
+static bool g_muteTagAlertsEnabled = false;
+static bool g_muteSelfTagAlertsEnabled = false;
+static std::vector<std::string> g_mutedTagPlayers;
+
+static std::string serializeMutedTagPlayers() {
+  std::string out;
+  for (size_t i = 0; i < g_mutedTagPlayers.size(); ++i) {
+    if (i) out += ',';
+    out += g_mutedTagPlayers[i];
+  }
+  return out;
+}
+
+static void parseMutedTagPlayers(const std::string &s) {
+  g_mutedTagPlayers.clear();
+  if (s.empty()) return;
+  size_t start = 0;
+  while (true) {
+    size_t comma = s.find(',', start);
+    if (comma == std::string::npos) {
+      g_mutedTagPlayers.push_back(s.substr(start));
+      break;
+    }
+    g_mutedTagPlayers.push_back(s.substr(start, comma - start));
+    start = comma + 1;
+  }
+}
 
 static std::vector<std::pair<std::string, bool>> g_nameTagStats = {
     {"star", true},
@@ -127,6 +157,9 @@ static std::string g_teamReportChannel = "/pc";
 static bool g_preGameChatStatsEnabled = true;
 static bool g_smartChatBypassEnabled = false;
 static bool g_betterTabModeEnabled = false;
+static float g_betterTabX = -1.0f;
+static float g_betterTabY = -1.0f;
+static float g_betterTabScale = 1.0f;
 static bool g_keylessMode = false;
 static std::string g_commandPrefix = ".";
 static std::string g_auroraApiKey = "";
@@ -282,6 +315,17 @@ bool Config::initialize(HMODULE self) {
   if (!parseJsonBool(all, "tabSortDescending", g_tabSortDescending))
     g_tabSortDescending = true;
 
+  if (!parseJsonBool(all, "muteTagAlertsEnabled", g_muteTagAlertsEnabled))
+    g_muteTagAlertsEnabled = false;
+
+  if (!parseJsonBool(all, "muteSelfTagAlertsEnabled", g_muteSelfTagAlertsEnabled))
+    g_muteSelfTagAlertsEnabled = false;
+
+  if (parseJsonLine(all, "mutedTagPlayers", val))
+    parseMutedTagPlayers(val);
+  else
+    g_mutedTagPlayers.clear();
+
   if (!parseJsonBool(all, "debugging", g_debugging))
     g_debugging = false;
 
@@ -293,6 +337,12 @@ bool Config::initialize(HMODULE self) {
 
   if (!parseJsonBool(all, "clickGuiOn", g_clickGuiOn))
     g_clickGuiOn = true;
+
+  if (!parseJsonInt(all, "uninjectKey", g_uninjectKey))
+    g_uninjectKey = 35;
+
+  if (!parseJsonBool(all, "uninjectKeyEnabled", g_uninjectKeyEnabled))
+    g_uninjectKeyEnabled = true;
 
   if (!parseJsonBool(all, "notificationsEnabled", g_notificationsEnabled))
     g_notificationsEnabled = true;
@@ -480,6 +530,13 @@ bool Config::initialize(HMODULE self) {
   if (!parseJsonBool(all, "betterTabModeEnabled", g_betterTabModeEnabled))
     g_betterTabModeEnabled = false;
 
+  if (!parseJsonFloat(all, "betterTabX", g_betterTabX))
+    g_betterTabX = -1.0f;
+  if (!parseJsonFloat(all, "betterTabY", g_betterTabY))
+    g_betterTabY = -1.0f;
+  if (!parseJsonFloat(all, "betterTabScale", g_betterTabScale))
+    g_betterTabScale = 1.0f;
+
   if (parseJsonLine(all, "commandPrefix", val))
     g_commandPrefix = val;
   else
@@ -555,6 +612,8 @@ static bool saveImpl() {
       "  \"bedDefenseEnabled\": %s,\n"
       "  \"clickGuiKey\": %d,\n"
       "  \"clickGuiOn\": %s,\n"
+      "  \"uninjectKey\": %d,\n"
+      "  \"uninjectKeyEnabled\": %s,\n"
       "  \"notificationsEnabled\": %s,\n"
       "  \"autoGGEnabled\": %s,\n"
       "  \"autoGGMessage\": \"%s\",\n"
@@ -570,6 +629,9 @@ static bool saveImpl() {
       "  \"seraphApiKey\": \"%s\",\n"
       "  \"tagsEnabled\": %s,\n"
       "  \"activeTagService\": \"%s\",\n"
+      "  \"muteTagAlertsEnabled\": %s,\n"
+      "  \"muteSelfTagAlertsEnabled\": %s,\n"
+      "  \"mutedTagPlayers\": \"%s\",\n"
       "  \"clickGuiTheme\": \"%s\",\n"
       "  \"clickGuiLayout\": \"%s\",\n"
       "  \"layoutBData\": \"%s\",\n"
@@ -581,7 +643,8 @@ static bool saveImpl() {
       "  \"liquidGlassDarkness\": %.2f,\n"
       "  \"chatBypasserEnabled\": %s,\n"
       "  \"debugGlobal\": %s,\n"
-      "  \"debugGameDetection\": %s,\n"
+      "  "
+      "\"debugGameDetection\": %s,\n"
       "  \"debugBedDetection\": %s,\n"
       "  \"debugUrchin\": %s,\n"
       "  \"debugSeraph\": %s,\n"
@@ -612,6 +675,9 @@ static bool saveImpl() {
       "  \"preGameChatStatsEnabled\": %s,\n"
       "  \"smartChatBypassEnabled\": %s,\n"
       "  \"betterTabModeEnabled\": %s,\n"
+      "  \"betterTabX\": %.2f,\n"
+      "  \"betterTabY\": %.2f,\n"
+      "  \"betterTabScale\": %.2f,\n"
       "  \"keylessMode\": %s,\n"
       "  \"commandPrefix\": \"%s\",\n"
       "  \"auroraApiKey\": \"%s\",\n"
@@ -629,6 +695,7 @@ static bool saveImpl() {
       g_apiKey.c_str(), g_overlayMode.c_str(), g_tabEnabled ? "true" : "false",
       g_debugging ? "true" : "false", g_bedDefenseEnabled ? "true" : "false",
       g_clickGuiKey, g_clickGuiOn ? "true" : "false",
+      g_uninjectKey, g_uninjectKeyEnabled ? "true" : "false",
       g_notificationsEnabled ? "true" : "false",
       g_autoGGEnabled ? "true" : "false", g_autoGGMessage.c_str(), g_themeColor,
       g_motionBlurEnabled ? "true" : "false", g_motionBlurAmount,
@@ -637,6 +704,9 @@ static bool saveImpl() {
       g_urchinEnabled ? "true" : "false", g_urchinApiKey.c_str(),
       g_seraphEnabled ? "true" : "false", g_seraphApiKey.c_str(),
       g_tagsEnabled ? "true" : "false", g_activeTagService.c_str(),
+      g_muteTagAlertsEnabled ? "true" : "false",
+      g_muteSelfTagAlertsEnabled ? "true" : "false",
+      serializeMutedTagPlayers().c_str(),
       g_clickGuiTheme.c_str(),
       g_clickGuiLayout.c_str(),
       g_layoutBData.c_str(),
@@ -672,6 +742,7 @@ static bool saveImpl() {
       g_preGameChatStatsEnabled ? "true" : "false",
       g_smartChatBypassEnabled ? "true" : "false",
       g_betterTabModeEnabled ? "true" : "false",
+      g_betterTabX, g_betterTabY, g_betterTabScale,
       g_keylessMode ? "true" : "false", g_commandPrefix.c_str(),
       g_auroraApiKey.c_str(), g_numberDenickerEnabled ? "true" : "false",
       g_pingDisplayMode, g_anticheatEnabled ? "true" : "false",
@@ -778,6 +849,18 @@ void Config::setNickedBypass(bool enabled) {
 int Config::getClickGuiKey() { return g_clickGuiKey; }
 void Config::setClickGuiKey(int key) {
   g_clickGuiKey = key;
+  save();
+}
+
+int Config::getUninjectKey() { return g_uninjectKey; }
+void Config::setUninjectKey(int key) {
+  g_uninjectKey = key;
+  save();
+}
+
+bool Config::isUninjectKeyEnabled() { return g_uninjectKeyEnabled; }
+void Config::setUninjectKeyEnabled(bool enabled) {
+  g_uninjectKeyEnabled = enabled;
   save();
 }
 
@@ -907,6 +990,44 @@ const std::string &Config::getActiveTagService() { return g_activeTagService; }
 void Config::setActiveTagService(const std::string &service) {
   g_activeTagService = service;
   save();
+}
+bool Config::isMuteTagAlertsEnabled() { return g_muteTagAlertsEnabled; }
+void Config::setMuteTagAlertsEnabled(bool enabled) {
+  g_muteTagAlertsEnabled = enabled;
+  save();
+}
+bool Config::isMuteSelfTagAlertsEnabled() { return g_muteSelfTagAlertsEnabled; }
+void Config::setMuteSelfTagAlertsEnabled(bool enabled) {
+  g_muteSelfTagAlertsEnabled = enabled;
+  save();
+}
+const std::vector<std::string> &Config::getMutedTagPlayers() {
+  return g_mutedTagPlayers;
+}
+void Config::addMutedTagPlayer(const std::string &name) {
+  if (name.empty()) return;
+  std::string lowerName = name;
+  for (auto &c : lowerName) c = std::tolower(c);
+  for (const auto &p : g_mutedTagPlayers) {
+    std::string lp = p;
+    for (auto &c : lp) c = std::tolower(c);
+    if (lp == lowerName) return;
+  }
+  g_mutedTagPlayers.push_back(name);
+  save();
+}
+void Config::removeMutedTagPlayer(const std::string &name) {
+  std::string lowerName = name;
+  for (auto &c : lowerName) c = std::tolower(c);
+  for (auto it = g_mutedTagPlayers.begin(); it != g_mutedTagPlayers.end(); ++it) {
+    std::string lp = *it;
+    for (auto &c : lp) c = std::tolower(c);
+    if (lp == lowerName) {
+      g_mutedTagPlayers.erase(it);
+      save();
+      break;
+    }
+  }
 }
 const std::string &Config::getClickGuiTheme() { return g_clickGuiTheme; }
 void Config::setClickGuiTheme(const std::string &theme) {
@@ -1218,6 +1339,21 @@ void Config::setSmartChatBypassEnabled(bool enabled) {
 bool Config::isBetterTabModeEnabled() { return g_betterTabModeEnabled; }
 void Config::setBetterTabModeEnabled(bool enabled) {
   g_betterTabModeEnabled = enabled;
+  save();
+}
+float Config::getBetterTabX() { return g_betterTabX; }
+void Config::setBetterTabX(float x) {
+  g_betterTabX = x;
+  save();
+}
+float Config::getBetterTabY() { return g_betterTabY; }
+void Config::setBetterTabY(float y) {
+  g_betterTabY = y;
+  save();
+}
+float Config::getBetterTabScale() { return g_betterTabScale; }
+void Config::setBetterTabScale(float scale) {
+  g_betterTabScale = scale;
   save();
 }
 

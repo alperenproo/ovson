@@ -6,7 +6,6 @@ namespace ClickGUIHelpers {
 
 void drawSectionLabel(float x, float y, const std::string &text, float alpha);
 
-// Dropdown chevron centered at (cx,cy); points down, or up when open.
 void drawChevron(float cx, float cy, float s, bool open, uint32_t col,
                  float alpha);
 
@@ -29,8 +28,6 @@ void drawThemeCard(float x, float y, float w, float h, bool hovered,
 void drawThemeButton(float x, float y, float w, float h, bool hovered,
                      bool pressed, float alpha);
 
-// Text input field (spec §2.8): inset background, hairline border that
-// becomes accent (a=0.5) when focused. Caller draws the text + cursor.
 void drawTextInput(float x, float y, float w, float h, bool focused,
                    bool hovered, float alpha);
 

@@ -27,6 +27,7 @@ std::string s_urchinKeyInput;
 std::string s_seraphKeyInput;
 std::string s_auroraApiKeyInput;
 std::string s_prefixInput = ".";
+std::string s_muteTagPlayerInput;
 
 bool s_typingSearch = false;
 bool s_typingApiKey = false;
@@ -35,6 +36,7 @@ bool s_typingUrchinKey = false;
 bool s_typingSeraphKey = false;
 bool s_typingAuroraApiKey = false;
 bool s_typingPrefix = false;
+bool s_typingMuteTagPlayer = false;
 
 float s_scrollOffset = 0.0f;
 float s_targetScroll = 0.0f;
@@ -102,6 +104,7 @@ bool  s_dragging = false;
 float s_dragOffsetX = 0.0f;
 float s_dragOffsetY = 0.0f;
 bool  s_waitingForKey = false;
+bool  s_waitingForUninjectKey = false;
 
 SwitchAnim s_switches[50];
 

@@ -12,9 +12,6 @@ namespace OVson {
 void initialize();
 void poll();
 
-// forcedUuid: when known (e.g. a de-nicked player whose UUID we
-// already resolved), pass it so the fetch skips the Mojang
-// name->uuid lookup (which would otherwise rate-limit and fail).
 void requestStatsForVisiblePlayer(const std::string &name,
                                   const std::string &forcedUuid = "");
 void shutdown();

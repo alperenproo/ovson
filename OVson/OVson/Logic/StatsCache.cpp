@@ -115,6 +115,7 @@ void resetGameCache() {
   g_teamReportSent = false;
   g_playerTeamColor.clear();
   g_playerFetchRetries.clear();
+  g_player500Retries.clear();
   {
     std::lock_guard<std::mutex> lock(g_alertedMutex);
     g_alertedPlayers.clear();

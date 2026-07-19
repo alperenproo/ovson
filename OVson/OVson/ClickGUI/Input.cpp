@@ -1,8 +1,10 @@
 #include "ClickGUI.h"
 #include "State.h"
+#include "ClickGUI_Bridge.h"
 #include "../Render/NotificationManager.h"
 #include "../Config/Config.h"
 #include "../Services/AbyssService.h"
+#include "../Services/PrismService.h"
 #include "../Services/Hypixel.h"
 #include "../Services/KhadowService.h"
 #include "../Services/SeraphService.h"
@@ -44,8 +46,20 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
       return;
     }
     if ((wParam == 'V') && (GetAsyncKeyState(VK_CONTROL) & 0x8000)) {
-      if (s_typingSearch || s_typingApiKey || s_typingAutoGG ||
-          s_typingUrchinKey || s_typingSeraphKey || s_typingAuroraApiKey) {
+      ClickGUIBridge::CustomJavaSetting* activeJavaSetting = nullptr;
+      for (auto &mod : const_cast<std::vector<ClickGUIBridge::CustomJavaModule>&>(ClickGUIBridge::getCachedModules())) {
+        for (auto &set : mod.settings) {
+          if (set.typingState) {
+            activeJavaSetting = &set;
+            break;
+          }
+        }
+        if (activeJavaSetting) break;
+      }
+
+      if (activeJavaSetting || s_typingSearch || s_typingApiKey || s_typingAutoGG ||
+          s_typingUrchinKey || s_typingSeraphKey || s_typingAuroraApiKey ||
+          s_typingPrefix || s_typingMuteTagPlayer) {
         if (OpenClipboard(NULL)) {
           HANDLE hData = GetClipboardData(CF_TEXT);
           if (hData) {
@@ -57,25 +71,35 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (c >= 32 && c <= 126)
                   filtered += c;
 
-              std::string *target =
-                  s_typingSearch
-                      ? &s_playerSearch
-                      : (s_typingApiKey
-                             ? &s_apiKeyInput
-                             : (s_typingAutoGG
-                                    ? &s_autoGGInput
-                                    : (s_typingUrchinKey
-                                           ? &s_urchinKeyInput
-                                           : (s_typingSeraphKey
-                                                  ? &s_seraphKeyInput
-                                                  : (s_typingAuroraApiKey
-                                                         ? &s_auroraApiKeyInput
-                                                         : &s_prefixInput)))));
-              int cap = (s_typingAutoGG || s_typingUrchinKey ||
-                         s_typingSeraphKey || s_typingAuroraApiKey)
-                            ? 100
-                            : (s_typingPrefix ? 1 : 48);
-              if (target->length() + filtered.length() < cap) {
+              std::string *target = nullptr;
+              int cap = 100;
+              if (activeJavaSetting) {
+                target = &activeJavaSetting->inputBuf;
+                cap = 100;
+              } else {
+                target =
+                s_typingSearch
+                    ? &s_playerSearch
+                    : (s_typingApiKey
+                           ? &s_apiKeyInput
+                           : (s_typingAutoGG
+                                  ? &s_autoGGInput
+                                  : (s_typingUrchinKey
+                                         ? &s_urchinKeyInput
+                                         : (s_typingSeraphKey
+                                                ? &s_seraphKeyInput
+                                                : (s_typingAuroraApiKey
+                                                       ? &s_auroraApiKeyInput
+                                                       : (s_typingPrefix
+                                                              ? &s_prefixInput
+                                                              : &s_muteTagPlayerInput))))));
+                cap = (s_typingAutoGG || s_typingUrchinKey ||
+                       s_typingSeraphKey || s_typingAuroraApiKey)
+                          ? 100
+                          : (s_typingPrefix ? 1 : (s_typingMuteTagPlayer ? 16 : 48));
+              }
+
+              if (target && target->length() + filtered.length() < cap) {
                 *target += filtered;
                 NotificationManager::getInstance()->add(
                     "Input", "Pasted from clipboard", NotificationType::Info);
@@ -95,33 +119,62 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
   if (msg == WM_CHAR) {
     char c = (char)wParam;
-    if (s_typingSearch || s_typingApiKey || s_typingAutoGG ||
+    ClickGUIBridge::CustomJavaSetting* activeJavaSetting = nullptr;
+    for (auto &mod : const_cast<std::vector<ClickGUIBridge::CustomJavaModule>&>(ClickGUIBridge::getCachedModules())) {
+      for (auto &set : mod.settings) {
+        if (set.typingState) {
+          activeJavaSetting = &set;
+          break;
+        }
+      }
+      if (activeJavaSetting) break;
+    }
+
+    if (activeJavaSetting || s_typingSearch || s_typingApiKey || s_typingAutoGG ||
         s_typingUrchinKey || s_typingSeraphKey || s_typingAuroraApiKey ||
-        s_typingPrefix) {
-      // holy holy holy holy holy
-          std::string *target =
-          s_typingSearch
-              ? &s_playerSearch
-              : (s_typingApiKey
-                     ? &s_apiKeyInput
-                     : (s_typingAutoGG
-                            ? &s_autoGGInput
-                            : (s_typingUrchinKey
-                                   ? &s_urchinKeyInput
-                                   : (s_typingSeraphKey
-                                          ? &s_seraphKeyInput
-                                          : (s_typingAuroraApiKey
-                                                 ? &s_auroraApiKeyInput
-                                                 : &s_prefixInput)))));
-      int cap = (s_typingAutoGG || s_typingUrchinKey || s_typingSeraphKey ||
-                 s_typingAuroraApiKey)
-                    ? 100
-                    : (s_typingPrefix ? 1 : 48);
+        s_typingPrefix || s_typingMuteTagPlayer) {
+      
+      std::string *target = nullptr;
+      int cap = 100;
+
+      if (activeJavaSetting) {
+        target = &activeJavaSetting->inputBuf;
+        cap = 100;
+      } else {
+        target =
+        s_typingSearch
+            ? &s_playerSearch
+            : (s_typingApiKey
+                   ? &s_apiKeyInput
+                   : (s_typingAutoGG
+                          ? &s_autoGGInput
+                          : (s_typingUrchinKey
+                                 ? &s_urchinKeyInput
+                                 : (s_typingSeraphKey
+                                        ? &s_seraphKeyInput
+                                        : (s_typingAuroraApiKey
+                                               ? &s_auroraApiKeyInput
+                                               : (s_typingPrefix
+                                                      ? &s_prefixInput
+                                                      : &s_muteTagPlayerInput))))));
+        cap = (s_typingAutoGG || s_typingUrchinKey || s_typingSeraphKey ||
+               s_typingAuroraApiKey)
+                  ? 100
+                  : (s_typingPrefix ? 1 : (s_typingMuteTagPlayer ? 16 : 48));
+      }
+
       if (c == 8) {
-        if (!target->empty())
+        if (target && !target->empty())
           target->pop_back();
       } else if (c == 13) {
-        if (s_typingSearch && !s_playerSearch.empty()) {
+        if (activeJavaSetting) {
+          ClickGUIBridge::setInputValue(activeJavaSetting->settingObj, activeJavaSetting->inputBuf);
+          NotificationManager::getInstance()->add(
+              activeJavaSetting->name, "Saved: " + activeJavaSetting->inputBuf,
+              NotificationType::Success);
+          activeJavaSetting->typingState = false;
+        } else {
+          if (s_typingSearch && !s_playerSearch.empty()) {
           std::string key = s_apiKeyInput;
           if (key.empty() || key == "None")
             key = Config::getApiKey();
@@ -149,6 +202,9 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                   std::optional<Hypixel::PlayerStats> statsOpt;
                   if (keyless) {
                     statsOpt = AbyssService::getPlayerStats(*uuidOpt);
+                    if (!statsOpt) {
+                      statsOpt = PrismService::getPlayerStats(*uuidOpt);
+                    }
                   } else {
                     statsOpt = Hypixel::getPlayerStats(key, *uuidOpt);
                   }
@@ -291,7 +347,15 @@ void ClickGUI::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                                                   NotificationType::Success);
           s_typingPrefix = false;
         }
-      } else if (c >= 32 && c <= 126) {
+        if (s_typingMuteTagPlayer) {
+          Config::addMutedTagPlayer(s_muteTagPlayerInput);
+          NotificationManager::getInstance()->add("Tags", "Player added to mute list: " + s_muteTagPlayerInput,
+                                                  NotificationType::Success);
+          s_muteTagPlayerInput.clear();
+          s_typingMuteTagPlayer = false;
+        }
+      }
+    } else if (c >= 32 && c <= 126) {
         if (target->length() < cap)
           target->push_back(c);
         else {

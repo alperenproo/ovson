@@ -5,6 +5,7 @@
 #include "../Logic/StatsTracker.h"
 #include "../ClickGUI/ClickGUI.h"
 #include "../Services/AbyssService.h"
+#include "../Services/PrismService.h"
 #include "../Services/AuroraService.h"
 #include "../Services/Hypixel.h"
 #include "../Services/SeraphService.h"
@@ -15,12 +16,29 @@
 #include "../Utils/ReplaySpammer.h"
 #include "../Utils/SafeGuard.h"
 #include "ChatSDK.h"
+#include "../Render/RenderHook.h"
 #include <algorithm>
 #include <iomanip>
 #include <jni.h>
 #include <mutex>
 #include <sstream>
 #include <unordered_map>
+
+static std::string escapeJson(const std::string &str) {
+  std::string result;
+  for (char c : str) {
+    if (c == '"') result += "\\\"";
+    else if (c == '\\') result += "\\\\";
+    else if (c == '/') result += "\\/";
+    else if (c == '\b') result += "\\b";
+    else if (c == '\f') result += "\\f";
+    else if (c == '\n') result += "\\n";
+    else if (c == '\r') result += "\\r";
+    else if (c == '\t') result += "\\t";
+    else result += c;
+  }
+  return result;
+}
 
 CommandRegistry &CommandRegistry::instance() {
   static CommandRegistry inst;
@@ -50,8 +68,7 @@ bool CommandRegistry::tryDispatch(const std::string &message) {
 
   auto it = nameToHandler.find(cmd);
   if (it == nameToHandler.end()) {
-    ChatSDK::showPrefixed(std::string("§cUnknown command: §f") + prefix + cmd);
-    return true;
+    return false;
   }
   try {
     it->second(args);
@@ -278,19 +295,26 @@ void cmd_stats(const std::string &args) {
     SafeGuard::run("Commands::statsLookup", [&]() {
       auto uuidOpt = Hypixel::getUuidByName(playerName);
       if (!uuidOpt.has_value()) {
-        ChatSDK::showPrefixed("§cPlayer not found: §f" + playerName);
+        RenderHook::enqueueTask([playerName]() {
+          ChatSDK::showPrefixed("§cPlayer not found: §f" + playerName);
+        });
         return;
       }
 
       std::optional<Hypixel::PlayerStats> statsOpt;
       if (keyless) {
         statsOpt = AbyssService::getPlayerStats(uuidOpt.value());
+        if (!statsOpt) {
+          statsOpt = PrismService::getPlayerStats(uuidOpt.value());
+        }
       } else {
         statsOpt = Hypixel::getPlayerStats(apiKey, uuidOpt.value());
       }
 
       if (!statsOpt.has_value()) {
-        ChatSDK::showPrefixed("§cFailed to fetch stats for §f" + playerName);
+        RenderHook::enqueueTask([playerName]() {
+          ChatSDK::showPrefixed("§cFailed to fetch stats for §f" + playerName);
+        });
         return;
       }
 
@@ -438,6 +462,35 @@ void cmd_stats(const std::string &args) {
              std::to_string(stats.bedwarsWins) + " ";
       msg += "§7[§fWLR§7] " + colorWlr(wlr) + wlrSs.str();
 
+      struct TagInfo {
+        std::string text;
+        std::string reason;
+      };
+      std::vector<TagInfo> tags;
+
+      auto getAbbr = [](const std::string &raw) -> std::string {
+        std::string t = raw;
+        for (auto &c : t)
+          c = toupper(c);
+        if (t.find("BLATANT") != std::string::npos)
+          return "§4[BC]";
+        if (t.find("CLOSET") != std::string::npos)
+          return "§4[CC]";
+        if (t.find("CONFIRMED") != std::string::npos)
+          return "§5[C]";
+        if (t.find("CHEATER") != std::string::npos)
+          return "§5[C]";
+        if (t.find("CAUTION") != std::string::npos)
+          return "§e[!]";
+        if (t.find("SUSPICIOUS") != std::string::npos)
+          return "§6[?]";
+        if (t.find("SNIPER") != std::string::npos)
+          return "§6[S]";
+        if (t.find("INFO") != std::string::npos)
+          return "§a[I]";
+        return "";
+      };
+
       std::string tagsStr = "";
       {
         std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
@@ -446,52 +499,75 @@ void cmd_stats(const std::string &args) {
           it = OVson::g_playerStatsMap.find(playerName);
         }
 
-        if (it != OVson::g_playerStatsMap.end() &&
-            !it->second.tagsDisplay.empty()) {
-          tagsStr = it->second.tagsDisplay;
+        if (it != OVson::g_playerStatsMap.end()) {
+          if (!it->second.tagsDisplay.empty()) {
+            tagsStr = it->second.tagsDisplay;
+          }
+          for (const auto &raw : it->second.rawTags) {
+            Logger::info("statsLookup: rawTag = %s", raw.c_str());
+            size_t sep = raw.find('\x1F');
+            if (sep != std::string::npos) {
+              std::string service_type = raw.substr(0, sep);
+              std::string reason = raw.substr(sep + 1);
+
+              std::string service = "";
+              std::string type = "";
+              size_t colon = service_type.find(':');
+              if (colon != std::string::npos) {
+                service = service_type.substr(0, colon);
+                type = service_type.substr(colon + 1);
+              } else {
+                type = service_type;
+              }
+
+              std::string abbr = getAbbr(type);
+              if (abbr.empty()) {
+                if (service == "URCHIN") abbr = "§4[U]";
+                else if (service == "SERAPH") abbr = "§4[S]";
+                else abbr = "§4[U]";
+              }
+              tags.push_back({abbr, reason});
+            }
+          }
         }
       }
 
-      if (tagsStr.empty()) {
-        auto getAbbr = [](const std::string &raw) -> std::string {
-          std::string t = raw;
-          for (auto &c : t)
-            c = toupper(c);
-          if (t.find("BLATANT") != std::string::npos)
-            return "§4[BC]";
-          if (t.find("CLOSET") != std::string::npos)
-            return "§4[CC]";
-          if (t.find("CONFIRMED") != std::string::npos)
-            return "§5[C]";
-          if (t.find("CHEATER") != std::string::npos)
-            return "§5[C]";
-          if (t.find("CAUTION") != std::string::npos)
-            return "§e[!]";
-          if (t.find("SUSPICIOUS") != std::string::npos)
-            return "§6[?]";
-          if (t.find("SNIPER") != std::string::npos)
-            return "§6[S]";
-          return "";
-        };
+      if (tags.empty()) {
         std::string activeS = Config::getActiveTagService();
         if (activeS == "Khadow") {
           auto kh = Khadow::getPlayerAnticheat(realName, true);
+          Logger::info("statsLookup: Khadow search done. Found = %s", kh.has_value() ? "yes" : "no");
           if (kh) {
             if (kh->urchinBlacklisted) {
+              Logger::info("statsLookup: Khadow Urchin blacklisted type = %s, reason = %s", kh->urchinType.c_str(), kh->urchinReason.c_str());
               std::string abbr = getAbbr(kh->urchinType);
-              tagsStr += " " + (abbr.empty() ? "§4[U]" : abbr);
+              if (abbr.empty()) abbr = "§4[U]";
+              tags.push_back({abbr, kh->urchinReason});
+              tagsStr += " " + abbr;
             }
             if (kh->seraphBlacklisted) {
+              Logger::info("statsLookup: Khadow Seraph blacklisted type = %s, reason = %s", kh->seraphType.c_str(), kh->seraphReason.c_str());
               std::string abbr = getAbbr(kh->seraphType);
-              tagsStr += " " + (abbr.empty() ? "§4[S]" : abbr);
+              if (abbr.empty()) abbr = "§4[S]";
+              tags.push_back({abbr, kh->seraphReason});
+              tagsStr += " " + abbr;
             }
           }
         }
         if (activeS == "Urchin" || activeS == "Both") {
           auto uT = Urchin::getPlayerTags(realName, true);
+          Logger::info("statsLookup: Urchin search done. Found = %s", uT.has_value() ? "yes" : "no");
           if (uT && !uT->tags.empty()) {
+            Logger::info("statsLookup: Urchin tags size = %zu", uT->tags.size());
             std::string abbr = getAbbr(uT->tags[0].type);
-            tagsStr += " " + (abbr.empty() ? "§4[U]" : abbr);
+            if (abbr.empty()) abbr = "§4[U]";
+            tagsStr += " " + abbr;
+            for (const auto &t : uT->tags) {
+              Logger::info("statsLookup: Urchin tag type = %s, reason = %s", t.type.c_str(), t.reason.c_str());
+              std::string a = getAbbr(t.type);
+              if (a.empty()) a = "§4[U]";
+              tags.push_back({a, t.reason});
+            }
           }
         }
         if (activeS == "Seraph" || activeS == "Both") {
@@ -503,21 +579,50 @@ void cmd_stats(const std::string &args) {
           }
           if (!uuid.empty()) {
             auto sT = Seraph::getPlayerTags(realName, uuid, true);
+            Logger::info("statsLookup: Seraph search done. Found = %s", sT.has_value() ? "yes" : "no");
             if (sT && !sT->tags.empty()) {
+              Logger::info("statsLookup: Seraph tags size = %zu", sT->tags.size());
               std::string abbr = getAbbr(sT->tags[0].type);
-              tagsStr += " " + (abbr.empty() ? "§4[S]" : abbr);
+              if (abbr.empty()) abbr = "§4[S]";
+              tagsStr += " " + abbr;
+              for (const auto &t : sT->tags) {
+                Logger::info("statsLookup: Seraph tag type = %s, reason = %s", t.type.c_str(), t.reason.c_str());
+                std::string a = getAbbr(t.type);
+                if (a.empty()) a = "§4[S]";
+                tags.push_back({a, t.reason});
+              }
             }
           }
         }
       }
 
-      if (!tagsStr.empty()) {
-        while (!tagsStr.empty() && tagsStr[0] == ' ')
-          tagsStr.erase(0, 1);
-        msg += " §7[§fTags§7] §f" + tagsStr;
-      }
+      if (!tags.empty()) {
+        std::string json = "{\"text\":\"\",\"extra\":[";
+        json += "{\"text\":\"" + escapeJson(msg + " §7[§fTags§7]") + "\"}";
+        for (const auto &tag : tags) {
+          json += ",{\"text\":\" " + escapeJson(tag.text) + "\",\"hoverEvent\":{\"action\":\"show_text\",\"value\":\"" + escapeJson(tag.reason) + "\"}}";
+        }
+        json += "]}";
 
-      ChatSDK::showClientMessage(msg);
+        std::string fallbackMsg = msg;
+        if (!tagsStr.empty()) {
+          while (!tagsStr.empty() && tagsStr[0] == ' ')
+            tagsStr.erase(0, 1);
+          fallbackMsg += " §7[§fTags§7] §f" + tagsStr;
+        }
+        RenderHook::enqueueTask([json, fallbackMsg]() {
+          ChatSDK::showJsonMessage(json, fallbackMsg);
+        });
+      } else {
+        if (!tagsStr.empty()) {
+          while (!tagsStr.empty() && tagsStr[0] == ' ')
+            tagsStr.erase(0, 1);
+          msg += " §7[§fTags§7] §f" + tagsStr;
+        }
+        RenderHook::enqueueTask([msg]() {
+          ChatSDK::showClientMessage(msg);
+        });
+      }
     }); // SafeGuard::run
   }).detach();
 }

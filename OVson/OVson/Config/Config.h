@@ -32,6 +32,13 @@ void setTabEnabled(bool enabled);
 bool isBetterTabModeEnabled();
 void setBetterTabModeEnabled(bool enabled);
 
+float getBetterTabX();
+void setBetterTabX(float x);
+float getBetterTabY();
+void setBetterTabY(float y);
+float getBetterTabScale();
+void setBetterTabScale(float scale);
+
 bool isPreGameChatStatsEnabled();
 void setPreGameChatStatsEnabled(bool enabled);
 const std::string &getSortMode(); // General sort metric (Stars, FKDR, etc.)
@@ -56,6 +63,10 @@ void setNickedBypass(bool enabled);
 // click gui settings
 int getClickGuiKey();
 void setClickGuiKey(int key);
+int getUninjectKey();
+void setUninjectKey(int key);
+bool isUninjectKeyEnabled();
+void setUninjectKeyEnabled(bool enabled);
 
 bool isNotificationsEnabled();
 void setNotificationsEnabled(bool enabled);
@@ -90,6 +101,13 @@ bool isTagsEnabled();
 void setTagsEnabled(bool enabled);
 const std::string &getActiveTagService();
 void setActiveTagService(const std::string &service);
+bool isMuteTagAlertsEnabled();
+void setMuteTagAlertsEnabled(bool enabled);
+const std::vector<std::string> &getMutedTagPlayers();
+void addMutedTagPlayer(const std::string &name);
+void removeMutedTagPlayer(const std::string &name);
+bool isMuteSelfTagAlertsEnabled();
+void setMuteSelfTagAlertsEnabled(bool enabled);
 
 // ClickGUI visual theme: "LiquidGlass" (default) | "Minimal".
 const std::string &getClickGuiTheme();

@@ -2,6 +2,9 @@
 #include "Commands.h"
 #include "../Utils/Logger.h"
 #include "../Java.h"
+#include "../Plugins/PluginLoader.h"
+#include "../Config/Config.h"
+#include "ChatSDK.h"
 
 // who-related capture removed; no interceptor linkage needed here
 
@@ -66,5 +69,43 @@ bool ChatHook::onClientSendMessage(const std::string &message)
 		// command handled; block original send
 		return true;
 	}
+
+    JNIEnv* env = lc->getEnv();
+    if (env) {
+        jclass eventCls = PluginLoader::loadAPIClass(env, "net.ovson.api.event.ChatSendEvent");
+        if (eventCls) {
+            jmethodID ctor = env->GetMethodID(eventCls, "<init>", "(Ljava/lang/String;)V");
+            if (ctor) {
+                jstring jmsg = env->NewStringUTF(message.c_str());
+                jobject eventObj = env->NewObject(eventCls, ctor, jmsg);
+                if (eventObj) {
+                    PluginLoader::postEvent(eventObj);
+                    
+                    jmethodID isCancelled = env->GetMethodID(eventCls, "isCancelled", "()Z");
+                    if (isCancelled && env->CallBooleanMethod(eventObj, isCancelled)) {
+                        env->DeleteLocalRef(eventObj);
+                        env->DeleteLocalRef(jmsg);
+                        env->DeleteLocalRef(eventCls);
+                        return true;
+                    }
+                    env->DeleteLocalRef(eventObj);
+                }
+                env->DeleteLocalRef(jmsg);
+            }
+            env->DeleteLocalRef(eventCls);
+        }
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+        }
+    }
+
+    const std::string& prefix = Config::getCommandPrefix();
+    if (!message.empty() && message.substr(0, prefix.length()) == prefix) {
+        if (!(message.length() >= prefix.length() * 2 && message.substr(prefix.length(), prefix.length()) == prefix)) {
+            ChatSDK::showPrefixed("§cUnknown command: §f" + message);
+            return true;
+        }
+    }
+
 	return false;
 }

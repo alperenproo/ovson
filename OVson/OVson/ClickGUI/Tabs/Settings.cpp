@@ -30,9 +30,6 @@ void renderSettings(TabCtx &ctx) {
   drawSectionLabel(cx, cy, "Configuration", alpha);
   cy += 38;
 
-  // Theme is chosen from the sidebar-bottom segmented switcher now
-  // (see Render.cpp). Only the LiquidGlass-specific sub-options remain
-  // below, shown when Glass is selected.
 
   if (Config::getClickGuiTheme() == "LiquidGlass") {
     bool wiggleEnabled = Config::isLiquidGlassWiggleEnabled();
@@ -376,7 +373,36 @@ void renderSettings(TabCtx &ctx) {
         "Settings", !cmdEnabled ? "Commands Enabled" : "Commands Disabled",
         !cmdEnabled ? NotificationType::Success : NotificationType::Warning);
   }
-  cy += 75;
+  cy += 65;
+
+  if (cmdEnabled) {
+    g_guiFont.drawString(cx, cy, "Command Prefix",
+                         applyAlpha(0xFFA0A0A5, alpha));
+    cy += 20;
+    glDisable(GL_TEXTURE_2D);
+    drawTextInput(cx, cy, 100, 35, s_typingPrefix,
+                  isHovered(mx, my, cx, cy, 100, 35), alpha);
+    glEnable(GL_TEXTURE_2D);
+
+    std::string dispPrefix =
+        s_typingPrefix ? s_prefixInput : Config::getCommandPrefix();
+    if (s_typingPrefix && (GetTickCount64() / 500) % 2 == 0)
+      dispPrefix += "|";
+
+    g_guiFont.drawString(cx + 10, cy + 8, dispPrefix,
+                         applyAlpha(0xFFFFFFFF, alpha));
+
+    if (clickEvent && isHovered(mx, my, cx, cy, 100, 35)) {
+      s_typingPrefix = true;
+      s_typingSeraphKey = s_typingUrchinKey = s_typingSearch =
+          s_typingApiKey = s_typingAutoGG = s_waitingForKey = s_waitingForUninjectKey = false;
+      s_prefixInput = Config::getCommandPrefix();
+    } else if (clickEvent && s_typingPrefix) {
+      Config::setCommandPrefix(s_prefixInput);
+      s_typingPrefix = false;
+    }
+    cy += 55;
+  }
 
   g_guiFont.drawString(cx, cy, "Discord Rich Presence",
                        applyAlpha(0xFFFFFFFF, alpha));
@@ -444,6 +470,54 @@ void renderSettings(TabCtx &ctx) {
 
   if (clickEvent && hBind && !s_waitingForKey) {
     s_waitingForKey = true;
+    s_waitingForUninjectKey = false;
+    s_typingApiKey = s_typingSearch = false;
+  }
+  cy += 65;
+
+  bool uninjectEnabled = Config::isUninjectKeyEnabled();
+  bool hUninjectSw = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 60);
+  glDisable(GL_TEXTURE_2D);
+  drawThemeCard(mainX + 190, cy - 10, g_w - 210, 60, hUninjectSw, alpha);
+  glEnable(GL_TEXTURE_2D);
+
+  g_guiFont.drawString(cx, cy, "Uninject Key",
+                       applyAlpha(0xFFFFFFFF, alpha));
+  g_guiFont.drawString(cx, cy + 18, "Uninject the overlay using a keyboard key",
+                       applyAlpha(0xFFA0A0A5, alpha), 0.45f);
+
+  glDisable(GL_TEXTURE_2D);
+  drawSwitch(12, mainX + g_w - 65, cy, uninjectEnabled, hUninjectSw, alpha);
+  glEnable(GL_TEXTURE_2D);
+
+  if (clickEvent && hUninjectSw) {
+    Config::setUninjectKeyEnabled(!uninjectEnabled);
+  }
+  cy += 70;
+
+  float uninjectAlpha = alpha * (uninjectEnabled ? 1.0f : 0.4f);
+  g_guiFont.drawString(cx, cy, "Uninject Toggle Key",
+                       applyAlpha(0xFFFFFFFF, uninjectAlpha));
+  cy += 25;
+
+  std::string uninjectKeyText =
+      s_waitingForUninjectKey
+          ? "Press any key... (ESC to cancel)"
+          : ("Current: " + ClickGUI::getKeyName(Config::getUninjectKey()));
+  if (s_waitingForUninjectKey && (GetTickCount64() / 300) % 2 == 0)
+    uninjectKeyText = "> " + uninjectKeyText + " <";
+
+  bool hUninjectBind = uninjectEnabled && isHovered(mx, my, cx, cy, 250, 35);
+  glDisable(GL_TEXTURE_2D);
+  drawThemeButton(cx, cy, 250, 35, hUninjectBind, s_waitingForUninjectKey, uninjectAlpha);
+  glEnable(GL_TEXTURE_2D);
+  g_guiFont.drawString(
+      cx + 20, cy + 10, uninjectKeyText,
+      applyAlpha(s_waitingForUninjectKey ? 0xFFFFFFFF : 0xFFA0A0A5, uninjectAlpha));
+
+  if (clickEvent && hUninjectBind && !s_waitingForUninjectKey) {
+    s_waitingForUninjectKey = true;
+    s_waitingForKey = false;
     s_typingApiKey = s_typingSearch = false;
   }
   cy += 70;

@@ -28,6 +28,8 @@
 
 namespace {
 
+std::atomic<bool> g_minimizeToTray{true};
+
 constexpr int kPhaseIntro     = 0;
 constexpr int kPhaseSlide     = 1;
 constexpr int kPhaseMain      = 2;
@@ -262,7 +264,7 @@ LRESULT CALLBACK SubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam,
       int navStart = (rc.right - navHoleW) / 2;
       int navEnd   = navStart + navHoleW;
       bool inNavHole = (pt.x >= navStart && pt.x <= navEnd);
-      if (pt.y < 48 && pt.x < (rc.right - 48) && !inNavHole) {
+      if (pt.y < 48 && pt.x < (rc.right - 76) && !inNavHole) {
         return HTCAPTION;
       }
     }
@@ -315,6 +317,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
       slint::SharedString(narrow(prefs.customDllPath)));
   setActiveSlot(prefs.dllSlot, prefs.customDllPath);
   state.autoInjectEnabled.store(prefs.autoInject);
+  g_minimizeToTray.store(prefs.minimizeToTray);
 
   auto logModel = std::make_shared<slint::VectorModel<LogLine>>();
   ui->set_log_lines(logModel);
@@ -374,6 +377,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     Settings::save(v);
     setActiveSlot(v.dllSlot, v.customDllPath);
     state.autoInjectEnabled.store(v.autoInject);
+    g_minimizeToTray.store(v.minimizeToTray);
 
     if (v.autoCheckUpdates) {
       if (uiHandle->get_update_state() == 0) {
@@ -573,6 +577,13 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
       Tray::notify(L"OVson",
                    L"Running in the system tray. "
                    L"Right-click the icon to quit.");
+    }
+  });
+
+  ui->on_minimize_clicked([uiHandle = ui]() mutable {
+    HWND hwnd = FindWindowW(nullptr, L"OVson");
+    if (hwnd) {
+      ShowWindow(hwnd, SW_MINIMIZE);
     }
   });
 
@@ -841,7 +852,28 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
   ui->show();
 
   slint::invoke_from_event_loop([]() {
-    HWND hwnd = FindWindowW(nullptr, L"OVson");
+    struct EnumData {
+      DWORD pid;
+      HWND hwnd;
+    };
+    EnumData data = { GetCurrentProcessId(), nullptr };
+    EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
+      EnumData *d = (EnumData*)lParam;
+      DWORD pid = 0;
+      GetWindowThreadProcessId(hwnd, &pid);
+      if (pid == d->pid) {
+        wchar_t title[128];
+        GetWindowTextW(hwnd, title, 128);
+        if (wcscmp(title, L"OVson") == 0) {
+          d->hwnd = hwnd;
+          return FALSE;
+        }
+      }
+      return TRUE;
+    }, (LPARAM)&data);
+
+    HWND hwnd = data.hwnd;
+    if (!hwnd) hwnd = FindWindowW(nullptr, L"OVson");
     if (!hwnd) hwnd = GetActiveWindow();
     if (!hwnd) hwnd = GetForegroundWindow();
     if (hwnd) {

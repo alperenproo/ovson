@@ -807,6 +807,7 @@ export component MainWindow inherits Window {
 
     callback inject-clicked();
     callback close-clicked();
+    callback minimize-clicked();
     callback toggle-row(int);
     callback uninject-row(int);
     callback install-update();
@@ -885,6 +886,29 @@ export component MainWindow inherits Window {
                         label: "About";
                         active: root.active-page == 2;
                         clicked => { root.active-page = 2; }
+                    }
+                }
+
+                minimize-touch := TouchArea {
+                    x: parent.width - 70px;
+                    y: 10px;
+                    width: 28px;
+                    height: 28px;
+                    clicked => { root.minimize-clicked(); }
+                    mouse-cursor: MouseCursor.pointer;
+                    Rectangle {
+                        width: parent.width; height: parent.height;
+                        border-radius: 6px;
+                        background: minimize-touch.has-hover ? #2b2c34 : transparent;
+                        animate background { duration: 140ms; }
+                    }
+                    Rectangle {
+                        x: (parent.width - 12px) / 2;
+                        y: (parent.height - 2px) / 2;
+                        width: 12px;
+                        height: 2px;
+                        background: minimize-touch.has-hover ? Palette.text : Palette.text-muted;
+                        animate background { duration: 140ms; }
                     }
                 }
 

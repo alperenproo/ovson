@@ -1,6 +1,7 @@
 #include "tray_icon.h"
 #include <shellapi.h>
 #include <CommCtrl.h>
+#include <string>
 
 #pragma comment(lib, "Shell32.lib")
 #pragma comment(lib, "Comctl32.lib")
@@ -8,7 +9,10 @@
 namespace Tray {
 namespace {
 
-constexpr UINT  WM_TRAY    = WM_APP + 1;
+static UINT getTrayMsg() {
+  static UINT msg = RegisterWindowMessageW(L"OVsonLoaderTrayMessage");
+  return msg;
+}
 constexpr UINT  ID_SHOW    = 4001;
 constexpr UINT  ID_QUIT    = 4002;
 constexpr UINT  TRAY_UID   = 1;
@@ -28,7 +32,7 @@ void buildNid() {
   g_nid.hWnd             = g_owner;
   g_nid.uID              = TRAY_UID;
   g_nid.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-  g_nid.uCallbackMessage = WM_TRAY;
+  g_nid.uCallbackMessage = getTrayMsg();
   g_nid.hIcon            = (HICON)LoadImageW(
       GetModuleHandleW(nullptr), MAKEINTRESOURCEW(101), IMAGE_ICON,
       GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
@@ -65,7 +69,7 @@ void showContextMenu() {
 
 LRESULT CALLBACK trayProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                           LPARAM lParam, UINT_PTR, DWORD_PTR) {
-  if (uMsg == WM_TRAY) {
+  if (uMsg == getTrayMsg()) {
     UINT ev = LOWORD(lParam);
     if (ev == WM_LBUTTONUP || ev == WM_LBUTTONDBLCLK) {
       if (g_onShow) g_onShow();
@@ -92,6 +96,14 @@ void install(HWND owner,
   g_owner   = owner;
   g_onShow  = std::move(onShow);
   g_onQuit  = std::move(onQuit);
+
+  UINT trayMsg = getTrayMsg();
+  ChangeWindowMessageFilterEx(g_owner, trayMsg, MSGFLT_ALLOW, nullptr);
+
+  static const UINT WM_TASKBARCREATED =
+      RegisterWindowMessageW(L"TaskbarCreated");
+  ChangeWindowMessageFilterEx(g_owner, WM_TASKBARCREATED, MSGFLT_ALLOW, nullptr);
+
   buildNid();
   SetWindowSubclass(g_owner, trayProc, 7, 0);
   Shell_NotifyIconW(NIM_ADD, &g_nid);

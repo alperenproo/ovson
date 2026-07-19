@@ -208,11 +208,6 @@ bool injectPid(DWORD pid, const ProgressFn &cb) {
     return false;
   CloseHandle(h);
 
-  if (hasStaleOldDll(pid)) {
-    step(100, L"Old DLL still loaded — restart Minecraft");
-    return false;
-  }
-
   if (isAlreadyInjected(pid)) {
     step(100, L"Already injected");
     return true;

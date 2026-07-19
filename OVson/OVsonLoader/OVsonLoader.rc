@@ -2,4 +2,123 @@
 
 101 ICON "ovson_logo.ico"
 1 RCDATA "..\\x64\\Release\\OVson.dll"
-2 RCDATA "slint_cpp.dll.upx"
+2 RCDATA "slint_cpp.dll"
+3 RCDATA "..\\LICENSE.txt"
+4 RCDATA "readme_embed.txt"
+5 RCDATA "changelog_embed.txt"
+
+1 VERSIONINFO
+ FILEVERSION    3,0,2,0
+ PRODUCTVERSION 3,0,2,0
+ FILEFLAGSMASK  0x3fL
+#ifdef _DEBUG
+ FILEFLAGS      0x1L
+#else
+ FILEFLAGS      0x0L
+#endif
+ FILEOS         0x40004L
+ FILETYPE       0x1L
+ FILESUBTYPE    0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName",        "alperenproo"
+            VALUE "CompanyShortName",   "alperenproo"
+            VALUE "FileDescription",    "OVson Loader"
+            VALUE "FileVersion",        "3.0.2.0"
+            VALUE "InternalName",       "OVsonLoader"
+            VALUE "LegalCopyright",     "Copyright (C) 2026 alperenproo. All rights reserved."
+            VALUE "LegalTrademarks",    "OVson is a trademark of alperenproo."
+            VALUE "OriginalFilename",   "OVsonLoader.exe"
+            VALUE "ProductName",        "OVson"
+            VALUE "ProductShortName",   "OVson"
+            VALUE "ProductVersion",     "3.0.2.0"
+            VALUE "Comments",           "Loader for the OVson Minecraft Bedwars stats overlay. See LICENSE.txt for terms."
+            VALUE "Assembly Version",   "3.0.2.0"
+            VALUE "Build Description",  "Release"
+            VALUE "Build Date",         "2026"
+            VALUE "Language",           "English (United States)"
+            VALUE "Support",            "https://github.com/alperenproo/ovson/issues"
+            VALUE "Website",            "https://github.com/alperenproo/ovson"
+            VALUE "License",            "MIT"
+            VALUE "RepositoryUrl",      "https://github.com/alperenproo/ovson"
+        END
+        BLOCK "041f04b0"
+        BEGIN
+            VALUE "CompanyName",        "alperenproo"
+            VALUE "FileDescription",    "OVson Yukleyici"
+            VALUE "FileVersion",        "3.0.2.0"
+            VALUE "InternalName",       "OVsonLoader"
+            VALUE "LegalCopyright",     "Telif Hakki (C) 2026 alperenproo. Tum haklari saklidir."
+            VALUE "OriginalFilename",   "OVsonLoader.exe"
+            VALUE "ProductName",        "OVson"
+            VALUE "ProductVersion",     "3.0.2.0"
+            VALUE "Comments",           "Minecraft Bedwars istatistik kaplamasi icin yukleyici."
+            VALUE "Language",           "Turkce (Turkiye)"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04B0, 0x041F, 0x04B0
+    END
+END
+
+STRINGTABLE
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+BEGIN
+    1001 "OVson Loader"
+    1002 "Ready"
+    1003 "Waiting for Minecraft to launch"
+    1004 "Select an instance to inject into"
+    1005 "Inject"
+    1006 "Uninject"
+    1007 "Settings"
+    1008 "About"
+    1009 "Logs"
+    1010 "Update available"
+    1011 "Up to date"
+    1012 "Checking for updates"
+    1013 "Downloading update"
+    1014 "Install"
+    1015 "View Changes"
+    1016 "Behavior"
+    1017 "Updates"
+    1018 "DLL Slot"
+    1019 "Auto-inject on detect"
+    1020 "Inject the moment a Minecraft instance is detected."
+    1021 "Minimize to tray on close"
+    1022 "Keep the loader running in the system tray when you close it."
+    1023 "Start with Windows"
+    1024 "Launch the loader automatically when you sign in."
+    1025 "Check for updates automatically"
+    1026 "Periodic background checks against the release feed."
+    1027 "Stable"
+    1028 "Custom"
+    1029 "Open game folder"
+    1030 "Copy PID"
+    1031 "Kill process"
+    1032 "Loader hint event signaled."
+    1033 "Loader hint event missing."
+END
+
+STRINGTABLE
+LANGUAGE LANG_TURKISH, SUBLANG_DEFAULT
+BEGIN
+    1001 "OVson Yukleyici"
+    1002 "Hazir"
+    1003 "Minecraft'in baslamasi bekleniyor"
+    1004 "Inject edilecek instance secin"
+    1005 "Inject Et"
+    1006 "Inject'i Geri Al"
+    1007 "Ayarlar"
+    1008 "Hakkinda"
+    1009 "Kayitlar"
+    1010 "Guncelleme mevcut"
+    1011 "Guncel"
+    1012 "Guncellemeler kontrol ediliyor"
+    1013 "Guncelleme indiriliyor"
+    1014 "Kur"
+    1015 "Degisiklikleri Goster"
+END

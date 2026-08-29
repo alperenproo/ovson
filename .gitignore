@@ -1,0 +1,12 @@
+# Local CMake verification outputs
+/build-*/
+
+# Private scoring vocabulary and its parity fixture. Both are generated, never
+# hand-written, and both are boboa's captured /nick corpus rather than open
+# data. This repository is public; these must not be in it.
+#
+# Regenerate with:
+#   powershell -File OVson/OVson/tools/GenerateNickScoreVocabulary.ps1
+#   node ../nickname-scoring-lab/tools/emit-parity-fixture.js > nickscore-parity.tsv
+OVson/OVson/Logic/NickRoll/NickScoreVocabulary.h
+nickscore-parity.tsv

@@ -1102,20 +1102,6 @@ void cmd_lookat(const std::string &args) {
           int by = env->CallIntMethod(bpos, m_getY);
           int bz = env->CallIntMethod(bpos, m_getZ);
 
-          std::string name = "unknown";
-          try {
-            name = BedDefense::BedDefenseManager::getInstance()->getBlockName(
-                bx, by, bz);
-          } catch (...) {
-          }
-          int meta = 0;
-          try {
-            meta =
-                BedDefense::BedDefenseManager::getInstance()->getBlockMetadata(
-                    bx, by, bz);
-          } catch (...) {
-          }
-
           std::string debugInfo = "§7ID: §f?";
           try {
             jclass worldCls = lc->GetClass("net.minecraft.world.World");
@@ -1183,7 +1169,34 @@ void cmd_lookat(const std::string &args) {
                     std::string cName = clsUtf ? clsUtf : "unknown";
                     env->ReleaseStringUTFChars(clsNameStr, clsUtf);
 
+                    // Block metadata was once read through BedDefenseManager.
+                    // Keep reading it straight off the state so .lookat keeps
+                    // printing what it always did. The
+                    // reporter is muted for the lookup because a client with
+                    // different mappings would otherwise spam a "FAILED:"
+                    // line into chat for a purely cosmetic field.
+                    int meta = -1;
+                    {
+                      Lunar::DiagnosticReporter savedReporter = Lunar::reporter;
+                      Lunar::reporter = nullptr;
+                      jmethodID m_getMeta = lc->GetMethodID(
+                          blockCls, "getMetaFromState",
+                          "(Lnet/minecraft/block/state/IBlockState;)I",
+                          "func_176201_c", "c", "(Lalz;)I");
+                      Lunar::reporter = savedReporter;
+                      if (m_getMeta) {
+                        meta = env->CallIntMethod(block, m_getMeta, state);
+                        if (env->ExceptionCheck()) {
+                          env->ExceptionClear();
+                          meta = -1;
+                        }
+                      }
+                    }
+
                     debugInfo = "§7ID: §f" + std::to_string(id) +
+                                " §7Meta: §f" +
+                                (meta >= 0 ? std::to_string(meta)
+                                           : std::string("?")) +
                                 " §7Name: §f" + uName + " §7Class: §f" + cName;
 
                     env->DeleteLocalRef(objCls);
@@ -1200,8 +1213,6 @@ void cmd_lookat(const std::string &args) {
           } catch (...) {
           }
 
-          ChatSDK::showPrefixed("§7LookAt: §f" + name + " §7(Meta: §f" +
-                                std::to_string(meta) + "§7)");
           ChatSDK::showPrefixed(debugInfo + " §7at §f" + std::to_string(bx) +
                                 "," + std::to_string(by) + "," +
                                 std::to_string(bz));

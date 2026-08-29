@@ -81,10 +81,7 @@ static std::string resolveAbLogPath() {
 }
 
 void abLog(const char *fmt, ...) {
-  // return (writes go to %TEMP%\autoblock_debug.log).
-  (void)fmt;
-  return;
-  /*
+  if (!Config::isGlobalDebugEnabled()) return;
   std::lock_guard<std::mutex> lk(g_abLogMutex);
   if (!g_abLog.is_open()) {
     std::string path = resolveAbLogPath();
@@ -111,7 +108,6 @@ void abLog(const char *fmt, ...) {
   va_end(ap);
   g_abLog << prefix << body << "\n";
   g_abLog.flush();
-  */
 }
 
 static std::string resolveAcLogPath() {
@@ -1791,6 +1787,52 @@ void clearAllPlayers() {
   if (!lock.owns_lock())
     return;
   g_players.clear();
+}
+
+void observeConfirmedBlockHit(int attackerEntityId, std::uint64_t atMs,
+                              double distance, bool blockingKnown,
+                              bool blocking, bool holdingSword,
+                              bool healthConfirmed,
+                              bool velocityConfirmed) {
+  if (!g_started.load() || !Config::isAnticheatEnabled() ||
+      !Config::isAnticheatAutoBlockEnabled()) {
+    return;
+  }
+  if (!(OVson::g_inHypixelGame || OVson::g_inReplay)) {
+    abLog("confirmed hit rejected: eid=%d reason=outside-game-state",
+          attackerEntityId);
+    return;
+  }
+  if (attackerEntityId < 0) {
+    abLog("confirmed hit rejected: eid=%d reason=no-attacker", attackerEntityId);
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(g_playersMutex);
+  const auto found = g_players.find(attackerEntityId);
+  if (found == g_players.end()) {
+    abLog("confirmed hit rejected: eid=%d reason=attacker-not-tracked",
+          attackerEntityId);
+    return;
+  }
+
+  Check::ConfirmedAttack attack;
+  attack.atMs = atMs;
+  attack.distance = distance;
+  attack.blockingKnown = blockingKnown;
+  attack.blocking = blocking;
+  attack.holdingSword = holdingSword;
+  attack.healthConfirmed = healthConfirmed;
+  attack.velocityConfirmed = velocityConfirmed;
+  for (auto &check : g_checks) {
+    if (check) check->onConfirmedAttack(found->second, attack);
+  }
+}
+
+void resetAutoBlockEvidence() {
+  std::lock_guard<std::mutex> lock(g_playersMutex);
+  for (auto &entry : g_players)
+    entry.second.confirmedAutoBlockHits.clear();
 }
 
 void tickFromRenderThread() {

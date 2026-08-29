@@ -15,6 +15,9 @@ static std::mutex       g_customPathMtx;
 static std::wstring     g_customPath;
 static std::once_flag   g_betaOnce;
 static std::vector<uint8_t> g_betaBytes;
+static std::mutex g_hintMutex;
+static std::map<DWORD, HANDLE> g_hintEvents;
+static std::atomic<bool> g_stopping{false};
 
 static const std::vector<uint8_t> &loadEmbeddedResource(int resId,
                                                        std::vector<uint8_t> &dst) {
@@ -156,6 +159,8 @@ static HANDLE dynamicOpenProcess(DWORD access, BOOL inherit, DWORD pid) {
 }
 
 static bool loadLibraryInject(DWORD pid, const wchar_t *dllPath) {
+  if (g_stopping.load(std::memory_order_acquire))
+    return false;
   typedef LPVOID(WINAPI* fnVirtualAllocEx)(HANDLE, LPVOID, SIZE_T, DWORD, DWORD);
   typedef BOOL(WINAPI* fnWriteProcessMemory)(HANDLE, LPVOID, LPCVOID, SIZE_T, SIZE_T*);
   typedef HANDLE(WINAPI* fnCreateRemoteThread)(HANDLE, LPSECURITY_ATTRIBUTES, SIZE_T, LPTHREAD_START_ROUTINE, LPVOID, DWORD, LPDWORD);
@@ -206,6 +211,12 @@ static bool loadLibraryInject(DWORD pid, const wchar_t *dllPath) {
     return false;
   }
 
+  if (g_stopping.load(std::memory_order_acquire)) {
+    pVirtualFreeEx(proc, remotePath, 0, MEM_RELEASE);
+    CloseHandle(proc);
+    return false;
+  }
+
   HANDLE th = pCreateRemoteThread(proc, nullptr, 0,
                                  pLoadLibraryW,
                                  remotePath, 0, nullptr);
@@ -215,16 +226,23 @@ static bool loadLibraryInject(DWORD pid, const wchar_t *dllPath) {
     return false;
   }
 
-  WaitForSingleObject(th, 10000);
+  const DWORD waitResult = WaitForSingleObject(th, 10000);
   DWORD exitCode = 0;
-  pGetExitCodeThread(th, &exitCode);
+  if (waitResult == WAIT_OBJECT_0)
+    pGetExitCodeThread(th, &exitCode);
   CloseHandle(th);
-  pVirtualFreeEx(proc, remotePath, 0, MEM_RELEASE);
+  // If the remote thread timed out, its LoadLibrary call may still be reading
+  // the path.  Leak that small target allocation rather than creating a
+  // use-after-free in Minecraft.
+  if (waitResult == WAIT_OBJECT_0)
+    pVirtualFreeEx(proc, remotePath, 0, MEM_RELEASE);
   CloseHandle(proc);
-  return exitCode != 0;
+  return waitResult == WAIT_OBJECT_0 && exitCode != 0;
 }
 
 bool injectPid(DWORD pid, const ProgressFn &cb) {
+  if (g_stopping.load(std::memory_order_acquire))
+    return false;
   loaderLog("injectPid started for target PID=%lu", pid);
   auto step = [&](int p, const wchar_t *s) {
     if (cb)
@@ -234,6 +252,8 @@ bool injectPid(DWORD pid, const ProgressFn &cb) {
   step(5, L"Preparing");
 
   sweepStaleTempDlls();
+  if (g_stopping.load(std::memory_order_acquire))
+    return false;
 
   HANDLE h = dynamicOpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
   if (!h) {
@@ -255,33 +275,23 @@ bool injectPid(DWORD pid, const ProgressFn &cb) {
     step(100, L"Failed");
     return false;
   }
+  if (g_stopping.load(std::memory_order_acquire)) {
+    DeleteFileW(dllPath.c_str());
+    return false;
+  }
 
   wchar_t hintName[64];
   wsprintfW(hintName, L"Local\\OVsonLoaderHint_%lu", pid);
   HANDLE hint = CreateEventW(nullptr, TRUE, TRUE, hintName);
   if (hint) {
     SetEvent(hint);
-    static std::mutex                   s_mtx;
-    static std::map<DWORD, HANDLE>      g_hintEvents;
-    std::lock_guard<std::mutex> lk(s_mtx);
+    std::lock_guard<std::mutex> lk(g_hintMutex);
     auto it = g_hintEvents.find(pid);
     if (it != g_hintEvents.end()) {
       CloseHandle(it->second);
       g_hintEvents.erase(it);
     }
     g_hintEvents[pid] = hint;
-    std::thread([pid, &mtxRef = s_mtx, &mapRef = g_hintEvents]() {
-      HANDLE proc = dynamicOpenProcess(SYNCHRONIZE, FALSE, pid);
-      if (!proc) return;
-      WaitForSingleObject(proc, INFINITE);
-      CloseHandle(proc);
-      std::lock_guard<std::mutex> lk(mtxRef);
-      auto it = mapRef.find(pid);
-      if (it != mapRef.end()) {
-        CloseHandle(it->second);
-        mapRef.erase(it);
-      }
-    }).detach();
   }
 
   step(40, L"Injecting");
@@ -295,7 +305,8 @@ bool injectPid(DWORD pid, const ProgressFn &cb) {
   step(80, L"Waiting for init");
   const wchar_t *initPrefixes[] = { L"Local\\", L"", L"Global\\" };
   HANDLE evAlive = nullptr;
-  for (int i = 0; i < 30 && !evAlive; i++) {
+  for (int i = 0; i < 30 && !evAlive &&
+                  !g_stopping.load(std::memory_order_acquire); i++) {
     for (const wchar_t *pfx : initPrefixes) {
       wchar_t evName[96];
       wsprintfW(evName, L"%sOVsonAlive_%lu", pfx, pid);
@@ -335,7 +346,8 @@ bool uninjectPid(DWORD pid, DWORD *lastError) {
 
   wchar_t aliveName[64];
   wsprintfW(aliveName, L"Local\\OVsonAlive_%lu", pid);
-  for (int i = 0; i < 10; ++i) {
+  for (int i = 0; i < 10 &&
+                  !g_stopping.load(std::memory_order_acquire); ++i) {
     HANDLE alive = OpenEventW(SYNCHRONIZE, FALSE, aliveName);
     if (!alive)
       return true;
@@ -343,4 +355,18 @@ bool uninjectPid(DWORD pid, DWORD *lastError) {
     Sleep(100);
   }
   return true;
+}
+
+void requestInjectorShutdown() {
+  g_stopping.store(true, std::memory_order_release);
+}
+
+void shutdownInjector() {
+  requestInjectorShutdown();
+  std::lock_guard<std::mutex> lock(g_hintMutex);
+  for (const auto &entry : g_hintEvents) {
+    const HANDLE hintHandle = entry.second;
+    if (hintHandle) CloseHandle(hintHandle);
+  }
+  g_hintEvents.clear();
 }

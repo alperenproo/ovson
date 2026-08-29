@@ -10,6 +10,7 @@
 #include "../Utils/Logger.h"
 #include "../SDK/Minecraft.h"
 #include "../SDK/Player.h"
+#include "Bedwars/BedwarsRuntime.h"
 
 #include <Windows.h>
 #include <cctype>
@@ -502,6 +503,8 @@ void detectPreGameLobby() {
                 }
                 clean += (char)c;
               }
+
+              Bedwars::Runtime::instance().onScoreboardLine(clean);
 
               if (clean.find("Map:") != std::string::npos)
                 foundMap = true;

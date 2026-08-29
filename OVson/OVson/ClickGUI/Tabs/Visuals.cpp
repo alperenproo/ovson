@@ -118,11 +118,13 @@ void renderVisuals(TabCtx &ctx) {
       bool ch = drawSlider(80, cx + 110, rowY + 6, panelW - 240, 6.0f, val, 0.0f,
                            1.0f, mx, my, lClick, alpha);
       glEnable(GL_TEXTURE_2D);
+      float percentage = val * 100.0f;
+      ch = drawNumericInput(80, panelX + panelW - 58.0f, rowY - 6.0f,
+                            54.0f, 25.0f, percentage, 0.0f, 100.0f, 0, "%",
+                            mx, my, clickEvent, alpha) || ch;
+      if (percentage != val * 100.0f)
+        val = percentage / 100.0f;
       if (ch) Config::setMotionBlurAmount(val);
-      char vb[16];
-      snprintf(vb, sizeof(vb), "%d%%", (int)(val * 100.0f + 0.5f));
-      g_guiFont.drawString(panelX + panelW - 44, rowY, vb,
-                           applyAlpha(0xFFFFFFFF, alpha), 0.42f);
     }
     cy += cardH + 10.0f;
   }
@@ -203,17 +205,16 @@ void renderVisuals(TabCtx &ctx) {
       float h = Config::getNameTagHeight();
       g_guiFont.drawString(lx, heightRowY + heightRowH * 0.5f - 6.0f,
                            "Label height", applyAlpha(0xFFFFFFFF, alpha), 0.45f);
-      char hbuf[24];
-      snprintf(hbuf, sizeof(hbuf), "%.1f m", h);
-      float hw = g_guiFont.getStringWidth(hbuf) * (0.42f / 0.5f);
-      g_guiFont.drawString(rx - hw, heightRowY + heightRowH * 0.5f - 6.0f, hbuf,
-                           applyAlpha(0xFFFFFFFF, alpha), 0.42f);
       float hv = h;
       glDisable(GL_TEXTURE_2D);
       bool ch = drawSlider(2500, lx + 92.0f, heightRowY + heightRowH * 0.5f,
                            (rx - 52.0f) - (lx + 92.0f), 6.0f, hv, 0.5f, 4.0f, mx,
                            my, lClick, alpha);
       glEnable(GL_TEXTURE_2D);
+      ch = drawNumericInput(2500, rx - 56.0f,
+                            heightRowY + heightRowH * 0.5f - 13.0f, 56.0f,
+                            25.0f, hv, 0.5f, 4.0f, 1, "m", mx, my,
+                            clickEvent, alpha) || ch;
       if (ch) Config::setNameTagHeight(hv);
 
       drawSectionLabel(lx, statsLabelY, "Stats", alpha);

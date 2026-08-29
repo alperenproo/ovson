@@ -86,11 +86,13 @@ void renderSettings(TabCtx &ctx) {
     g_guiFont.drawString(cx, cy + 18, "How much the glass bends the background",
                          applyAlpha(0xFFA0A0A5, alpha));
     glDisable(GL_TEXTURE_2D);
-    float oldRefStr = refStr;
-    if (drawSlider(1236, mainX + g_w - 115, cy + 8, 100, 10, refStr, 0.0f, 1.0f, mx, my, lClick, alpha)) {
-        if (oldRefStr != refStr) Config::setLiquidGlassRefractStrength(refStr);
-    }
+    bool refChanged = drawSlider(1236, mainX + g_w - 220, cy + 8, 90, 10,
+                                 refStr, 0.0f, 1.0f, mx, my, lClick, alpha);
     glEnable(GL_TEXTURE_2D);
+    refChanged = drawNumericInput(1236, mainX + g_w - 120, cy - 1, 90, 27,
+                                  refStr, 0.0f, 1.0f, 2, "", mx, my,
+                                  clickEvent, alpha) || refChanged;
+    if (refChanged) Config::setLiquidGlassRefractStrength(refStr);
     cy += 85;
 
     float edgeWidth = Config::getLiquidGlassEdgeWidth();
@@ -103,11 +105,14 @@ void renderSettings(TabCtx &ctx) {
     g_guiFont.drawString(cx, cy + 18, "Edge bending for the main panel",
                          applyAlpha(0xFFA0A0A5, alpha));
     glDisable(GL_TEXTURE_2D);
-    float oldEdgeWidth = edgeWidth;
-    if (drawSlider(1237, mainX + g_w - 115, cy + 8, 100, 10, edgeWidth, 0.0f, 1.0f, mx, my, lClick, alpha)) {
-        if (oldEdgeWidth != edgeWidth) Config::setLiquidGlassEdgeWidth(edgeWidth);
-    }
+    bool edgeChanged = drawSlider(1237, mainX + g_w - 220, cy + 8, 90, 10,
+                                  edgeWidth, 0.0f, 1.0f, mx, my, lClick,
+                                  alpha);
     glEnable(GL_TEXTURE_2D);
+    edgeChanged = drawNumericInput(1237, mainX + g_w - 120, cy - 1, 90, 27,
+                                   edgeWidth, 0.0f, 1.0f, 2, "", mx, my,
+                                   clickEvent, alpha) || edgeChanged;
+    if (edgeChanged) Config::setLiquidGlassEdgeWidth(edgeWidth);
     cy += 85;
 
     float cardEdgeWidth = Config::getLiquidGlassCardEdgeWidth();
@@ -120,11 +125,15 @@ void renderSettings(TabCtx &ctx) {
     g_guiFont.drawString(cx, cy + 18, "Edge bending for inner cards and buttons",
                          applyAlpha(0xFFA0A0A5, alpha));
     glDisable(GL_TEXTURE_2D);
-    float oldCardEdgeWidth = cardEdgeWidth;
-    if (drawSlider(1238, mainX + g_w - 115, cy + 8, 100, 10, cardEdgeWidth, 0.0f, 1.0f, mx, my, lClick, alpha)) {
-        if (oldCardEdgeWidth != cardEdgeWidth) Config::setLiquidGlassCardEdgeWidth(cardEdgeWidth);
-    }
+    bool cardEdgeChanged =
+        drawSlider(1238, mainX + g_w - 220, cy + 8, 90, 10, cardEdgeWidth,
+                   0.0f, 1.0f, mx, my, lClick, alpha);
     glEnable(GL_TEXTURE_2D);
+    cardEdgeChanged =
+        drawNumericInput(1238, mainX + g_w - 120, cy - 1, 90, 27,
+                         cardEdgeWidth, 0.0f, 1.0f, 2, "", mx, my,
+                         clickEvent, alpha) || cardEdgeChanged;
+    if (cardEdgeChanged) Config::setLiquidGlassCardEdgeWidth(cardEdgeWidth);
     cy += 85;
 
     float darkness = Config::getLiquidGlassDarkness();
@@ -137,11 +146,15 @@ void renderSettings(TabCtx &ctx) {
     g_guiFont.drawString(cx, cy + 18, "Darkness tint of the glass",
                          applyAlpha(0xFFA0A0A5, alpha));
     glDisable(GL_TEXTURE_2D);
-    float oldDarkness = darkness;
-    if (drawSlider(1239, mainX + g_w - 115, cy + 8, 100, 10, darkness, 0.0f, 1.0f, mx, my, lClick, alpha)) {
-        if (oldDarkness != darkness) Config::setLiquidGlassDarkness(darkness);
-    }
+    bool darknessChanged =
+        drawSlider(1239, mainX + g_w - 220, cy + 8, 90, 10, darkness, 0.0f,
+                   1.0f, mx, my, lClick, alpha);
     glEnable(GL_TEXTURE_2D);
+    darknessChanged =
+        drawNumericInput(1239, mainX + g_w - 120, cy - 1, 90, 27, darkness,
+                         0.0f, 1.0f, 2, "", mx, my, clickEvent, alpha) ||
+        darknessChanged;
+    if (darknessChanged) Config::setLiquidGlassDarkness(darkness);
     cy += 85;
   }
 

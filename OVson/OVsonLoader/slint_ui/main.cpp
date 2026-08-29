@@ -5,6 +5,7 @@
 #include "log_tail.h"
 #include "process_scan.h"
 #include "settings.h"
+#include "shutdown_coordinator.h"
 #include "tray_icon.h"
 #include "updater.h"
 #include <commdlg.h>
@@ -14,16 +15,24 @@
 #include <wininet.h>
 #pragma comment(lib, "wininet.lib")
 
+static ShutdownCoordinator g_shutdown;
+
 std::string fetchUrl(const std::string& url) {
     HINTERNET hInt = InternetOpenA("OVsonLoader", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
     if (!hInt) return "";
+    DWORD timeoutMs = 4000;
+    InternetSetOptionA(hInt, INTERNET_OPTION_CONNECT_TIMEOUT, &timeoutMs,
+                       sizeof(timeoutMs));
+    InternetSetOptionA(hInt, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeoutMs,
+                       sizeof(timeoutMs));
     HINTERNET hConn = InternetOpenUrlA(hInt, url.c_str(), NULL, 0, INTERNET_FLAG_RELOAD, 0);
     if (!hConn) { InternetCloseHandle(hInt); return ""; }
 
     std::string result;
     char buffer[1024];
     DWORD read = 0;
-    while (InternetReadFile(hConn, buffer, sizeof(buffer), &read) && read > 0) {
+    while (!g_shutdown.stopping() &&
+           InternetReadFile(hConn, buffer, sizeof(buffer), &read) && read > 0) {
         result.append(buffer, read);
     }
     InternetCloseHandle(hConn);
@@ -45,7 +54,36 @@ std::string fetchUrl(const std::string& url) {
 #include <set>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
+
+class WorkerRegistry {
+public:
+  template <typename Fn> bool start(Fn &&fn) {
+    if (g_shutdown.stopping()) return false;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (g_shutdown.stopping()) return false;
+    m_threads.emplace_back(std::forward<Fn>(fn));
+    return true;
+  }
+
+  void joinAll() {
+    std::vector<std::thread> threads;
+    {
+      std::lock_guard<std::mutex> lock(m_mutex);
+      threads.swap(m_threads);
+    }
+    for (auto &thread : threads) {
+      if (thread.joinable()) thread.join();
+    }
+  }
+
+private:
+  std::mutex m_mutex;
+  std::vector<std::thread> m_threads;
+};
+
+static WorkerRegistry g_workers;
 
 void loaderLog(const char* fmt, ...) {
     static std::mutex logMtx;
@@ -93,6 +131,7 @@ std::atomic<bool> g_minimizeToTray{true};
 
 static HANDLE g_singleInstanceMutex = nullptr;
 static HANDLE g_showWindowEvent = nullptr;
+static HANDLE g_shutdownEvent = nullptr;
 static std::atomic<bool> g_stopShowWatcher{false};
 static std::thread g_showWatcherThread;
 
@@ -169,7 +208,32 @@ struct AppState {
 };
 
 template <class F> void onUiThread(F &&f) {
-  slint::invoke_from_event_loop(std::forward<F>(f));
+  if (g_shutdown.stopping()) return;
+  slint::invoke_from_event_loop(
+      [callback = std::forward<F>(f)]() mutable {
+        if (!g_shutdown.stopping()) callback();
+      });
+}
+
+bool waitForShutdown(DWORD milliseconds) {
+  return g_shutdownEvent &&
+         WaitForSingleObject(g_shutdownEvent, milliseconds) == WAIT_OBJECT_0;
+}
+
+void requestLoaderShutdown(HWND hwnd, const char *source) {
+  const bool firstRequest = g_shutdown.request();
+  loaderLog("Shutdown request source=%s first=%d stage=%s",
+            source ? source : "unknown", firstRequest ? 1 : 0,
+            shutdownStageName(g_shutdown.stage()));
+  if (!firstRequest) return;
+
+  g_stopShowWatcher.store(true, std::memory_order_release);
+  requestInjectorShutdown();
+  if (g_shutdownEvent) SetEvent(g_shutdownEvent);
+  if (g_showWindowEvent) SetEvent(g_showWindowEvent);
+  Tray::beginShutdown();
+  if (hwnd && IsWindow(hwnd)) ShowWindow(hwnd, SW_HIDE);
+  slint::quit_event_loop();
 }
 
 void publishProcesses(const MainWindow &ui, AppState &state) {
@@ -439,6 +503,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
   loaderLog("=== OVsonLoader started (PID: %lu) ===", GetCurrentProcessId());
 
   g_showWindowEvent = CreateEventW(nullptr, FALSE, FALSE, L"Local\\OVsonLoaderShowEvent");
+  g_shutdownEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   g_singleInstanceMutex = CreateMutexW(nullptr, FALSE, L"Local\\OVsonLoaderSingleInstance");
   if (g_singleInstanceMutex && GetLastError() == ERROR_ALREADY_EXISTS) {
     loaderLog("Another instance detected. Signaling show event and exiting.");
@@ -446,30 +511,15 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
       SetEvent(g_showWindowEvent);
       Sleep(200);
       CloseHandle(g_showWindowEvent);
+      g_showWindowEvent = nullptr;
+    }
+    if (g_shutdownEvent) {
+      CloseHandle(g_shutdownEvent);
+      g_shutdownEvent = nullptr;
     }
     CloseHandle(g_singleInstanceMutex);
     return 0;
   }
-
-  HRSRC resSlint = FindResourceW(nullptr, MAKEINTRESOURCEW(2), RT_RCDATA);
-  if (resSlint) {
-    HGLOBAL hSlint = LoadResource(nullptr, resSlint);
-    DWORD szSlint = SizeofResource(nullptr, resSlint);
-    void* dataSlint = LockResource(hSlint);
-    if (dataSlint && szSlint > 0) {
-      wchar_t tempPath[MAX_PATH];
-      GetTempPathW(MAX_PATH, tempPath);
-      std::wstring dllPath = std::wstring(tempPath) + L"slint_cpp.dll";
-      HANDLE hFile = CreateFileW(dllPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-      if (hFile != INVALID_HANDLE_VALUE) {
-        DWORD written = 0;
-        WriteFile(hFile, dataSlint, szSlint, &written, nullptr);
-        CloseHandle(hFile);
-      }
-      LoadLibraryW(dllPath.c_str());
-    }
-  }
-
 
   auto &dll = embeddedDllBytes();
   bool payloadOk = !dll.empty();
@@ -485,7 +535,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     ShellExecuteA(nullptr, "open", link.data(), nullptr, nullptr, SW_SHOWNORMAL);
   });
 
-  std::thread([ui = ui]() {
+  g_workers.start([ui = ui]() {
     std::string md = fetchUrl("https://gist.githubusercontent.com/alperenproo/125c7a70728a16fdad215ca57adc0edc/raw");
     
     struct TempBlock {
@@ -574,7 +624,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
         }
     }
 
-    slint::invoke_from_event_loop([ui, temp]() {
+    onUiThread([ui, temp]() {
         auto model = std::make_shared<slint::VectorModel<MarkdownBlock>>();
         for (const auto& t : temp) {
             MarkdownBlock b;
@@ -588,7 +638,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
         }
         ui->set_announcements(model);
     });
-  }).detach();
+  });
 
   Settings::Values prefs = Settings::load();
   ui->set_setting_auto_inject(prefs.autoInject);
@@ -745,12 +795,12 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
   });
 
   publishProcesses(*ui, state);
-  std::thread([uiHandle = ui]() mutable {
+  g_workers.start([uiHandle = ui]() mutable {
     int lastPct = -1;
     Updater::State lastState = Updater::State::Idle;
     bool upToDateDismissScheduled = false;
     bool failedDismissScheduled = false;
-    for (;;) {
+    while (!g_shutdown.stopping()) {
       auto st = Updater::currentState();
       int pct = Updater::downloadPct();
       if (st != lastState || pct != lastPct) {
@@ -787,7 +837,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
             if (statusText.empty()) statusText = "Update check failed";
             break;
         }
-        slint::invoke_from_event_loop(
+        onUiThread(
             [uiHandle, stateCode, statusText, versionText,
              legacyAvailable, progress]() {
               uiHandle->set_update_state(stateCode);
@@ -799,42 +849,39 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
 
         if (stateCode == 2 && !upToDateDismissScheduled) {
           upToDateDismissScheduled = true;
-          std::thread([uiHandle]() mutable {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2200));
-            slint::invoke_from_event_loop([uiHandle]() {
+          g_workers.start([uiHandle]() mutable {
+            if (waitForShutdown(2200)) return;
+            onUiThread([uiHandle]() {
               uiHandle->set_update_state(0);
               uiHandle->set_update_available(false);
             });
-          }).detach();
+          });
         }
         if (stateCode != 6) failedDismissScheduled = false;
         if (stateCode == 6 && !failedDismissScheduled) {
           failedDismissScheduled = true;
-          std::thread([uiHandle]() mutable {
-            std::this_thread::sleep_for(std::chrono::milliseconds(6000));
-            slint::invoke_from_event_loop([uiHandle]() {
+          g_workers.start([uiHandle]() mutable {
+            if (waitForShutdown(6000)) return;
+            onUiThread([uiHandle]() {
               if (uiHandle->get_update_state() == 6) {
                 uiHandle->set_update_state(0);
                 uiHandle->set_update_available(false);
               }
             });
-          }).detach();
+          });
         }
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+      if (waitForShutdown(250)) break;
     }
-  }).detach();
+  });
 
-  std::thread([uiHandle = ui, &state]() {
-    auto sleep = [](int ms) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-    };
-    sleep(800);  // hold the centered logo
+  g_workers.start([uiHandle = ui, &state]() {
+    if (waitForShutdown(800)) return;  // hold the centered logo
     onUiThread([uiHandle, &state]() {
       state.phase.store(kPhaseSlide);
       uiHandle->set_phase(kPhaseSlide);
     });
-    sleep(950);
+    if (waitForShutdown(950)) return;
     onUiThread([uiHandle, &state]() {
       state.phase.store(kPhaseMain);
       uiHandle->set_phase(kPhaseMain);
@@ -847,11 +894,11 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
         uiHandle->set_update_available(false);
       }
     });
-  }).detach();
+  });
 
   std::atomic<bool> stopScan{false};
   std::thread scanThread([uiHandle = ui, &state, &stopScan]() mutable {
-    while (!stopScan.load()) {
+    while (!stopScan.load() && !g_shutdown.stopping()) {
       auto latest = findMinecraftProcesses();
       bool shouldAutoInject = false;
       {
@@ -890,13 +937,14 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
           }
         }
       }
+      if (stopScan.load() || g_shutdown.stopping()) break;
       onUiThread([uiHandle, &state, shouldAutoInject]() mutable {
         publishProcesses(*uiHandle, state);
         if (shouldAutoInject) {
           uiHandle->invoke_inject_clicked();
         }
       });
-      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      if (waitForShutdown(500)) break;
     }
   });
 
@@ -905,7 +953,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     bool minToTray = uiHandle->get_setting_minimize_to_tray();
     loaderLog("on_close_clicked triggered (minimizeToTray=%d)", minToTray);
     if (!minToTray) {
-      slint::quit_event_loop();
+      requestLoaderShutdown(getSlintHwnd(), "window-close");
       return;
     }
     HWND hwnd = getSlintHwnd();
@@ -946,7 +994,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
       Updater::startDownload();
     } else if (st == Updater::State::Ready) {
       if (Updater::installAndRelaunch())
-        slint::quit_event_loop();
+        requestLoaderShutdown(getSlintHwnd(), "update-install");
     }
   });
   ui->on_toggle_row([&](int idx) {
@@ -981,7 +1029,6 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
       ID_UNINJECT    = 5002,
       ID_COPY_PID    = 5003,
       ID_OPEN_FOLDER = 5004,
-      ID_KILL        = 5005,
     };
 
     HWND hwnd = FindWindowW(nullptr, L"OVson");
@@ -999,8 +1046,6 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     AppendMenuW(menu, MF_STRING, ID_COPY_PID, L"Copy PID");
     AppendMenuW(menu, MF_STRING | (exePath.empty() ? MF_GRAYED : 0),
                 ID_OPEN_FOLDER, L"Open game folder");
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, ID_KILL, L"Kill process…");
 
     POINT pt;
     GetCursorPos(&pt);
@@ -1046,26 +1091,12 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
                       nullptr, SW_SHOWNORMAL);
         break;
       }
-      case ID_KILL: {
-        if (MessageBoxW(hwnd,
-                        L"Kill this Minecraft process? Any unsaved "
-                        L"progress will be lost.",
-                        L"OVson — Kill process",
-                        MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2)
-            == IDYES) {
-          HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
-          if (h) {
-            TerminateProcess(h, 1);
-            CloseHandle(h);
-          }
-        }
-        break;
-      }
       default: break;
     }
   });
 
   ui->on_uninject_row([&](int idx) {
+    if (g_shutdown.stopping()) return;
     loaderLog("on_uninject_row called with idx=%d", idx);
     DWORD pid = 0;
     {
@@ -1091,7 +1122,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     publishProcesses(*ui, state);
     loaderLog("on_uninject_row: publishProcesses done, spawning uninject thread");
 
-    std::thread([uiHandle = ui, &state, pid]() {
+    g_workers.start([uiHandle = ui, &state, pid]() {
       loaderLog("uninject thread started for pid=%lu", pid);
       DWORD err = 0;
       bool ok = uninjectPid(pid, &err);
@@ -1131,11 +1162,11 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
         loaderLog("uninject thread: publishProcesses done inside onUiThread");
       });
       loaderLog("uninject thread: finished for pid=%lu", pid);
-    }).detach();
-    loaderLog("on_uninject_row: thread detached");
+    });
+    loaderLog("on_uninject_row: worker registered");
   });
   ui->on_inject_clicked([&]() {
-    if (!payloadOk) return;
+    if (!payloadOk || g_shutdown.stopping()) return;
     std::vector<DWORD> targets;
     {
       std::lock_guard<std::mutex> lk(state.mtx);
@@ -1161,7 +1192,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     publishProcesses(*ui, state);
 
     for (DWORD pid : targets) {
-      std::thread([uiHandle = ui, &state, pid]() mutable {
+      g_workers.start([uiHandle = ui, &state, pid]() mutable {
         auto progress = [uiHandle, &state, pid](int pct,
                                                 const std::wstring &stage) mutable {
           {
@@ -1195,7 +1226,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
         onUiThread([uiHandle, &state]() mutable {
           publishProcesses(*uiHandle, state);
         });
-      }).detach();
+      });
     }
   });
 
@@ -1211,6 +1242,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
   loaderLog("ui->show() called.");
 
   slint::invoke_from_event_loop([]() {
+    if (g_shutdown.stopping()) return;
     HWND hwnd = getSlintHwnd();
     loaderLog("slint invoke_from_event_loop: getSlintHwnd() returned hwnd=%p", hwnd);
     if (hwnd) {
@@ -1219,11 +1251,14 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
       Tray::install(
           hwnd,
           /*onShow=*/[hwnd]() {
+            if (g_shutdown.stopping()) return;
             ShowWindow(hwnd, SW_SHOW);
             ShowWindow(hwnd, SW_RESTORE);
             SetForegroundWindow(hwnd);
           },
-          /*onQuit=*/[]() { loaderLog("Tray requested quit_event_loop"); slint::quit_event_loop(); });
+          /*onQuit=*/[hwnd]() {
+            requestLoaderShutdown(hwnd, "tray-quit");
+          });
 
       int screenWidth = GetSystemMetrics(SM_CXSCREEN);
       int screenHeight = GetSystemMetrics(SM_CYSCREEN);
@@ -1240,6 +1275,7 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
         while (!g_stopShowWatcher.load()) {
           DWORD result = WaitForSingleObject(g_showWindowEvent, 500);
           if (result == WAIT_OBJECT_0) {
+            if (g_stopShowWatcher.load() || g_shutdown.stopping()) break;
             loaderLog("ShowWatcher: event signaled, bringing window to front");
             ShowWindow(hwnd, SW_SHOW);
             ShowWindow(hwnd, SW_RESTORE);
@@ -1281,17 +1317,51 @@ int APIENTRY wWinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
 
   loaderLog("Entering slint::run_event_loop()...");
   slint::run_event_loop();
-  loaderLog("Exited slint::run_event_loop().");
+  if (!g_shutdown.stopping())
+    requestLoaderShutdown(getSlintHwnd(), "event-loop-return");
+  g_shutdown.advance(ShutdownCoordinator::Stage::EventLoopExited);
+  loaderLog("Shutdown stage: %s",
+            shutdownStageName(g_shutdown.stage()));
 
+  loaderLog("Shutdown: signaling process scanner");
   stopScan.store(true);
+  if (g_shutdownEvent) SetEvent(g_shutdownEvent);
   if (scanThread.joinable()) scanThread.join();
+  g_shutdown.advance(ShutdownCoordinator::Stage::ScanStopped);
+  loaderLog("Shutdown stage: %s",
+            shutdownStageName(g_shutdown.stage()));
+
+  loaderLog("Shutdown: stopping log tail, updater, and owned workers");
   s_tail.stop();
+  Updater::shutdown();
+  g_workers.joinAll();
+  shutdownInjector();
+  g_shutdown.advance(ShutdownCoordinator::Stage::WorkersStopped);
+  loaderLog("Shutdown stage: %s",
+            shutdownStageName(g_shutdown.stage()));
+
+  loaderLog("Shutdown: removing tray icon and window subclasses");
   Tray::uninstall();
+  if (HWND hwnd = getSlintHwnd(); hwnd && IsWindow(hwnd))
+    RemoveWindowSubclass(hwnd, SubclassProc, 1);
+  g_shutdown.advance(ShutdownCoordinator::Stage::TrayRemoved);
+  loaderLog("Shutdown stage: %s",
+            shutdownStageName(g_shutdown.stage()));
 
   g_stopShowWatcher.store(true);
   if (g_showWindowEvent) SetEvent(g_showWindowEvent); // wake the watcher so it can exit
   if (g_showWatcherThread.joinable()) g_showWatcherThread.join();
+  g_shutdown.advance(ShutdownCoordinator::Stage::WatcherStopped);
+  loaderLog("Shutdown stage: %s",
+            shutdownStageName(g_shutdown.stage()));
+
   if (g_showWindowEvent) { CloseHandle(g_showWindowEvent); g_showWindowEvent = nullptr; }
   if (g_singleInstanceMutex) { CloseHandle(g_singleInstanceMutex); g_singleInstanceMutex = nullptr; }
+  if (g_shutdownEvent) { CloseHandle(g_shutdownEvent); g_shutdownEvent = nullptr; }
+  g_shutdown.advance(ShutdownCoordinator::Stage::HandlesClosed);
+  loaderLog("Shutdown stage: %s",
+            shutdownStageName(g_shutdown.stage()));
+  g_shutdown.advance(ShutdownCoordinator::Stage::Complete);
+  loaderLog("Shutdown complete. Loader exit does not imply DLL unload.");
   return 0;
 }

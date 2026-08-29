@@ -876,6 +876,28 @@ void processPendingStats() {
       }
     }
 
+    // Teammates.
+    //
+    // resolveTeamForName is the same resolution the nametags and the tab list
+    // already use: the Minecraft scoreboard team a player belongs to, falling
+    // back to closestTeamColor on their armour when the scoreboard has not
+    // caught up. That fallback already carries the exact leather-dye palette
+    // Bedwars uses -- Red FF0000, Green 48CC18, Pink EF83A4 and the rest -- so
+    // nothing new had to be measured for this.
+    //
+    // Both sides must resolve to a REAL team before anyone is muted. An empty
+    // string means "not known yet", and treating unknown as "same team" would
+    // silence the enemy the moment team data was late, which is the one
+    // failure this feature must not have.
+    if (Config::isMuteTeamTagAlertsEnabled()) {
+      const std::string localTeam = OVson::g_localTeam;
+      if (!localTeam.empty() && OVson::isRealBedwarsTeam(localTeam)) {
+        const std::string theirTeam = OVson::resolveTeamForName(pname);
+        if (!theirTeam.empty() && theirTeam == localTeam)
+          return true;
+      }
+    }
+
     std::string lowerName = pname;
     for (auto &c : lowerName) c = std::tolower(c);
     for (const auto &p : Config::getMutedTagPlayers()) {

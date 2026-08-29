@@ -24,6 +24,9 @@
 #include "JavaHook/JavaHook.h"
 #include "Services/DiscordManager.h"
 #include "Logic/PacketHook.h"
+#include "Logic/Bedwars/BedwarsConfig.h"
+#include "Logic/Bedwars/BedwarsRuntime.h"
+#include "Logic/NickRoll/NickRollRuntime.h"
 #include "Utils/Logger.h"
 #include <ShlObj.h>
 #include "Utils/ReplaySpammer.h"
@@ -43,6 +46,74 @@ static volatile LONG *g_sharedFlag = nullptr;
 static HANDLE g_injectedMutex = nullptr;
 static HANDLE g_aliveEvent = nullptr;
 static HANDLE g_uninjectEvent = nullptr;
+// Some setups run the loader and the game in different Terminal Services
+// sessions (or the game elevated), and then a "Local\" name created here is
+// simply invisible to the loader. Publishing the same event under "Global\"
+// as well costs one handle and removes a whole class of "uninject button does
+// nothing" reports. The loader already probes both prefixes.
+static HANDLE g_uninjectEventGlobal = nullptr;
+static DWORD g_uninjectLocalError = 0;
+static DWORD g_uninjectGlobalError = 0;
+
+namespace {
+
+// GetForegroundWindow()'s process is NOT reliably ours. Badlion (and any
+// launcher that hosts the Minecraft canvas inside its own frame) owns the
+// top-level window from a different process, so the plain PID comparison that
+// works on Lunar rejects every key press there and the hotkey looks dead.
+// Accept the key when the foreground window is anywhere in the same window
+// tree as the surface RenderHook actually subclassed.
+bool foregroundIsGame() {
+  HWND fg = GetForegroundWindow();
+  if (!fg) {
+    return false;
+  }
+  DWORD pid = 0;
+  GetWindowThreadProcessId(fg, &pid);
+  if (pid == GetCurrentProcessId()) {
+    return true;
+  }
+  HWND game = static_cast<HWND>(RenderHook::gameWindowHandle());
+  if (!game || !IsWindow(game)) {
+    return false;
+  }
+  if (fg == game || IsChild(fg, game) || IsChild(game, fg)) {
+    return true;
+  }
+  return GetAncestor(fg, GA_ROOT) == GetAncestor(game, GA_ROOT);
+}
+
+void logForegroundRejection(int keyCode) {
+  HWND fg = GetForegroundWindow();
+  DWORD pid = 0;
+  char cls[128] = {0};
+  char title[128] = {0};
+  if (fg) {
+    GetWindowThreadProcessId(fg, &pid);
+    GetClassNameA(fg, cls, sizeof(cls) - 1);
+    GetWindowTextA(fg, title, sizeof(title) - 1);
+  }
+  Logger::info("[Uninject] key 0x%02X is down but the foreground window is "
+               "not ours: hwnd=%p pid=%lu class='%s' title='%s' "
+               "(ourPid=%lu gameHwnd=%p)",
+               keyCode, (void *)fg, (unsigned long)pid, cls, title,
+               (unsigned long)GetCurrentProcessId(),
+               RenderHook::gameWindowHandle());
+}
+
+void logUninjectSetup() {
+  Logger::info("[Uninject] hotkey %s, key=0x%02X; events: Local=%s (err=%lu) "
+               "Global=%s (err=%lu); pid=%lu",
+               Config::isUninjectKeyEnabled() ? "enabled" : "DISABLED",
+               Config::getUninjectKey(),
+               g_uninjectEvent ? "ok" : "FAILED",
+               (unsigned long)g_uninjectLocalError,
+               g_uninjectEventGlobal ? "ok" : "FAILED",
+               (unsigned long)g_uninjectGlobalError,
+               (unsigned long)GetCurrentProcessId());
+}
+
+} // namespace
 
 void init(void *instance) {
 
@@ -75,6 +146,7 @@ void init(void *instance) {
     lc->GetLoadedClasses();
     Config::initialize(static_cast<HMODULE>(instance));
     BedDefense::TextureLoader::setModule(static_cast<HMODULE>(instance));
+    OVson::Bedwars::Configuration::initialize();
     RegisterDefaultCommands();
     OVson::initialize();
     Anticheat::initialize();
@@ -161,30 +233,83 @@ void init(void *instance) {
           "RenderHook: Exception during installation, overlay disabled");
     }
 
-    bool wasEndDown = false;
+    logUninjectSetup();
+
+    // Holding the key this long forces an uninject even if we could not
+    // prove the game is focused. A tap is what normally triggers it; nobody
+    // holds End down for three seconds by accident, and this guarantees
+    // there is always a way out when window ownership is unusual.
+    constexpr ULONGLONG kForceHoldMs = 3000;
+
+    bool wasKeyDown = false;
+    ULONGLONG lastRejectionLog = 0;
+    ULONGLONG blockedSince = 0;
+    ULONGLONG lastHeartbeat = GetTickCount64();
     while (true) {
-      bool isEndDown = false;
-      if (Config::isUninjectKeyEnabled() && (GetAsyncKeyState(Config::getUninjectKey()) & 0x8000)) {
-        HWND fg = GetForegroundWindow();
-        DWORD pid = 0;
-        if (fg) GetWindowThreadProcessId(fg, &pid);
-        if (pid == GetCurrentProcessId()) {
-          isEndDown = true;
+      bool isKeyDown = false;
+      bool forcedByHold = false;
+      const int uninjectKey = Config::getUninjectKey();
+      if (Config::isUninjectKeyEnabled() && uninjectKey > 0 &&
+          (GetAsyncKeyState(uninjectKey) & 0x8000)) {
+        if (foregroundIsGame()) {
+          isKeyDown = true;
+          blockedSince = 0;
+        } else {
+          const ULONGLONG nowMs = GetTickCount64();
+          if (blockedSince == 0) {
+            blockedSince = nowMs;
+          }
+          // Throttled: this is the single most useful line when someone
+          // reports that the hotkey does nothing on their client.
+          if (nowMs - lastRejectionLog > 2000) {
+            lastRejectionLog = nowMs;
+            logForegroundRejection(uninjectKey);
+          }
+          if (nowMs - blockedSince >= kForceHoldMs) {
+            forcedByHold = true;
+          }
         }
+      } else {
+        blockedSince = 0;
       }
-      bool shouldQuit = (!wasEndDown && isEndDown);
-      if (!shouldQuit && g_uninjectEvent) {
-        if (WaitForSingleObject(g_uninjectEvent, 0) == WAIT_OBJECT_0) {
-          shouldQuit = true;
-        }
+
+      const char *quitReason = nullptr;
+      if (!wasKeyDown && isKeyDown) {
+        quitReason = "hotkey";
+      } else if (forcedByHold) {
+        quitReason = "hotkey held 3s (focus check bypassed)";
+      } else if (g_uninjectEvent &&
+                 WaitForSingleObject(g_uninjectEvent, 0) == WAIT_OBJECT_0) {
+        quitReason = "loader event (Local)";
+      } else if (g_uninjectEventGlobal &&
+                 WaitForSingleObject(g_uninjectEventGlobal, 0) ==
+                     WAIT_OBJECT_0) {
+        quitReason = "loader event (Global)";
       }
-      if (shouldQuit) {
+
+      if (quitReason) {
+        // Logged before anything else runs so that a teardown that hangs
+        // later still leaves proof that the request was received.
+        Logger::info("[Uninject] request accepted (%s), tearing down...",
+                     quitReason);
         ThreadTracker::requestStop();
         ChatSDK::showClientMessage(ChatSDK::formatPrefix() +
                                    std::string("quitting..."));
         break;
       }
-      wasEndDown = isEndDown;
+      wasKeyDown = isKeyDown;
+
+      // The Bedwars/render logging all comes from the render thread, so
+      // without this there is no way to tell from a log whether this loop is
+      // alive or wedged inside one of the polls below.
+      {
+        const ULONGLONG nowMs = GetTickCount64();
+        if (nowMs - lastHeartbeat > 30000) {
+          lastHeartbeat = nowMs;
+          Logger::log(Config::DebugCategory::General,
+                      "[Uninject] poll loop alive");
+        }
+      }
       SafeGuard::installSehTranslator();
       SafeGuard::run("dllmain/OVson::poll",  []() { OVson::poll(); });
       SafeGuard::run("dllmain/RenderHook::poll",
@@ -208,6 +333,10 @@ void init(void *instance) {
     CloseHandle(g_uninjectEvent);
     g_uninjectEvent = nullptr;
   }
+  if (g_uninjectEventGlobal) {
+    CloseHandle(g_uninjectEventGlobal);
+    g_uninjectEventGlobal = nullptr;
+  }
 
   Logger::info("Exiting main loop, starting cleanup...");
   
@@ -223,6 +352,8 @@ void init(void *instance) {
 
   try {
     Logger::info("Shutting down ChatInterceptor...");
+    OVson::NickRoll::shutdown();
+    OVson::Bedwars::Runtime::instance().shutdown();
     OVson::shutdown();
     ChatHook::uninstall();
     PacketHook::uninstall();
@@ -269,10 +400,31 @@ void init(void *instance) {
   }
   Logger::info("Cleanup complete.");
 
+  // People play with several DLLs injected at once. If RenderHook had to
+  // leave one of our hooks installed because someone else chained onto it,
+  // their code path still runs through ours -- unmapping this module would
+  // send them into unmapped memory the next frame or the next keystroke.
+  // Staying resident costs a few hundred KB until the game closes; that is
+  // strictly better than taking another mod (or the process) down with us.
+  const bool stayResident = RenderHook::mustStayLoaded();
+  if (stayResident) {
+    Logger::info("Keeping OVson.dll mapped: another injected module is "
+                 "chained to our hooks. It will be released when the game "
+                 "closes.");
+    // DLL_PROCESS_DETACH is what normally persists the config, and it will
+    // not run for us now (the process-exit detach passes lpReserved != null
+    // and skips it), so save here instead.
+    Config::saveNow();
+  }
+
   Logger::shutdown();
   if (file) {
     fclose(file);
     file = nullptr;
+  }
+
+  if (stayResident) {
+    ExitThread(0);
   }
 
   FreeLibraryAndExitThread(static_cast<HMODULE>(instance), 0);
@@ -303,6 +455,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
       g_aliveEvent = CreateEventW(nullptr, TRUE, TRUE, name);
       wsprintfW(name, L"Local\\OVsonUninject_%lu", pid);
       g_uninjectEvent = CreateEventW(nullptr, TRUE, FALSE, name);
+      g_uninjectLocalError = g_uninjectEvent ? 0 : GetLastError();
+      wsprintfW(name, L"Global\\OVsonUninject_%lu", pid);
+      g_uninjectEventGlobal = CreateEventW(nullptr, TRUE, FALSE, name);
+      g_uninjectGlobalError = g_uninjectEventGlobal ? 0 : GetLastError();
     }
 
     {
@@ -341,6 +497,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
       if (g_uninjectEvent) {
         CloseHandle(g_uninjectEvent);
         g_uninjectEvent = nullptr;
+      }
+      if (g_uninjectEventGlobal) {
+        CloseHandle(g_uninjectEventGlobal);
+        g_uninjectEventGlobal = nullptr;
       }
     }
     break;

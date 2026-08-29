@@ -120,6 +120,7 @@ std::string resolveTeamForNameEx(JNIEnv *env, const std::string &name,
 void setTeamColorSticky(const std::string &name, const std::string &team, bool fromHelmet = false);
 bool isRealBedwarsTeam(const std::string &t);
 std::string teamFromColorCode(char code);
+std::string closestTeamColor(int color);
 void detectTeamsFromLine(const std::string &chat);
 const char *mcColorForTeam(const std::string &team);
 const char *teamInitial(const std::string &team);

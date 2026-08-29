@@ -1,11 +1,11 @@
 #include <windows.h>
 
+#ifndef OVSON_PAYLOAD_PATH
+#error OVSON_PAYLOAD_PATH must point to the OVson DLL built for this loader
+#endif
+
 101 ICON "ovson_logo.ico"
-1 RCDATA "..\\x64\\Release\\OVson.dll"
-2 RCDATA "slint_cpp.dll"
-3 RCDATA "..\\LICENSE.txt"
-4 RCDATA "readme_embed.txt"
-5 RCDATA "changelog_embed.txt"
+1 RCDATA OVSON_PAYLOAD_PATH
 
 1 VERSIONINFO
  FILEVERSION    3,0,2,0

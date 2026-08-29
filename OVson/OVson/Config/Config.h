@@ -8,6 +8,7 @@
 namespace Config {
 bool initialize(HMODULE selfModule);
 HMODULE getModuleHandle();
+std::string getDataDirectory();
 void update();
 bool save();
 bool saveNow();
@@ -84,6 +85,79 @@ void setNickedBypass(bool enabled);
 bool isRawMouseFixEnabled();
 void setRawMouseFixEnabled(bool enabled);
 
+// Client-side heuristic: correlates server hurt/health/velocity packets with a
+// nearby player swing while the local player is sword-blocking. It is not a
+// server-confirmed block result.
+bool isBlockHitSoundEnabled();
+void setBlockHitSoundEnabled(bool enabled);
+bool isBlockHitSoundDebugEnabled();
+void setBlockHitSoundDebugEnabled(bool enabled);
+const std::string &getBlockHitSoundSource();
+void setBlockHitSoundSource(const std::string &source);
+const std::string &getBlockHitSoundFilename();
+void setBlockHitSoundFilename(const std::string &filename);
+float getBlockHitSoundVolume();
+void setBlockHitSoundVolume(float volumePercent);
+// On (the default): wait for the health drop or knockback packet that says the
+// server registered the hit. Off: a hurt while blocking with a sword is enough
+// on its own -- immediate, but it also fires on damage no player swung for.
+bool isBlockHitWaitForServerEnabled();
+void setBlockHitWaitForServerEnabled(bool enabled);
+
+// Now-playing overlay. Reads whatever Windows' media session reports -- Spotify,
+// a browser tab, any player that registers a transport session. Position is
+// stored normalised (0..1) so it survives a resolution change.
+bool isMediaOverlayEnabled();
+void setMediaOverlayEnabled(bool enabled);
+float getMediaOverlayX();
+void setMediaOverlayX(float x);
+float getMediaOverlayY();
+void setMediaOverlayY(float y);
+float getMediaOverlayScale();
+void setMediaOverlayScale(float scale);
+// 0 = wide landscape card, 1 = compact portrait card.
+int getMediaOverlayLayout();
+void setMediaOverlayLayout(int layout);
+// Card appearance. Colours are stored as 0xRRGGBB; opacity is separate so the
+// background can be tinted and faded independently.
+unsigned long getMediaOverlayBgColor();
+void setMediaOverlayBgColor(unsigned long rgb);
+unsigned long getMediaOverlayAccentColor();
+void setMediaOverlayAccentColor(unsigned long rgb);
+unsigned long getMediaOverlayTextColor();
+void setMediaOverlayTextColor(unsigned long rgb);
+float getMediaOverlayOpacity();
+void setMediaOverlayOpacity(float opacity);
+float getMediaOverlayCorner();
+void setMediaOverlayCorner(float radius);
+bool isMediaOverlayArtEnabled();
+void setMediaOverlayArtEnabled(bool enabled);
+
+// /nick book scoring alerts. The scorer's fitted weights are intentionally
+// fixed; only the pass line and notification behavior are user-configurable.
+int getNickScoreThreshold();
+void setNickScoreThreshold(int threshold);
+bool isNickRollEnabled();
+void setNickRollEnabled(bool enabled);
+bool isNickScorePingEnabled();
+void setNickScorePingEnabled(bool enabled);
+bool isNickScoreAlertEveryEnabled();
+void setNickScoreAlertEveryEnabled(bool enabled);
+// Auto-reroll presses TRY AGAIN for a name that missed the threshold, using
+// the command the page itself puts behind that button. Off by default.
+bool isNickRollAutoRerollEnabled();
+void setNickRollAutoRerollEnabled(bool enabled);
+int getNickRollRerollDelayMs();
+void setNickRollRerollDelayMs(int milliseconds);
+int getNickRollRerollCap();
+void setNickRollRerollCap(int cap);
+// Virtual-key code that toggles nick scoring on and off. Polled directly so it
+// works with the /nick book open, which is the only moment it is useful.
+int getNickRollToggleKey();
+void setNickRollToggleKey(int virtualKey);
+const std::string &getNickRollTargetWord();
+void setNickRollTargetWord(const std::string &targetWord);
+
 // click gui settings
 int getClickGuiKey();
 void setClickGuiKey(int key);
@@ -138,14 +212,27 @@ void addMutedTagPlayer(const std::string &name);
 void removeMutedTagPlayer(const std::string &name);
 bool isMuteSelfTagAlertsEnabled();
 void setMuteSelfTagAlertsEnabled(bool enabled);
+// Silences tag warnings for anyone resolved onto the local player's own team.
+// Team membership comes from the scoreboard team a player belongs to, with the
+// armour-colour table as the fallback -- the same resolution the nametags and
+// the tab list already use.
+bool isMuteTeamTagAlertsEnabled();
+void setMuteTeamTagAlertsEnabled(bool enabled);
 
 // ClickGUI visual theme: "LiquidGlass" (default) | "Minimal".
 const std::string &getClickGuiTheme();
 void setClickGuiTheme(const std::string &theme);
 const std::string &getClickGuiLayout();
 void setClickGuiLayout(const std::string &layout);
+float getClickGuiX();
+float getClickGuiY();
+float getClickGuiWidth();
+float getClickGuiHeight();
+void setClickGuiBounds(float x, float y, float width, float height);
 const std::string &getLayoutBData();
 void setLayoutBData(const std::string &data);
+const std::string &getBedwarsSettingsData();
+void setBedwarsSettingsData(const std::string &data);
 
 bool isLiquidGlassWiggleEnabled();
 void setLiquidGlassWiggleEnabled(bool enabled);

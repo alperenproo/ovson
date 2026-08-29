@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <jni.h>
 #include <mutex>
@@ -1431,7 +1432,30 @@ void syncTeamColors() {
                              : nullptr;
     env->ExceptionClear();
     if (scoreboard) {
-      if (g_jCache.m_getPlayersTeam && g_jCache.m_getPrefix) {
+      // syncTeamColors is the ONLY thing that ever writes
+      // g_playerStatsMap[].teamColor, and that field is what the tab list
+      // actually draws. Everything below used to sit inside the scoreboard
+      // gate, including the part that has nothing to do with the scoreboard.
+      //
+      // In a Hypixel replay there are no scoreboard teams at all -- 15 of 16
+      // players come back "NO TEAM OBJECT FOUND" -- so teams are recovered
+      // from the colour of each player's leather helmet instead, and that
+      // works: 16 of 16 resolved, sitting in g_playerTeamColor. But
+      // ScorePlayerTeam is never needed there, so its class and methods are
+      // not resolved, the gate reads false, and the copy loop that would have
+      // delivered those 16 teams to the tab list never ran. Measured:
+      // gate=0 wrote=0 with all 17 teams present in g_playerTeamColor.
+      //
+      // So the gate now wraps only the scoreboard RESOLUTION. The copy loop
+      // runs either way, preferring a scoreboard answer when there is one and
+      // falling back to whatever the helmet pass (or the chat parser) already
+      // established.
+      int dbgWrote = 0;
+      int dbgSkippedNoTeam = 0;
+      int dbgSkippedDowngrade = 0;
+      const bool dbgGate = g_jCache.m_getPlayersTeam && g_jCache.m_getPrefix;
+
+      {
         std::vector<std::string> namesToSync;
         {
           std::lock_guard<std::mutex> stLock(g_statsMutex);
@@ -1441,12 +1465,14 @@ void syncTeamColors() {
         }
 
         std::unordered_map<std::string, std::string> resolvedTeams;
-        for (const auto &name : namesToSync) {
-          std::string team = resolveTeamForNameEx(
-              env, name, scoreboard, g_jCache.m_getPlayersTeam,
-              g_jCache.teamCls, g_jCache.m_getPrefix);
-          if (!team.empty()) {
-            resolvedTeams[name] = team;
+        if (g_jCache.m_getPlayersTeam && g_jCache.m_getPrefix) {
+          for (const auto &name : namesToSync) {
+            std::string team = resolveTeamForNameEx(
+                env, name, scoreboard, g_jCache.m_getPlayersTeam,
+                g_jCache.teamCls, g_jCache.m_getPrefix);
+            if (!team.empty()) {
+              resolvedTeams[name] = team;
+            }
           }
         }
 
@@ -1472,13 +1498,47 @@ void syncTeamColors() {
                 auto statIt = g_playerStatsMap.find(name);
                 if (statIt != g_playerStatsMap.end()) {
                   statIt->second.teamColor = team;
+                  ++dbgWrote;
                 }
+              } else {
+                ++dbgSkippedDowngrade;
               }
               setTeamColorSticky(name, team);
+            } else {
+              ++dbgSkippedNoTeam;
             }
           }
         }
       }
+
+      if (Config::isGlobalDebugEnabled()) {
+        static ULONGLONG lastSyncDbg = 0;
+        const ULONGLONG nowDbg = GetTickCount64();
+        if (lastSyncDbg == 0 || nowDbg - lastSyncDbg >= 2000) {
+          lastSyncDbg = nowDbg;
+          std::ofstream out(
+              (Config::getDataDirectory() + "\\ovson_team_sync_debug.txt").c_str(),
+              std::ios::out);
+          out << "--- syncTeamColors ---" << std::endl;
+          out << "gate(m_getPlayersTeam && m_getPrefix)=" << (dbgGate ? 1 : 0)
+              << "  wrote=" << dbgWrote
+              << "  skippedNoTeam=" << dbgSkippedNoTeam
+              << "  skippedDowngrade=" << dbgSkippedDowngrade << std::endl;
+          std::lock_guard<std::mutex> dl(g_statsMutex);
+          out << "statsMap=" << g_playerStatsMap.size()
+              << "  teamColorMap=" << g_playerTeamColor.size() << std::endl;
+          for (const auto &pr : g_playerStatsMap) {
+            auto tc = g_playerTeamColor.find(pr.first);
+            out << "  " << pr.first
+                << "  stats.teamColor='" << pr.second.teamColor << "'"
+                << "  g_playerTeamColor='"
+                << (tc == g_playerTeamColor.end() ? std::string("<missing>")
+                                                  : tc->second)
+                << "'" << std::endl;
+          }
+        }
+      }
+
       env->DeleteLocalRef(scoreboard);
     }
     env->DeleteLocalRef(world);

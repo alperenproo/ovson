@@ -1,4 +1,8 @@
 #pragma once
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
 #include <string>
 #include <cstdint>
 namespace Render {
@@ -17,6 +21,21 @@ void drawSwitch(int id, float x, float y, bool enabled, bool hovered,
                 float alpha);
 
 bool drawSlider(int id, float x, float y, float w, float h, float &val, float minVal, float maxVal, float mx, float my, bool lClick, float alpha);
+
+// Shared click-to-type readout for slider-backed values. The caller supplies
+// exactly the same bounds used by its slider, so typed and dragged values are
+// clamped identically.
+bool drawNumericInput(int id, float x, float y, float w, float h, float &value,
+                      float minValue, float maxValue, int decimals,
+                      const char *suffix, float mx, float my, bool clickEvent,
+                      float alpha);
+bool handleEditorMessage(UINT msg, WPARAM wParam, LPARAM lParam);
+void cancelInlineEditors();
+
+float colorPickerHeight(bool includeRainbow = false);
+bool drawColorPicker(int id, float x, float y, float width,
+                     std::uint32_t &color, float mx, float my, bool lClick,
+                     bool clickEvent, float alpha, bool *rainbow = nullptr);
 
 void drawThemePanel(float x, float y, float w, float h, float alpha);
 
@@ -45,6 +64,9 @@ using ClickGUIHelpers::drawSectionLabel;
 using ClickGUIHelpers::drawChevron;
 using ClickGUIHelpers::drawSwitch;
 using ClickGUIHelpers::drawSlider;
+using ClickGUIHelpers::drawNumericInput;
+using ClickGUIHelpers::drawColorPicker;
+using ClickGUIHelpers::colorPickerHeight;
 using ClickGUIHelpers::drawThemePanel;
 using ClickGUIHelpers::drawThemeSidebar;
 using ClickGUIHelpers::drawThemeCard;

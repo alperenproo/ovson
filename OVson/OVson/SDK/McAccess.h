@@ -100,11 +100,23 @@ inline jobject theWorld(JNIEnv *env) {
     jclass cls = minecraftClass();
     static jfieldID fid = nullptr;
     if (!fid) {
+        // The obfuscated type is Lbdb;, not Lavk;. With the wrong signature
+        // the notch fallback never matched, so on any client that ships
+        // Minecraft obfuscated this returned null -- and a null world fails
+        // the Bedwars lifecycle gate, which silently disabled every feature
+        // that waits on an active match. thePlayer just above got its notch
+        // type right, which is why the player read fine while the world did
+        // not. The signature search below is the belt to that braces: it
+        // finds the field by type even if the name changes again.
         fid = lc->GetFieldID(
             cls, "theWorld",
             "Lnet/minecraft/client/multiplayer/WorldClient;",
-            "field_71441_e", "f", "Lavk;");
+            "field_71441_e", "f", "Lbdb;");
         if (!fid && env->ExceptionCheck()) env->ExceptionClear();
+        if (!fid)
+            fid = lc->FindFieldBySignature(
+                cls, "Lnet/minecraft/client/multiplayer/WorldClient;");
+        if (!fid) fid = lc->FindFieldBySignature(cls, "Lbdb;");
     }
     if (!fid) { env->DeleteLocalRef(mc); return nullptr; }
     jobject w = env->GetObjectField(mc, fid);

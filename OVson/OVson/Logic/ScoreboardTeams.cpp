@@ -2,6 +2,7 @@
 #include "StatsTracker.internal.h"
 
 #include "../Java.h"
+#include "../Config/Config.h"
 #include "../Utils/Logger.h"
 #include "../Utils/Anticheat/Anticheat.h"
 
@@ -88,6 +89,25 @@ void setTeamColorSticky(const std::string &name, const std::string &newTeam, boo
     return;
   }
   g_playerTeamColor[name] = newTeam;
+
+  // g_localTeam (the local player's own team) normally only comes from the
+  // "You are on the X Team!" chat line, which Hypixel sends exactly once
+  // per match. If that single line is missed -- e.g. the DLL was injected
+  // or reattached after the match had already started, or the chat hook
+  // wasn't attached in time -- g_localTeam stays empty for the rest of the
+  // match with no other way to recover it. Every Bedwars Tools feature
+  // that depends on knowing which nearby players are teammates (Player
+  // Alerts, own-team upgrade tracking) silently stops working in that
+  // case, even though the per-player team map above is still being
+  // populated correctly via the scoreboard/tab list. Mirror any confident
+  // team resolution for the local player's own name into g_localTeam here
+  // as a fallback, without ever overwriting an already-known value.
+  if (g_localTeam.empty() && !g_localName.empty() && name == g_localName &&
+      isRealBedwarsTeam(newTeam)) {
+    g_localTeam = newTeam;
+    Logger::info("Local team resolved via scoreboard fallback: %s",
+                 newTeam.c_str());
+  }
 }
 
 std::string teamFromColorCode(char code) {
@@ -276,13 +296,13 @@ void updateTeamsFromScoreboard() {
           if (array) {
             jclass epCls = lc->GetClass("net.minecraft.entity.player.EntityPlayer");
             jmethodID m_getName = lc->GetMethodID(epCls, "getName", "()Ljava/lang/String;", "func_70005_c_", "e_");
-            jfieldID f_inventory = lc->GetFieldID(epCls, "inventory", "Lnet/minecraft/entity/player/InventoryPlayer;", "field_71071_by", "bi");
+            jfieldID f_inventory = lc->GetFieldID(epCls, "inventory", "Lnet/minecraft/entity/player/InventoryPlayer;", "field_71071_by", "bi", "Lwm;");
             jclass ipCls = lc->GetClass("net.minecraft.entity.player.InventoryPlayer");
-            jfieldID f_armorInventory = lc->GetFieldID(ipCls, "armorInventory", "[Lnet/minecraft/item/ItemStack;", "field_70460_b", "b");
+            jfieldID f_armorInventory = lc->GetFieldID(ipCls, "armorInventory", "[Lnet/minecraft/item/ItemStack;", "field_70460_b", "b", "[Lzx;");
             jclass isCls = lc->GetClass("net.minecraft.item.ItemStack");
-            jmethodID m_getItem = lc->GetMethodID(isCls, "getItem", "()Lnet/minecraft/item/Item;", "func_77973_b", "b");
+            jmethodID m_getItem = lc->GetMethodID(isCls, "getItem", "()Lnet/minecraft/item/Item;", "func_77973_b", "b", "()Lzw;");
             jclass iaCls = lc->GetClass("net.minecraft.item.ItemArmor");
-            jmethodID m_getColor = lc->GetMethodID(iaCls, "getColor", "(Lnet/minecraft/item/ItemStack;)I", "func_82814_b", "b");
+            jmethodID m_getColor = lc->GetMethodID(iaCls, "getColor", "(Lnet/minecraft/item/ItemStack;)I", "func_82814_b", "b", "(Lzx;)I");
 
             if (epCls && m_getName && f_inventory && ipCls && f_armorInventory && isCls && m_getItem && iaCls && m_getColor) {
                 int len = env->GetArrayLength(array);
@@ -429,15 +449,32 @@ void updateTeamsFromScoreboard() {
 
   Lunar::reporter = oldReporter;
 
+  // This dump is the only thing that can say WHY a player ended up without a
+  // team, and it was pointed at C:\Users\HPC1\Desktop -- a path that exists on
+  // whoever wrote it, and on nobody else's machine. Everywhere else it
+  // silently failed to open, every two seconds, forever. It now goes next to
+  // the rest of the logs and only runs when debugging is on.
   static auto lastDbg = std::chrono::steady_clock::now();
   auto now = std::chrono::steady_clock::now();
-  bool shouldDbg = std::chrono::duration_cast<std::chrono::seconds>(now - lastDbg).count() >= 2;
+  bool shouldDbg =
+      Config::isGlobalDebugEnabled() &&
+      std::chrono::duration_cast<std::chrono::seconds>(now - lastDbg).count() >= 2;
   if (shouldDbg) lastDbg = now;
-  
+
   std::ofstream dbg;
   if (shouldDbg) {
-      dbg.open("C:\\Users\\HPC1\\Desktop\\ovson_team_debug.txt", std::ios::out);
-      dbg << "--- updateTeamsFromScoreboard ---" << std::endl;
+    const std::string path = Config::getDataDirectory() + "\\ovson_team_debug.txt";
+    dbg.open(path.c_str(), std::ios::out);
+    dbg << "--- updateTeamsFromScoreboard ---" << std::endl;
+    // Which of the two paths is even running, and what the helmet pass found.
+    // In a replay the scoreboard usually has nothing, so the helmet pass is
+    // the only real source -- and it can only see players whose entity is
+    // loaded near the replay camera.
+    dbg << "inReplay=" << (g_inReplay ? 1 : 0)
+        << " inGame=" << (g_inHypixelGame ? 1 : 0)
+        << " onlinePlayers=" << g_onlinePlayers.size()
+        << " helmetResolved=" << g_helmetTeamSet.size()
+        << " teamColorEntries=" << g_playerTeamColor.size() << std::endl;
   }
 
   for (const std::string &name : g_onlinePlayers) {

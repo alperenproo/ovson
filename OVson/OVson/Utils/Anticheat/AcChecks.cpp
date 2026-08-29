@@ -88,76 +88,57 @@ private:
 class AutoBlockCheck : public Check {
 public:
   AutoBlockCheck()
-      : Check("AutoBlock", "Attack while sword stays blocked") {}
-  void onPlayerTick(PlayerData &p, JNIEnv *, jobject) override {
+      : Check("AutoBlock", "Confirmed hits while sword stays blocked") {}
+
+  // AutoBlock no longer infers attacks by polling animation fields from the
+  // render loop. BlockHitSound pushes a server-packet-correlated attack here
+  // with the exact attacker entity selected by the live hit detector.
+  void onPlayerTick(PlayerData &, JNIEnv *, jobject) override {}
+
+  void onConfirmedAttack(PlayerData &p,
+                         const ConfirmedAttack &attack) override {
     if (!Config::isAnticheatAutoBlockEnabled())
       return;
     if (p.isLocalPlayer && !Config::isAnticheatCheckSelfEnabled())
       return;
 
-    long currentMs = (long)GetTickCount64();
-
-    if (p.isBlocking && !p.wasBlocking) {
-      p.lastBlockStartMs = currentMs;
+    if (!attack.blockingKnown || !attack.blocking ||
+        !attack.holdingSword ||
+        (!attack.healthConfirmed && !attack.velocityConfirmed)) {
+      abLog("confirmed hit rejected: name='%s' eid=%d known=%d blocking=%d "
+            "sword=%d health=%d velocity=%d distance=%.2f",
+            p.name.c_str(), p.entityId, (int)attack.blockingKnown,
+            (int)attack.blocking, (int)attack.holdingSword,
+            (int)attack.healthConfirmed, (int)attack.velocityConfirmed,
+            attack.distance);
+      return;
     }
 
-    bool isHoldingSword = isSwordId(p.heldItemId);
-    bool isSwinging = p.isSwingInProgress;
+    constexpr std::uint64_t kEvidenceWindowMs = 1250;
+    auto &hits = p.confirmedAutoBlockHits;
+    hits.erase(std::remove_if(hits.begin(), hits.end(), [&](std::uint64_t hit) {
+                 return attack.atMs < hit || attack.atMs - hit > kEvidenceWindowMs;
+               }),
+               hits.end());
+    hits.push_back(attack.atMs);
 
-    if (isSwinging &&
-        (p.lastSwingDetectedMs == 0 ||
-         currentMs - p.lastSwingDetectedMs > 100)) {
-      bool blockingAtSwing = p.isBlocking;
-      PlayerData::Swing sw;
-      sw.ms = currentMs;
-      sw.wasBlockingBefore = blockingAtSwing;
-      sw.afterTrack = -1;
-      p.swings.push_back(sw);
-      p.lastSwingDetectedMs = currentMs;
-      if (p.swings.size() > 20)
-        p.swings.erase(p.swings.begin());
-      abLog("swing recorded: name='%s' local=%d itemId=%d isBlocking=%d "
-            "isUsingItem=%d lastBlockAgeMs=%ld wasBlockingBefore=%d",
-            p.name.c_str(), (int)p.isLocalPlayer, p.heldItemId,
-            (int)p.isBlocking, (int)p.isUsingItem,
-            p.lastBlockStartMs > 0 ? (long)(currentMs - p.lastBlockStartMs)
-                                   : -1L,
-            (int)blockingAtSwing);
-    }
+    abLog("confirmed hit accepted: name='%s' eid=%d count=%d distance=%.2f "
+          "health=%d velocity=%d",
+          p.name.c_str(), p.entityId, (int)hits.size(), attack.distance,
+          (int)attack.healthConfirmed, (int)attack.velocityConfirmed);
 
-    for (auto &sw : p.swings) {
-      if (sw.afterTrack == 1) continue;
-      long since = currentMs - sw.ms;
-      if (since >= 150 && since <= 200 && p.isBlocking) {
-        sw.afterTrack = 1;
-      } else if (sw.afterTrack == -1 && since > 200) {
-        sw.afterTrack = 0;
-      }
-    }
-
-    int autoBlockCount = 0;
-    for (const auto &sw : p.swings) {
-      if (currentMs - sw.ms >= 1000)
-        continue;
-      if (sw.afterTrack == -1)
-        continue;
-      if (!isHoldingSword)
-        continue;
-      if (sw.wasBlockingBefore && sw.afterTrack == 1)
-        autoBlockCount++;
-    }
-
-    if (autoBlockCount > 0) {
-      abLog("count tick: name='%s' autoBlockCount=%d swings_in_window=%d",
-            p.name.c_str(), autoBlockCount, (int)p.swings.size());
-    }
-    if (autoBlockCount >= 2) {
+    // Keep the old two-hit requirement and +5 VL contribution. The evidence
+    // is stronger now, but one correlated hit can still be a legitimate 1.8
+    // block-hit transition whose remote metadata arrived in an unlucky order.
+    if (hits.size() >= 2) {
       std::ostringstream ss;
-      ss << "itemId:" << p.heldItemId << " autoblks:" << autoBlockCount;
-      abLog("FLAG: name='%s' itemId=%d autoblks=%d", p.name.c_str(),
-            p.heldItemId, autoBlockCount);
+      ss << "confirmed-hits:" << hits.size()
+         << " distance:" << std::fixed << std::setprecision(2)
+         << attack.distance;
+      abLog("FLAG: name='%s' eid=%d confirmedHits=%d", p.name.c_str(),
+            p.entityId, (int)hits.size());
       flag(p, this, ss.str(), 5.0);
-      p.swings.clear();
+      hits.clear();
     }
   }
 };

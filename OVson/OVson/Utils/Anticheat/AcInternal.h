@@ -1,5 +1,6 @@
 #pragma once
 #include <Windows.h>
+#include <cstdint>
 #include <jni.h>
 #include <memory>
 #include <string>
@@ -67,6 +68,7 @@ struct PlayerData {
   int useItemTime = 0;
   double autoBlockVL = 0;
   int autoBlockConsecutive = 0;
+  std::vector<std::uint64_t> confirmedAutoBlockHits;
 
   int scaffoldConsecutive = 0;
   std::string lastScaffoldType;
@@ -85,6 +87,16 @@ public:
   Check(const char *name, const char *desc) : m_name(name), m_desc(desc) {}
   virtual ~Check() = default;
   virtual void onPlayerTick(PlayerData &p, JNIEnv *env, jobject entity) = 0;
+  struct ConfirmedAttack {
+    std::uint64_t atMs = 0;
+    double distance = 0.0;
+    bool blockingKnown = false;
+    bool blocking = false;
+    bool holdingSword = false;
+    bool healthConfirmed = false;
+    bool velocityConfirmed = false;
+  };
+  virtual void onConfirmedAttack(PlayerData &, const ConfirmedAttack &) {}
   const char *name() const { return m_name; }
   const char *desc() const { return m_desc; }
 

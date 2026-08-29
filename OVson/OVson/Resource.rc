@@ -90,7 +90,15 @@ END
 
 IDR_MINHOOK_DLL         MINHOOK_DLL             "MinHook\\MinHook.x64.dll"
 IDR_DISCORD_DLL         RCDATA                  "Resources\\discord-rpc.dll"
-IDR_OVSON_API_JAR       RCDATA                  "..\\OVsonAPI.jar"
+#ifndef OVSON_API_JAR_PATH
+#define OVSON_API_JAR_PATH "..\\OVsonAPI.jar"
+#endif
+IDR_OVSON_API_JAR       RCDATA                  OVSON_API_JAR_PATH
+
+// Now-playing transport icons. The supplied PNGs contain a baked checkerboard;
+// MediaOverlay converts only their dark silhouettes into alpha at load time.
+IDR_MEDIA_SHUFFLE       RCDATA                  "assets\\media\\shuffle.png"
+IDR_MEDIA_REPEAT        RCDATA                  "assets\\media\\repeat.png"
 
 /////////////////////////////////////////////////////////////////////////////
 //

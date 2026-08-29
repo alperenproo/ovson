@@ -8,6 +8,7 @@
 #include "../Logic/StatsTracker.h"
 #include "ChatAPI_Bridge.h"
 #include "../Logic/StatsTracker.internal.h"
+#include "../Logic/Bedwars/BedwarsRuntime.h"
 #include "../Config/StatColors.h"
 #include "../Utils/BedwarsPrestiges.h"
 #include "../Render/RenderHook.h"
@@ -318,7 +319,7 @@ static void JNICALL onMethodEntry(jvmtiEnv *jvmti_env, JNIEnv *jni_env, jthread 
 
 							jclass serializerCls = jni_env->FindClass("net/minecraft/util/IChatComponent$Serializer");
 							if (serializerCls) {
-								jmethodID toJson = lc->GetStaticMethodID(serializerCls, "componentToJson", "(Lnet/minecraft/util/IChatComponent;)Ljava/lang/String;", "func_150699_a", "a");
+								jmethodID toJson = lc->GetStaticMethodID(serializerCls, "componentToJson", "(Lnet/minecraft/util/IChatComponent;)Ljava/lang/String;", "func_150699_a", "a", "(Leu;)Ljava/lang/String;");
 								if (toJson) {
 									jstring jsonJStr = (jstring)jni_env->CallStaticObjectMethod(serializerCls, toJson, chatComponent);
 									if (jsonJStr) {
@@ -486,6 +487,8 @@ std::string ChatHook::processIncomingChat(const std::string& unformatted, const 
 		g_ignoreNextChat = false;
 		return rawJson;
 	}
+
+	OVson::Bedwars::Runtime::instance().onChatMessage(unformatted);
 
 	OVson::enqueueNativeChat(unformatted);
 

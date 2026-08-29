@@ -235,6 +235,22 @@ void shutdown() {
         s_transformMethod = nullptr;
     }
 
+    // Every GetEnv() call in initialize() hands back a brand new JVMTI
+    // environment that stays registered with the JVM until it is disposed
+    // -- it does NOT go away just because this DLL unloads. If the DLL is
+    // later re-injected into the SAME still-running Minecraft process
+    // (uninject -> rebuild -> reinject without restarting the client,
+    // which is exactly the normal iteration loop while testing), the old,
+    // never-disposed environment is still sitting there holding whatever
+    // capabilities it was granted. On the next injection's fresh
+    // AddCapabilities() call for the class-file-load-hook capabilities
+    // (can_retransform_classes and friends), the JVM can then
+    // report them as unavailable even though nothing about the machine or
+    // JVM actually changed -- because they're still allocated to the
+    // zombie environment nobody ever released. Disposing our environment
+    // here is what actually frees that up for the next injection.
+    s_jvmti->DisposeEnvironment();
+
     s_active = false;
     s_jvmti = nullptr;
 }

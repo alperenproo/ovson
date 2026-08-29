@@ -14,12 +14,18 @@
 #include "../Utils/Watchdog.h"
 #include "BetterTab.h"
 #include "../ClickGUI/ClickGUI.h"
+#include "BedwarsOverlay.h"
+#include "MediaOverlay.h"
+#include "../Logic/MediaSession.h"
+#include "../Logic/Bedwars/BedwarsRuntime.h"
+#include "../Logic/NickRoll/NickRollRuntime.h"
 #include "DefenseRenderer.h"
 #include "NameTagRenderer.h"
 #include "NotificationManager.h"
 #include "StatsOverlay.h"
 #include "TechOverlay.h"
 #include "Shader.h"
+#include <cstring>
 #include <fstream>
 #include <functional>
 #include "GL.h"
@@ -283,6 +289,54 @@ static wglSwapBuffers_t originalSwapBuffers = nullptr;
 typedef BOOL(WINAPI* SetCursorPos_t)(int, int);
 static SetCursorPos_t originalSetCursorPos = nullptr;
 
+// --- Cross-mod safe teardown -------------------------------------------
+// Minecraft is routinely running more than one injected DLL at a time, and
+// hooks stack: whoever installs last sits in front of whoever installed
+// first. That makes teardown order-dependent, so every step below has to
+// answer one question before it undoes anything: "is the thing I am about
+// to restore still mine?"
+//
+// If another module hooked wglSwapBuffers after us, its trampoline holds a
+// copy of *our* jump, so it calls into our stub. MinHook's disable path
+// restores the function's ORIGINAL prologue bytes, which silently deletes
+// that module's jump, and MH_Uninitialize + FreeLibrary then frees the
+// trampoline its chain still points at. Result: the other mod stops
+// working, or the game dies in unmapped memory. The WndProc chain has the
+// exact same shape.
+//
+// When we detect that we are no longer the outermost hook, we leave
+// everything installed and leak instead. A resident module costs a few
+// hundred KB until the game closes; a wrong unhook costs the other mod and
+// usually the whole process.
+struct HookedTarget {
+  LPVOID address = nullptr;
+  unsigned char prologue[16] = {};
+  bool valid = false;
+};
+
+static HookedTarget g_swapTarget;
+static HookedTarget g_cursorTarget;
+static std::atomic<bool> g_mustStayLoaded{false};
+
+// Record what the function's first bytes look like *after* MinHook has
+// installed our jump, so we have something to compare against later.
+static void snapshotPrologue(HookedTarget &target, LPVOID address) {
+  if (!address) return;
+  target.address = address;
+  memcpy(target.prologue, address, sizeof(target.prologue));
+  target.valid = true;
+}
+
+// True while the hooked function still starts with exactly the bytes
+// MinHook left there for us. Anything else means a later injection
+// overwrote the prologue with its own jump and is now chained in front of
+// us. An unhooked/never-snapshotted target counts as ours: there is
+// nothing of anyone else's to damage.
+static bool prologueStillOurs(const HookedTarget &target) {
+  if (!target.valid || !target.address) return true;
+  return memcmp(target.address, target.prologue, sizeof(target.prologue)) == 0;
+}
+
 BOOL WINAPI hookedSetCursorPos(int X, int Y) {
   if (Config::isRawMouseFixEnabled()) {
     POINT pt;
@@ -493,7 +547,24 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT uMsg, WPARAM wParam,
     }
 
     if (uMsg == WM_KEYDOWN && (int)wParam == g_tabVK) {
-      if (Config::isBetterTabModeEnabled() && OVson::isInHypixelGame() &&
+      // The replay case has to be here as well, and it was the one place it
+      // was missing. Three gates decide BetterTab: this one swallows the Tab
+      // key so Minecraft never sees it, the render gate below, and
+      // BetterTab.cpp's own activeMatch check. The other two read
+      // "isInHypixelGame() || isInReplay()"; this one read only the first.
+      //
+      // A replay is not an "in Hypixel game" session -- it is detected from a
+      // scoreboard titled REPLAY, and g_inHypixelGame is driven by game
+      // keywords that are absent there. So in a replay BetterTab drew itself
+      // while the key still reached the game, and the vanilla player list drew
+      // underneath it. Both lists on screen at once.
+      //
+      // suppressVanillaTab() clearing keyBindPlayerList.pressed does not save
+      // it: that is a race against Minecraft's own input polling, which keeps
+      // setting the field back to true from a key event that should never have
+      // arrived. Not letting the key through is the actual fix.
+      if (Config::isBetterTabModeEnabled() &&
+          (OVson::isInHypixelGame() || OVson::isInReplay()) &&
           !OVson::isInPreGameLobby() && !OVson::isChatOpen()) {
         consume = true;
         return;
@@ -529,7 +600,15 @@ static void renderOverlayWorkBody(HDC hdc) {
   HWND currentHwnd = WindowFromDC(hdc);
   if (currentHwnd && IsWindow(currentHwnd) && currentHwnd != g_gameHwnd) {
     if (g_gameHwnd && IsWindow(g_gameHwnd) && originalWndProc) {
-      SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC, (LONG_PTR)originalWndProc);
+      // Only unhook the old window if we are still its current WndProc.
+      // If another mod subclassed after us, the window's proc is theirs
+      // and their saved "previous" pointer is our hookedWndProc --
+      // writing originalWndProc back here would drop them out of the
+      // chain and kill their input handling.
+      if (GetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC) ==
+          (LONG_PTR)hookedWndProc) {
+        SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC, (LONG_PTR)originalWndProc);
+      }
     }
     g_gameHwnd = currentHwnd;
     originalWndProc = (WNDPROC)SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC,
@@ -797,6 +876,24 @@ static void renderOverlayWorkBody(HDC hdc) {
     }
   }
 
+  runSubsystem("BedwarsRuntime::tick", []() {
+    OVson::Bedwars::Runtime::instance().tick();
+  });
+
+  runSubsystem("NickRoll::tick", []() { OVson::NickRoll::tick(); });
+
+  runSubsystem("MediaOverlay::render", [hdc]() {
+    GLint vp[4]{};
+    glGetIntegerv(GL_VIEWPORT, vp);
+    Render::MediaOverlay::render(hdc, vp[2], vp[3]);
+  });
+
+  runSubsystem("BedwarsOverlay::render", [hdc]() {
+    GLint vp[4];
+    glGetIntegerv(GL_VIEWPORT, vp);
+    Render::BedwarsOverlay::render(hdc, vp[2], vp[3]);
+  });
+
   runSubsystem("ClickGUI::render", [hdc]() {
     if (Render::ClickGUI::isOpen()) {
       FocusFix::setIngameFocus(false);
@@ -814,10 +911,13 @@ BOOL WINAPI hookedSwapBuffers(HDC hdc) {
   FlagReleaser _releaser(&s_inHook);
 
   HookGuard guard;
-  Watchdog::tickFrame();
+  // Check the unload flag before touching any subsystem. Once teardown has
+  // begun this stub may stay installed indefinitely (see the cross-mod note
+  // above), so from here on it must be a pure pass-through and nothing else.
   if (g_unloading) {
     return originalSwapBuffers(hdc);
   }
+  Watchdog::tickFrame();
 
   SafeGuard::installSehTranslator();
 
@@ -900,13 +1000,16 @@ bool RenderHook::install() {
     return false;
   }
   writeDebugLog("wglSwapBuffers hooked successfully!");
-  
+  snapshotPrologue(g_swapTarget, (LPVOID)pSwapBuffers);
+
   HMODULE hUser32 = GetModuleHandleA("user32.dll");
   if (hUser32) {
     FARPROC pSetCursorPos = GetProcAddress(hUser32, "SetCursorPos");
     if (pSetCursorPos) {
       if (pMH_CreateHook(pSetCursorPos, &hookedSetCursorPos, reinterpret_cast<LPVOID*>(&originalSetCursorPos)) == MH_OK) {
-        pMH_EnableHook(pSetCursorPos);
+        if (pMH_EnableHook(pSetCursorPos) == MH_OK) {
+          snapshotPrologue(g_cursorTarget, (LPVOID)pSetCursorPos);
+        }
         writeDebugLog("SetCursorPos hooked successfully!");
       }
     }
@@ -937,8 +1040,22 @@ void RenderHook::uninstall() {
     g_unloading = true;
 
     if (g_gameHwnd && IsWindow(g_gameHwnd) && originalWndProc) {
-      SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC, (LONG_PTR)originalWndProc);
-      writeDebugLog("WndProc restored");
+      if (GetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC) ==
+          (LONG_PTR)hookedWndProc) {
+        SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC, (LONG_PTR)originalWndProc);
+        writeDebugLog("WndProc restored");
+      } else {
+        // Somebody subclassed on top of us. Their chain runs through
+        // hookedWndProc, which lives in this module, so we can neither
+        // unhook nor unload without breaking them. Stay resident and let
+        // hookedWndProc keep forwarding (g_unloading makes it a
+        // pass-through).
+        g_mustStayLoaded.store(true);
+        Logger::info("RenderHook: another module subclassed the window after "
+                     "us -- leaving the WndProc chain intact so it keeps "
+                     "working.");
+        writeDebugLog("WndProc NOT restored (foreign subclass on top)");
+      }
     }
 
     for (int i = 0; i < 3; ++i) {
@@ -963,9 +1080,27 @@ void RenderHook::uninstall() {
           "WARNING: hook threads did NOT drain in 30s — skipping MinHook "
           "free to avoid a freed-trampoline crash. The DLL will leak; "
           "process exit will clean it up.");
+      g_mustStayLoaded.store(true);
     }
 
-    if (drained) {
+    // MinHook's disable path rewrites the ORIGINAL prologue bytes back over
+    // the function. If a later injection put its own jump there, that write
+    // erases their hook, and MH_Uninitialize then frees the trampoline they
+    // are still chained to. Only unhook while we are demonstrably still the
+    // outermost hook on every function we touched.
+    const bool swapStillOurs = prologueStillOurs(g_swapTarget);
+    const bool cursorStillOurs = prologueStillOurs(g_cursorTarget);
+    const bool hooksStillOurs = swapStillOurs && cursorStillOurs;
+    if (!hooksStillOurs) {
+      g_mustStayLoaded.store(true);
+      Logger::info("RenderHook: another module hooked %s after us -- leaving "
+                   "MinHook installed so its hook and trampoline stay valid.",
+                   swapStillOurs ? "SetCursorPos" : "wglSwapBuffers");
+      writeDebugLog("MinHook NOT removed (foreign hook stacked on top)");
+    }
+
+    const bool safeToRemoveHooks = drained && hooksStillOurs;
+    if (safeToRemoveHooks) {
       if (pMH_DisableHook) {
         pMH_DisableHook(MH_ALL_HOOKS);
         writeDebugLog("MinHook disabled");
@@ -978,7 +1113,7 @@ void RenderHook::uninstall() {
 
     g_hookInstalled = false;
 
-    if (drained && g_MinHookModule) {
+    if (safeToRemoveHooks && g_MinHookModule) {
       FreeLibrary(g_MinHookModule);
       g_MinHookModule = nullptr;
       writeDebugLog("MinHook.x64.dll unloaded");
@@ -987,7 +1122,14 @@ void RenderHook::uninstall() {
 
   StatsOverlay::shutdown();
   Render::TechOverlay::shutdown();
+  Render::BedwarsOverlay::shutdown();
+  Render::MediaOverlay::shutdown();
+  OVson::Media::shutdown();
 }
+
+bool RenderHook::mustStayLoaded() { return g_mustStayLoaded.load(); }
+
+void *RenderHook::gameWindowHandle() { return (void *)g_gameHwnd; }
 
 void RenderHook::poll() {
   if (g_suppressVanillaTab.load()) suppressVanillaTab();

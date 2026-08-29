@@ -1,71 +1,198 @@
 #include "PacketHook.h"
+
+#include <set>
+#include <string>
+#include "BlockHitSound.h"
 #include "PacketFilterHook_bytes.h"
 #include "../Java.h"
 #include "../Utils/Logger.h"
 #include "../Chat/ChatHook.h"
 #include "../Plugins/PluginLoader.h"
 
+#include <atomic>
+#include <string>
+
+namespace {
+
+std::atomic<bool> g_acceptNativeCallbacks{false};
+std::atomic<unsigned int> g_activeNativeCallbacks{0};
+
+class NativeCallbackGuard {
+public:
+    NativeCallbackGuard() {
+        if (!g_acceptNativeCallbacks.load(std::memory_order_acquire)) return;
+        g_activeNativeCallbacks.fetch_add(1, std::memory_order_acq_rel);
+        counted_ = true;
+        if (g_acceptNativeCallbacks.load(std::memory_order_acquire)) {
+            active_ = true;
+            return;
+        }
+        release();
+    }
+
+    ~NativeCallbackGuard() { release(); }
+    explicit operator bool() const { return active_; }
+
+private:
+    void release() {
+        if (!active_ && !counted_) return;
+        active_ = false;
+        counted_ = false;
+        g_activeNativeCallbacks.fetch_sub(1, std::memory_order_acq_rel);
+        g_activeNativeCallbacks.notify_all();
+    }
+
+    bool active_ = false;
+    bool counted_ = false;
+};
+
+void disableAndDrainNativeCallbacks() {
+    g_acceptNativeCallbacks.store(false, std::memory_order_release);
+    unsigned int active = g_activeNativeCallbacks.load(std::memory_order_acquire);
+    while (active != 0) {
+        g_activeNativeCallbacks.wait(active, std::memory_order_acquire);
+        active = g_activeNativeCallbacks.load(std::memory_order_acquire);
+    }
+}
+
+jstring unchangedChatResult(JNIEnv *env, jstring rawJson) noexcept {
+    return rawJson ? static_cast<jstring>(env->NewLocalRef(rawJson))
+                   : env->NewStringUTF("");
+}
+
+void copyJavaString(JNIEnv *env, jstring source, std::string &destination) {
+    if (!source) return;
+    const char *characters = env->GetStringUTFChars(source, nullptr);
+    if (!characters) return;
+    try {
+        destination.assign(characters);
+    } catch (...) {
+        env->ReleaseStringUTFChars(source, characters);
+        throw;
+    }
+    env->ReleaseStringUTFChars(source, characters);
+}
+
+} // namespace
+
 extern "C" JNIEXPORT void JNICALL Java_net_ovson_api_hook_PacketFilterHook_logDebug
-  (JNIEnv *env, jclass cls, jstring jmsg)
+  (JNIEnv *env, jclass, jstring jmsg)
 {
+    NativeCallbackGuard callback;
+    if (!callback) return;
     if (jmsg) {
         const char* msg = env->GetStringUTFChars(jmsg, nullptr);
         if (msg) {
-            Logger::info("%s", msg);
+            try {
+                Logger::info("%s", msg);
+            } catch (...) {
+            }
             env->ReleaseStringUTFChars(jmsg, msg);
         }
     }
 }
 
 extern "C" JNIEXPORT jstring JNICALL Java_net_ovson_api_hook_PacketFilterHook_processIncomingChat
-  (JNIEnv *env, jclass cls, jstring jUnformatted, jstring jRawJson)
+  (JNIEnv *env, jclass, jstring jUnformatted, jstring jRawJson)
 {
-    std::string unformatted = "";
-    std::string rawJson = "";
-    if (jUnformatted) {
-        const char* u = env->GetStringUTFChars(jUnformatted, nullptr);
-        if (u) { unformatted = u; env->ReleaseStringUTFChars(jUnformatted, u); }
+    NativeCallbackGuard callback;
+    if (!callback) {
+        return unchangedChatResult(env, jRawJson);
     }
-    if (jRawJson) {
-        const char* r = env->GetStringUTFChars(jRawJson, nullptr);
-        if (r) { rawJson = r; env->ReleaseStringUTFChars(jRawJson, r); }
+    try {
+        std::string unformatted;
+        std::string rawJson;
+        copyJavaString(env, jUnformatted, unformatted);
+        copyJavaString(env, jRawJson, rawJson);
+        const std::string result =
+            ChatHook::processIncomingChat(unformatted, rawJson);
+        return env->NewStringUTF(result.c_str());
+    } catch (...) {
+        return unchangedChatResult(env, jRawJson);
     }
-
-    std::string res = ChatHook::processIncomingChat(unformatted, rawJson);
-    return env->NewStringUTF(res.c_str());
 }
 
-#include <fstream>
-#include <string>
-
-static void logToFile(const std::string& msg) {
-    std::ofstream out("C:/Users/HPC1/Desktop/ovson_packet.log", std::ios::app);
-    if (out.is_open()) {
-        out << msg << std::endl;
-        out.close();
+extern "C" JNIEXPORT void JNICALL
+Java_net_ovson_api_hook_PacketFilterHook_onServerPacket(
+    JNIEnv *, jclass, jint kind, jint entityId, jint data1, jint data2,
+    jint data3, jfloat value1, jfloat value2, jfloat value3) {
+    NativeCallbackGuard callback;
+    if (!callback) return;
+    // This callback runs on Netty's inbound channel thread. Keep it bounded and
+    // JNI-free: the render thread performs all game-state inspection later.
+    try {
+        BlockHitSound::enqueueServerSignal(
+            static_cast<BlockHitSound::ServerSignalKind>(kind), entityId,
+            data1, data2, data3, value1, value2, value3, GetTickCount64());
+    } catch (...) {
+        // Never unwind through a JNI/native boundary.
     }
 }
 
 static bool s_injected = false;
 static jclass s_hookCls = nullptr;
 static jobject s_hookObj = nullptr;
+// The Netty channel we actually installed the handler on. Hypixel moves you
+// between backends and the client builds a NEW NetworkManager and a NEW
+// channel when it does; the handler stays behind on the dead one. Keeping a
+// global ref lets us notice that and re-install instead of going quiet.
+static jobject s_hookedChannel = nullptr;
+static ULONGLONG s_nextAttempt = 0;
+static bool s_addFailureLogged = false;
+
+// Discovery walks a chain of client-specific lookups and every failure along
+// it is a silent return, which is fine while it eventually succeeds and
+// useless when it never does: the feature is simply absent with nothing in
+// the log to say why. Each stage reports itself once, so a client that
+// remaps one link in the chain names that link instead of leaving the whole
+// feature looking dead.
+static void reportStall(const char *stage) {
+    static std::set<std::string> reported;
+    if (reported.insert(stage).second)
+        Logger::error("[PacketHook] discovery stalled at: %s", stage);
+}
 
 void PacketHook::update() {
     JNIEnv* env = lc->getEnv();
     if (!env) return;
 
-    jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
-    if (!mcCls) return;
+    // Run the correlator every render update, BEFORE the s_injected early-out
+    // below. Packet-hook discovery is a one-shot job that stops once the hook
+    // is installed, but the correlator has to keep ticking for the entire
+    // session: it is what turns the queued server signals into sounds, and the
+    // signals only start arriving after injection succeeds. Returning early
+    // here would silence block-hit sound permanently the moment the hook went
+    // in. Discovery itself is still throttled further down; the correlator is
+    // deliberately not, because a 2-second tick would lose the short
+    // swing/hurt/health ordering windows.
+    BlockHitSound::update(env);
 
-    jmethodID getMcMethod = lc->GetStaticMethodID(mcCls, "getMinecraft", "()Lnet/minecraft/client/Minecraft;", "func_71410_x", "A");
-    if (!getMcMethod) return;
+    // Being injected is not a terminal state. It used to be -- this was a
+    // bare `if (s_injected) return;` -- and that is why block-hit sound went
+    // silent the moment the connection was replaced: the handler sat on a
+    // channel nobody was reading from any more, every counter stayed at
+    // zero, and nothing in the log said why. Keep looking, just cheaply:
+    // once a second costs far less than a frame and is far more often than
+    // a player changes servers.
+    if (s_injected) {
+        static ULONGLONG nextChannelCheck = 0;
+        const ULONGLONG checkNow = GetTickCount64();
+        if (checkNow < nextChannelCheck) return;
+        nextChannelCheck = checkNow + 1000;
+    }
+
+    jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
+    if (!mcCls) { reportStall("Minecraft class"); return; }
+
+    jmethodID getMcMethod = lc->GetStaticMethodID(mcCls, "getMinecraft", "()Lnet/minecraft/client/Minecraft;", "func_71410_x", "A", "()Lave;");
+    if (!getMcMethod) { reportStall("Minecraft.getMinecraft()"); return; }
 
     jobject mcObj = env->CallStaticObjectMethod(mcCls, getMcMethod);
-    if (!mcObj) return;
+    if (!mcObj) { reportStall("Minecraft instance"); return; }
 
     static ULONGLONG lastAttempt = 0;
     ULONGLONG now = GetTickCount64();
-    if (now - lastAttempt < 2000) {
+    if (now < s_nextAttempt || now - lastAttempt < 2000) {
         env->DeleteLocalRef(mcObj);
         return;
     }
@@ -78,7 +205,11 @@ void PacketHook::update() {
     static jfieldID channelField = nullptr;
 
     if (!theWorldField) {
-        theWorldField = lc->GetFieldID(mcCls, "theWorld", "Lnet/minecraft/client/multiplayer/WorldClient;", "func_71441_e", "f");
+        theWorldField = lc->GetFieldID(mcCls, "theWorld", "Lnet/minecraft/client/multiplayer/WorldClient;", "field_71441_e", "f", "Lbdb;");
+        if (!theWorldField)
+            theWorldField = lc->FindFieldBySignature(mcCls, "Lbdb;");
+        if (!theWorldField)
+            reportStall("Minecraft.theWorld field");
     }
     jobject theWorld = theWorldField ? env->GetObjectField(mcObj, theWorldField) : nullptr;
     if (env->ExceptionCheck()) env->ExceptionClear();
@@ -102,12 +233,14 @@ void PacketHook::update() {
     }
     
     if (!getNetHandler) {
+        reportStall("Minecraft.getNetHandler()");
         env->DeleteLocalRef(mcObj);
         return;
     }
 
     jobject nh = env->CallObjectMethod(mcObj, getNetHandler);
     if (!nh) {
+        reportStall("NetHandlerPlayClient instance");
         env->DeleteLocalRef(mcObj);
         return;
     }
@@ -129,6 +262,100 @@ void PacketHook::update() {
                 nmField = lc->FindFieldBySignature(nhCls, "Lej;");
             }
         }
+
+        // Everything above searches for NetworkManager by name -- either the
+        // deobfuscated one or the single obfuscated name this Minecraft
+        // version happens to use. Both are guesses about how a particular
+        // client shipped the jar, and a client that remaps it to anything
+        // else leaves the whole packet hook dead with no way to tell why.
+        //
+        // So identify it by what it demonstrably IS instead: the object held
+        // by NetHandlerPlayClient that owns an io.netty.channel.Channel.
+        // Netty is a third-party library, so its type name survives any
+        // Minecraft remapping, which makes it the one stable anchor in this
+        // chain. That is also exactly the field the code below goes on to
+        // read, so anything this finds is by definition the right object.
+        if (!getNetworkManager && !nmField && lc->jvmti) {
+            // Walk the hierarchy: GetClassFields only reports fields declared
+            // by the class itself, and a client that subclasses
+            // NetHandlerPlayClient would otherwise hide the one field we want.
+            jclass walk = nhCls;
+            bool ownsWalkRef = false;
+            while (walk && !nmField) {
+                jint fieldCount = 0;
+                jfieldID *fields = nullptr;
+                if (lc->jvmti->GetClassFields(walk, &fieldCount, &fields) ==
+                    JVMTI_ERROR_NONE) {
+                    for (jint i = 0; i < fieldCount && !nmField; ++i) {
+                        char *fieldName = nullptr;
+                        char *fieldSig = nullptr;
+                        if (lc->jvmti->GetFieldName(walk, fields[i], &fieldName,
+                                                    &fieldSig, nullptr) !=
+                            JVMTI_ERROR_NONE) {
+                            continue;
+                        }
+                        // GetClassFields returns statics too, and reading one
+                        // with GetObjectField (instead of
+                        // GetStaticObjectField) is undefined -- on HotSpot it
+                        // dereferences garbage and takes the whole poll down
+                        // with an access violation. NetworkManager is an
+                        // instance field, so skip statics outright.
+                        jint modifiers = 0;
+                        constexpr jint kAccStatic = 0x0008;
+                        const bool isStatic =
+                            lc->jvmti->GetFieldModifiers(walk, fields[i],
+                                                         &modifiers) !=
+                                JVMTI_ERROR_NONE ||
+                            (modifiers & kAccStatic) != 0;
+
+                        // Object-typed fields only; a primitive or an array
+                        // cannot own a Channel.
+                        if (!isStatic && fieldSig && fieldSig[0] == 'L') {
+                            jobject candidate =
+                                env->GetObjectField(nh, fields[i]);
+                            if (env->ExceptionCheck()) env->ExceptionClear();
+                            if (candidate) {
+                                jclass candidateCls =
+                                    env->GetObjectClass(candidate);
+                                if (candidateCls &&
+                                    lc->FindFieldBySignature(
+                                        candidateCls,
+                                        "Lio/netty/channel/Channel;")) {
+                                    nmField = fields[i];
+                                    Logger::info(
+                                        "[PacketHook] NetworkManager found "
+                                        "structurally: field '%s' of type %s",
+                                        fieldName ? fieldName : "?",
+                                        fieldSig ? fieldSig : "?");
+                                }
+                                if (candidateCls)
+                                    env->DeleteLocalRef(candidateCls);
+                                env->DeleteLocalRef(candidate);
+                            }
+                            if (env->ExceptionCheck()) env->ExceptionClear();
+                        }
+                        if (fieldName)
+                            lc->jvmti->Deallocate((unsigned char *)fieldName);
+                        if (fieldSig)
+                            lc->jvmti->Deallocate((unsigned char *)fieldSig);
+                    }
+                    if (fields)
+                        lc->jvmti->Deallocate((unsigned char *)fields);
+                }
+                if (nmField)
+                    break;
+                jclass parent = env->GetSuperclass(walk);
+                if (env->ExceptionCheck()) env->ExceptionClear();
+                if (ownsWalkRef)
+                    env->DeleteLocalRef(walk);
+                walk = parent;
+                ownsWalkRef = true;
+            }
+            if (ownsWalkRef && walk)
+                env->DeleteLocalRef(walk);
+            if (!nmField)
+                reportStall("NetworkManager field (structural scan)");
+        }
     }
     
     if (getNetworkManager) {
@@ -138,6 +365,7 @@ void PacketHook::update() {
     }
 
     if (!networkManager) {
+        reportStall("NetworkManager on NetHandlerPlayClient");
         env->DeleteLocalRef(nhCls);
         env->DeleteLocalRef(nh);
         env->DeleteLocalRef(mcObj);
@@ -150,6 +378,7 @@ void PacketHook::update() {
     }
     
     if (!channelField) {
+        reportStall("io.netty.channel.Channel field on NetworkManager");
         env->DeleteLocalRef(nmCls);
         env->DeleteLocalRef(nhCls);
         env->DeleteLocalRef(networkManager);
@@ -166,6 +395,32 @@ void PacketHook::update() {
         env->DeleteLocalRef(nh);
         env->DeleteLocalRef(mcObj);
         return;
+    }
+
+    // Still the same connection we hooked? Then there is nothing to do. A
+    // different channel object means the old one is gone and our handler
+    // went with it.
+    if (s_injected) {
+        const bool sameChannel =
+            s_hookedChannel && env->IsSameObject(s_hookedChannel, channel);
+        if (sameChannel) {
+            env->DeleteLocalRef(channel);
+            env->DeleteLocalRef(nmCls);
+            env->DeleteLocalRef(nhCls);
+            env->DeleteLocalRef(networkManager);
+            env->DeleteLocalRef(nh);
+            env->DeleteLocalRef(mcObj);
+            return;
+        }
+        Logger::info("[PacketHook] Connection replaced; re-injecting "
+                     "PacketFilterHook into the new Netty pipeline");
+        if (s_hookedChannel) {
+            env->DeleteGlobalRef(s_hookedChannel);
+            s_hookedChannel = nullptr;
+        }
+        s_injected = false;
+        s_addFailureLogged = false;
+        s_nextAttempt = 0;
     }
 
     if (!s_hookCls) {
@@ -236,12 +491,32 @@ void PacketHook::update() {
             s_hookCls = (jclass)env->NewGlobalRef(hookClsLocal);
             env->DeleteLocalRef(hookClsLocal);
 
-            JNINativeMethod methods[] = {
-                {(char*)"processIncomingChat", (char*)"(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", (void*)&Java_net_ovson_api_hook_PacketFilterHook_processIncomingChat},
-                {(char*)"logDebug", (char*)"(Ljava/lang/String;)V", (void*)&Java_net_ovson_api_hook_PacketFilterHook_logDebug}
-            };
-            env->RegisterNatives(s_hookCls, methods, 2);
-            if (env->ExceptionCheck()) env->ExceptionClear();
+            if (!s_hookCls) {
+                if (env->ExceptionCheck()) env->ExceptionClear();
+                Logger::error("[PacketHook] Failed to retain PacketFilterHook class");
+                BlockHitSound::setCallbackAcceptance(false);
+                g_acceptNativeCallbacks.store(false, std::memory_order_release);
+            } else {
+                JNINativeMethod methods[] = {
+                    {(char*)"processIncomingChat", (char*)"(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", (void*)&Java_net_ovson_api_hook_PacketFilterHook_processIncomingChat},
+                    {(char*)"logDebug", (char*)"(Ljava/lang/String;)V", (void*)&Java_net_ovson_api_hook_PacketFilterHook_logDebug},
+                    {(char*)"onServerPacket", (char*)"(IIIIIFFF)V", (void*)&Java_net_ovson_api_hook_PacketFilterHook_onServerPacket}
+                };
+                const jint nativeResult = env->RegisterNatives(s_hookCls, methods, 3);
+                if (env->ExceptionCheck()) env->ExceptionClear();
+                if (nativeResult != JNI_OK) {
+                    Logger::error("[PacketHook] Failed to register packet natives (%d); "
+                                  "restart Minecraft if an older hook class is already loaded",
+                                  nativeResult);
+                    BlockHitSound::setCallbackAcceptance(false);
+                    g_acceptNativeCallbacks.store(false, std::memory_order_release);
+                    env->DeleteGlobalRef(s_hookCls);
+                    s_hookCls = nullptr;
+                } else {
+                    g_acceptNativeCallbacks.store(true, std::memory_order_release);
+                    BlockHitSound::setCallbackAcceptance(true);
+                }
+            }
         } else {
             Logger::error("[PacketHook] Failed to define or find PacketFilterHook class");
         }
@@ -252,12 +527,15 @@ void PacketHook::update() {
     if (s_hookCls) {
         if (!s_hookObj) {
             jmethodID init = env->GetMethodID(s_hookCls, "<init>", "()V");
-            jobject hookObjLocal = env->NewObject(s_hookCls, init);
-            s_hookObj = env->NewGlobalRef(hookObjLocal);
-            env->DeleteLocalRef(hookObjLocal);
+            jobject hookObjLocal = init ? env->NewObject(s_hookCls, init) : nullptr;
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            if (hookObjLocal) {
+                s_hookObj = env->NewGlobalRef(hookObjLocal);
+                env->DeleteLocalRef(hookObjLocal);
+            }
         }
 
-        jmethodID pipelineMethod = env->GetMethodID(env->GetObjectClass(channel), "pipeline", "()Lio/netty/channel/ChannelPipeline;");
+        jmethodID pipelineMethod = s_hookObj ? env->GetMethodID(env->GetObjectClass(channel), "pipeline", "()Lio/netty/channel/ChannelPipeline;") : nullptr;
         if (pipelineMethod) {
             jobject pipeline = env->CallObjectMethod(channel, pipelineMethod);
             if (pipeline) {
@@ -273,26 +551,36 @@ void PacketHook::update() {
                     
                     if (existing) {
                         s_injected = true;
+                        if (!s_hookedChannel)
+                            s_hookedChannel = env->NewGlobalRef(channel);
                         env->DeleteLocalRef(existing);
                     } else {
                         env->CallObjectMethod(pipeline, addBefore, baseName, hookName, s_hookObj);
                         
                         if (env->ExceptionCheck()) {
-                            env->ExceptionClear(); 
-                            logToFile("[PacketHook] Failed to inject. Exception occurred during addBefore.");
-                            Logger::error("[PacketHook] Failed to inject. Exception occurred during addBefore.");
-                            s_injected = true;
+                            env->ExceptionClear();
+                            if (!s_addFailureLogged)
+                                Logger::error("[PacketHook] addBefore failed; retrying in 30 seconds");
+                            s_addFailureLogged = true;
+                            s_nextAttempt = now + 30000;
+                            s_injected = false;
                         } else {
-                            logToFile("[PacketHook] Successfully injected PacketFilterHook into Netty pipeline!");
                             Logger::info("[PacketHook] Successfully injected PacketFilterHook into Netty pipeline!");
                             s_injected = true;
+                            if (s_hookedChannel)
+                                env->DeleteGlobalRef(s_hookedChannel);
+                            s_hookedChannel = env->NewGlobalRef(channel);
+                            s_addFailureLogged = false;
+                            s_nextAttempt = 0;
                         }
                     }
                     env->DeleteLocalRef(baseName);
                     env->DeleteLocalRef(hookName);
                 } else {
-                    logToFile("[PacketHook] Could not find addBefore or get method on ChannelPipeline.");
-                    Logger::error("[PacketHook] Could not find addBefore or get method on ChannelPipeline.");
+                    if (!s_addFailureLogged)
+                        Logger::error("[PacketHook] Could not resolve pipeline methods; retrying in 30 seconds");
+                    s_addFailureLogged = true;
+                    s_nextAttempt = now + 30000;
                 }
                 env->DeleteLocalRef(pipeline);
             }
@@ -300,31 +588,79 @@ void PacketHook::update() {
     }
 
     env->DeleteLocalRef(channel);
+    env->DeleteLocalRef(nhCls);
     env->DeleteLocalRef(networkManager);
     env->DeleteLocalRef(nh);
     env->DeleteLocalRef(mcObj);
 }
 
 void PacketHook::uninstall() {
-    if (!s_injected || !lc || !lc->getEnv()) return;
-    
-    JNIEnv* env = lc->getEnv();
+    g_acceptNativeCallbacks.store(false, std::memory_order_release);
+    BlockHitSound::setCallbackAcceptance(false);
+    JNIEnv* env = (lc ? lc->getEnv() : nullptr);
+    BlockHitSound::shutdown(env);
+    if (!lc || !lc->getEnv()) {
+        disableAndDrainNativeCallbacks();
+        return;
+    }
     if (!env) return;
 
-    jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
-    if (!mcCls) return;
+    const auto finalizeNativeState = [env]() {
+        if (s_hookCls) {
+            env->UnregisterNatives(s_hookCls);
+            if (env->ExceptionCheck()) env->ExceptionClear();
+        }
+        disableAndDrainNativeCallbacks();
+        if (s_hookObj) {
+            env->DeleteGlobalRef(s_hookObj);
+            s_hookObj = nullptr;
+        }
+        if (s_hookCls) {
+            env->DeleteGlobalRef(s_hookCls);
+            s_hookCls = nullptr;
+        }
+        if (s_hookedChannel) {
+            env->DeleteGlobalRef(s_hookedChannel);
+            s_hookedChannel = nullptr;
+        }
+        s_injected = false;
+    };
 
-    jmethodID getMc = lc->GetStaticMethodID(mcCls, "getMinecraft", "()Lnet/minecraft/client/Minecraft;", "func_71410_x", "A");
-    if (!getMc) { env->DeleteLocalRef(mcCls); return; }
+    jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
+    if (!mcCls) {
+        finalizeNativeState();
+        return;
+    }
+
+    jmethodID getMc = lc->GetStaticMethodID(mcCls, "getMinecraft", "()Lnet/minecraft/client/Minecraft;", "func_71410_x", "A", "()Lave;");
+    if (!getMc) {
+        env->DeleteLocalRef(mcCls);
+        finalizeNativeState();
+        return;
+    }
 
     jobject mcObj = env->CallStaticObjectMethod(mcCls, getMc);
-    if (!mcObj) { env->DeleteLocalRef(mcCls); return; }
+    if (!mcObj) {
+        env->DeleteLocalRef(mcCls);
+        finalizeNativeState();
+        return;
+    }
 
-    jmethodID getNet = lc->GetMethodID(mcCls, "getNetHandler", "()Lnet/minecraft/client/network/NetHandlerPlayClient;", "func_147114_u", "u");
-    if (!getNet) { env->DeleteLocalRef(mcObj); env->DeleteLocalRef(mcCls); return; }
+    jmethodID getNet = lc->GetMethodID(mcCls, "getNetHandler", "()Lnet/minecraft/client/network/NetHandlerPlayClient;", "func_147114_u", "ay", "()Lbcy;");
+    if (!getNet) {
+        env->DeleteLocalRef(mcObj);
+        env->DeleteLocalRef(mcCls);
+        finalizeNativeState();
+        return;
+    }
 
     jobject nh = env->CallObjectMethod(mcObj, getNet);
-    if (!nh) { env->DeleteLocalRef(mcObj); env->DeleteLocalRef(mcCls); return; }
+    if (!nh) {
+        env->DeleteLocalRef(mcObj);
+        env->DeleteLocalRef(mcCls);
+        finalizeNativeState();
+        return;
+    }
 
     jobject networkManager = nullptr;
     jclass nhCls = env->GetObjectClass(nh);
@@ -368,8 +704,11 @@ void PacketHook::uninstall() {
     env->DeleteLocalRef(mcObj);
     env->DeleteLocalRef(mcCls);
 
-    if (s_hookObj) { env->DeleteGlobalRef(s_hookObj); s_hookObj = nullptr; }
-    if (s_hookCls) { env->DeleteGlobalRef(s_hookCls); s_hookCls = nullptr; }
-    s_injected = false;
+    // finalizeNativeState() also unregisters the natives and drains any
+    // in-flight native callbacks before dropping the global refs, which
+    // the plain "just delete the refs" version here used to skip.
+    finalizeNativeState();
+    s_addFailureLogged = false;
+    s_nextAttempt = 0;
 }
 

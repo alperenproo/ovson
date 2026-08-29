@@ -175,10 +175,17 @@ void renderTags(TabCtx &ctx) {
   g_guiFont.drawString(cx, cy, "Muted Tag Chat Alerts", applyAlpha(0xFFFFFFFF, alpha));
   cy += 35;
 
-  bool hMuteCard = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 85);
+  // Three rows now, so the card and the click bands below grow with it. The
+  // bands are split at fixed offsets rather than by row index because the
+  // whole card is one hover target.
+  const float muteCardH = 127.0f;
+  bool hMuteCard = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, muteCardH);
   glDisable(GL_TEXTURE_2D);
-  drawThemeCard(mainX + 190, cy - 10, g_w - 210, 85, hMuteCard, alpha);
+  drawThemeCard(mainX + 190, cy - 10, g_w - 210, muteCardH, hMuteCard, alpha);
   glEnable(GL_TEXTURE_2D);
+  const bool bandMaster = hMuteCard && my < cy + 30;
+  const bool bandSelf = hMuteCard && my >= cy + 30 && my < cy + 72;
+  const bool bandTeam = hMuteCard && my >= cy + 72;
 
   bool muteEnabled = Config::isMuteTagAlertsEnabled();
   g_guiFont.drawString(cx, cy, "Mute Tag Warnings", applyAlpha(0xFFFFFFFF, alpha));
@@ -186,26 +193,47 @@ void renderTags(TabCtx &ctx) {
                        applyAlpha(0xFFA0A0A5, alpha), 0.45f);
 
   glDisable(GL_TEXTURE_2D);
-  drawSwitch(13, mainX + g_w - 65, cy, muteEnabled, hMuteCard && (my < cy + 30), alpha);
+  drawSwitch(13, mainX + g_w - 65, cy, muteEnabled, bandMaster, alpha);
   glEnable(GL_TEXTURE_2D);
 
-  if (clickEvent && hMuteCard && (my < cy + 30)) {
+  if (clickEvent && bandMaster) {
     Config::setMuteTagAlertsEnabled(!muteEnabled);
   }
 
   bool muteSelfEnabled = Config::isMuteSelfTagAlertsEnabled();
-  float muteSelfAlpha = alpha * (muteEnabled ? 1.0f : 0.4f);
+  float muteChildAlpha = alpha * (muteEnabled ? 1.0f : 0.4f);
 
-  g_guiFont.drawString(cx + 10, cy + 45, "Mute Self Warnings", applyAlpha(0xFFFFFFFF, muteSelfAlpha), 0.42f);
+  g_guiFont.drawString(cx + 10, cy + 40, "Mute Self Warnings",
+                       applyAlpha(0xFFFFFFFF, muteChildAlpha), 0.42f);
+  g_guiFont.drawString(cx + 10, cy + 55, "Never warn about your own tags",
+                       applyAlpha(0xFFA0A0A5, muteChildAlpha), 0.36f);
 
   glDisable(GL_TEXTURE_2D);
-  drawSwitch(144, mainX + g_w - 65, cy + 42, muteSelfEnabled, hMuteCard && (my >= cy + 30) && muteEnabled, muteSelfAlpha);
+  drawSwitch(144, mainX + g_w - 65, cy + 42, muteSelfEnabled,
+             bandSelf && muteEnabled, muteChildAlpha);
   glEnable(GL_TEXTURE_2D);
 
-  if (clickEvent && hMuteCard && (my >= cy + 30) && muteEnabled) {
+  if (clickEvent && bandSelf && muteEnabled) {
     Config::setMuteSelfTagAlertsEnabled(!muteSelfEnabled);
   }
-  cy += 90;
+
+  bool muteTeamEnabled = Config::isMuteTeamTagAlertsEnabled();
+
+  g_guiFont.drawString(cx + 10, cy + 82, "Mute Teammate Warnings",
+                       applyAlpha(0xFFFFFFFF, muteChildAlpha), 0.42f);
+  g_guiFont.drawString(cx + 10, cy + 97,
+                       "Never warn about anyone on your own team",
+                       applyAlpha(0xFFA0A0A5, muteChildAlpha), 0.36f);
+
+  glDisable(GL_TEXTURE_2D);
+  drawSwitch(145, mainX + g_w - 65, cy + 84, muteTeamEnabled,
+             bandTeam && muteEnabled, muteChildAlpha);
+  glEnable(GL_TEXTURE_2D);
+
+  if (clickEvent && bandTeam && muteEnabled) {
+    Config::setMuteTeamTagAlertsEnabled(!muteTeamEnabled);
+  }
+  cy += 132;
 
   float activeMuteAlpha = alpha * (muteEnabled ? 1.0f : 0.4f);
   g_guiFont.drawString(cx, cy, "Add Player to Mute List", applyAlpha(0xFFFFFFFF, activeMuteAlpha));

@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <winhttp.h>
 
@@ -27,6 +28,16 @@ std::atomic<int>     s_downloadPct{0};
 std::mutex           s_infoMutex;
 Info                 s_info;
 std::string          s_lastError;
+std::atomic<bool>     s_stopping{false};
+std::mutex            s_workerMutex;
+std::vector<std::thread> s_workers;
+
+template <typename Fn> void startWorker(Fn &&fn) {
+  if (s_stopping.load()) return;
+  std::lock_guard<std::mutex> lock(s_workerMutex);
+  if (!s_stopping.load())
+    s_workers.emplace_back(std::forward<Fn>(fn));
+}
 
 void setError(const std::string &msg) {
   std::lock_guard<std::mutex> lk(s_infoMutex);
@@ -42,6 +53,7 @@ std::string httpGet(const std::wstring &host, const std::wstring &path,
       WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
       WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
   if (!hSession) { setError("WinHttpOpen failed"); return out; }
+  WinHttpSetTimeouts(hSession, 3000, 3000, 3000, 3000);
 
   HINTERNET hConnect = WinHttpConnect(
       hSession, host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
@@ -88,6 +100,7 @@ std::string httpGet(const std::wstring &host, const std::wstring &path,
 
   DWORD bytesAvail = 0;
   do {
+    if (s_stopping.load()) break;
     bytesAvail = 0;
     if (!WinHttpQueryDataAvailable(hRequest, &bytesAvail)) break;
     if (bytesAvail == 0) break;
@@ -114,6 +127,7 @@ bool httpDownloadToFile(const std::wstring &host,
       WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
       WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
   if (!hSession) { setError("WinHttpOpen failed"); return false; }
+  WinHttpSetTimeouts(hSession, 3000, 3000, 3000, 3000);
 
   HINTERNET hConnect = WinHttpConnect(
       hSession, host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
@@ -164,6 +178,7 @@ bool httpDownloadToFile(const std::wstring &host,
   DWORD got = 0;
   std::vector<char> buf(64 * 1024);
   for (;;) {
+    if (s_stopping.load()) break;
     DWORD avail = 0;
     if (!WinHttpQueryDataAvailable(hRequest, &avail)) break;
     if (avail == 0) break;
@@ -179,11 +194,15 @@ bool httpDownloadToFile(const std::wstring &host,
     }
   }
   out.close();
-  pctSink.store(100);
 
   WinHttpCloseHandle(hRequest);
   WinHttpCloseHandle(hConnect);
   WinHttpCloseHandle(hSession);
+  if (s_stopping.load()) {
+    DeleteFileW(outFile.c_str());
+    return false;
+  }
+  pctSink.store(100);
   return true;
 }
 
@@ -301,10 +320,11 @@ const std::string &lastError() {
 }
 
 void startCheck() {
+  if (s_stopping.load()) return;
   State expected = State::Idle;
   if (!s_state.compare_exchange_strong(expected, State::Checking))
     return; // already running
-  std::thread([]() {
+  startWorker([]() {
     std::wstring host = L"api.github.com";
     std::wstring path = L"/repos/";
     for (const char *p = kRepoOwner; *p; ++p) path += (wchar_t)*p;
@@ -329,15 +349,16 @@ void startCheck() {
       s_info.releaseNotes  = notes;
     }
     s_state.store(cmp < 0 ? State::UpdateAvailable : State::UpToDate);
-  }).detach();
+  });
 }
 
 void startDownload() {
+  if (s_stopping.load()) return;
   State expected = State::UpdateAvailable;
   if (!s_state.compare_exchange_strong(expected, State::Downloading))
     return;
   s_downloadPct.store(0);
-  std::thread([]() {
+  startWorker([]() {
     std::string url;
     {
       std::lock_guard<std::mutex> lk(s_infoMutex);
@@ -357,7 +378,19 @@ void startDownload() {
     std::wstring out = runningExePath() + L".new";
     if (!httpDownloadToFile(whost, wpath, out, s_downloadPct)) return;
     s_state.store(State::Ready);
-  }).detach();
+  });
+}
+
+void shutdown() {
+  s_stopping.store(true);
+  std::vector<std::thread> workers;
+  {
+    std::lock_guard<std::mutex> lock(s_workerMutex);
+    workers.swap(s_workers);
+  }
+  for (auto &worker : workers) {
+    if (worker.joinable()) worker.join();
+  }
 }
 
 bool installAndRelaunch() {

@@ -657,7 +657,8 @@ std::vector<std::string> ChatSDK::getChatHistory(int maxCount) {
 
         jclass clCls = env->GetObjectClass(chatLine);
         jmethodID getComp = lc->GetMethodID(clCls, "getChatComponent",
-            "()Lnet/minecraft/util/IChatComponent;", "func_151461_a", "a");
+            "()Lnet/minecraft/util/IChatComponent;", "func_151461_a", "a",
+            "()Leu;");
         if (!getComp) getComp = lc->FindMethodBySignature(clCls,
             "()Lnet/minecraft/util/IChatComponent;");
         if (!getComp) getComp = lc->FindMethodBySignature(clCls, "()Leu;");

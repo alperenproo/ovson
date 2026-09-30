@@ -24,7 +24,20 @@ public final class PluginManager {
             if (!pluginsDir.exists()) {
                 pw.println("Plugins dir does not exist, creating.");
                 pluginsDir.mkdirs();
+                try {
+                    net.ovson.api.script.ScriptManager.init(pluginsDir.getParentFile());
+                } catch (Throwable t) {
+                    pw.println("ScriptManager.init failed: " + t.toString());
+                    t.printStackTrace(pw);
+                }
                 return;
+            }
+            
+            try {
+                net.ovson.api.script.ScriptManager.init(pluginsDir.getParentFile());
+            } catch (Throwable t) {
+                pw.println("ScriptManager.init failed: " + t.toString());
+                t.printStackTrace(pw);
             }
 
             File[] files = pluginsDir.listFiles((dir, name) -> name.endsWith(".jar"));
@@ -83,18 +96,52 @@ public final class PluginManager {
     }
 
     public static void disablePlugins() {
-        for (OVsonPlugin plugin : PLUGINS) {
+        List<OVsonPlugin> copy = new ArrayList<>(PLUGINS);
+        PLUGINS.clear();
+        for (OVsonPlugin plugin : copy) {
             try {
                 plugin.setEnabled(false);
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 e.printStackTrace();
             }
         }
-        PLUGINS.clear();
-        net.ovson.api.clickgui.ClickGUI.clear();
+        
+        try {
+            net.ovson.api.script.ScriptManager.unloadScripts();
+        } catch (Throwable e) {
+            e.printStackTrace();
+        }
+        
+        try {
+            net.ovson.api.clickgui.ClickGUI.clear();
+        } catch (Throwable e) {
+            e.printStackTrace();
+        }
+
+        try {
+            EventBus.getInstance().clear();
+        } catch (Throwable e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static void registerPlugin(OVsonPlugin plugin) {
+        if (plugin != null && !PLUGINS.contains(plugin)) {
+            PLUGINS.add(plugin);
+        }
+    }
+
+    public static void unregisterPlugin(OVsonPlugin plugin) {
+        if (plugin != null) {
+            PLUGINS.remove(plugin);
+        }
     }
 
     public static List<OVsonPlugin> getPlugins() {
-        return PLUGINS;
+        return new ArrayList<>(PLUGINS);
+    }
+
+    public static boolean hasPlugins() {
+        return !PLUGINS.isEmpty();
     }
 }

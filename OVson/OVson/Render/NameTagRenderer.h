@@ -38,6 +38,8 @@ private:
     void *rm_playerViewX = nullptr, *rm_playerViewY = nullptr;
     void *ent_posX = nullptr, *ent_posY = nullptr, *ent_posZ = nullptr;
     void *ent_prevX = nullptr, *ent_prevY = nullptr, *ent_prevZ = nullptr;
+    void *ent_lastTickX = nullptr, *ent_lastTickY = nullptr, *ent_lastTickZ = nullptr;
+    void *ent_canEntityBeSeen = nullptr; // canEntityBeSeen(Entity) boolean
     void *player_getName = nullptr;       // ()Lnet/minecraft/util/IChatComponent;
     void *player_getCommandSenderName = nullptr; // ()Ljava/lang/String; fallback
     void *player_getGameProfile = nullptr;     // ()Lcom/mojang/authlib/GameProfile;

@@ -21,7 +21,7 @@ void drawRoundedRect(float x, float y, float w, float h, float radius,
 void drawGlow(float x, float y, float w, float h, float radius, DWORD color,
               float intensity);
 void drawRadialGlow(float cx, float cy, float radius, DWORD color,
-                    float centerAlpha);
+                    float centerAlpha, bool additive = true);
 void drawOutline(float x, float y, float w, float h, float thickness,
                  DWORD color, float alphaOverride = -1.0f);
 void drawRoundedOutline(float x, float y, float w, float h, float radius,

@@ -103,8 +103,12 @@ inline jobject theWorld(JNIEnv *env) {
         fid = lc->GetFieldID(
             cls, "theWorld",
             "Lnet/minecraft/client/multiplayer/WorldClient;",
-            "field_71441_e", "f", "Lavk;");
+            "field_71441_e", "f", "Lbdb;");
         if (!fid && env->ExceptionCheck()) env->ExceptionClear();
+        if (!fid)
+            fid = lc->FindFieldBySignature(
+                cls, "Lnet/minecraft/client/multiplayer/WorldClient;");
+        if (!fid) fid = lc->FindFieldBySignature(cls, "Lbdb;");
     }
     if (!fid) { env->DeleteLocalRef(mc); return nullptr; }
     jobject w = env->GetObjectField(mc, fid);

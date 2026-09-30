@@ -13,4 +13,5 @@ bool isResizeMode();
 void setResizeMode(bool resize);
 void handleMouseClick(int btn, int state, int x, int y);
 void handleMouseMove(int x, int y);
+void shutdown();
 } // namespace BetterTab

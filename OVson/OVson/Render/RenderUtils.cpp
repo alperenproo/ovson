@@ -86,7 +86,7 @@ void drawGlow(float x, float y, float w, float h, float radius, DWORD color,
 }
 
 void drawRadialGlow(float cx, float cy, float radius, DWORD color,
-                    float centerAlpha) {
+                    float centerAlpha, bool additive) {
   if (centerAlpha <= 0.0f || radius <= 0.0f)
     return;
   float r = ((color >> 16) & 0xFF) / 255.0f;
@@ -94,7 +94,11 @@ void drawRadialGlow(float cx, float cy, float radius, DWORD color,
   float b = (color & 0xFF) / 255.0f;
   glDisable(GL_TEXTURE_2D);
   glEnable(GL_BLEND);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE);  // additive
+  if (additive) {
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);  // additive
+  } else {
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);  // alpha blend (paints rich color on dark surfaces)
+  }
   glBegin(GL_TRIANGLE_FAN);
   glColor4f(r, g, b, centerAlpha);
   glVertex2f(cx, cy);

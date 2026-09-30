@@ -8,6 +8,11 @@
 namespace Render {
 enum class NotificationType { Info, Success, Warning, Error };
 
+struct NotificationSegment {
+  std::string text;
+  DWORD color = 0xFFE0E0E0;
+};
+
 struct Notification {
   std::string title;
   std::string message;
@@ -15,6 +20,7 @@ struct Notification {
   float timer;
   float duration;
   float slideAnim;
+  std::vector<NotificationSegment> segments;
 
   DWORD getTitleColor() const;
   DWORD getBodyColor() const;
@@ -26,7 +32,11 @@ public:
 
   void add(const std::string &title, const std::string &message,
            NotificationType type = NotificationType::Info,
-           float duration = 3.0f);
+           float duration = 3.0f, std::size_t maximumVisible = 20);
+  void addRich(const std::string &title,
+               const std::vector<NotificationSegment> &segments,
+               NotificationType type = NotificationType::Info,
+               float duration = 3.0f, std::size_t maximumVisible = 20);
   void render(HDC hdc);
 
 private:

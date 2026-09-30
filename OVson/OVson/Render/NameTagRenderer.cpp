@@ -1,10 +1,12 @@
 #include "NameTagRenderer.h"
 #include "../Config/Config.h"
+#include "../Utils/ColoredHitboxes.h"
 #include "../Config/StatColors.h"
 #include "../Utils/GlGuard.h"
 #include "../Utils/JniGuard.h"
 #include "../Java.h"
 #include "../Logic/StatsTracker.h"
+#include "../Logic/StatsTracker.internal.h"
 #include "../Services/Hypixel.h"
 #include "../Utils/Anticheat/Anticheat.h"
 #include "../Utils/BedwarsPrestiges.h"
@@ -176,10 +178,85 @@ void NameTagRenderer::initIds() {
     m_ids.mc_timer = (void *)lc->GetFieldID(
         mcCls, "timer", "Lnet/minecraft/util/Timer;",
         "field_71428_T", "Y", "Lavl;");
-    m_ids.mc_fontRendererObj = (void *)lc->GetFieldID(
-        mcCls, "fontRendererObj",
-        "Lnet/minecraft/client/gui/FontRenderer;",
-        "field_71466_p", "p", "Lavn;");
+    jfieldID f_fr = nullptr;
+    const char *frNames[] = {"fontRendererObj", "fontRenderer", "field_71466_p", "l"};
+    const char *frSigs[] = {"Lnet/minecraft/client/gui/FontRenderer;", "Lavn;"};
+
+    jobject mcObj = nullptr;
+    if (m_ids.mc_theMc) {
+      mcObj = env->GetStaticObjectField(mcCls, (jfieldID)m_ids.mc_theMc);
+      if (env->ExceptionCheck()) { env->ExceptionClear(); mcObj = nullptr; }
+    }
+    if (!mcObj) {
+      jmethodID m_getMc = lc->GetStaticMethodID(mcCls, "getMinecraft", "()Lnet/minecraft/client/Minecraft;", "func_71410_x", "A", "()Lave;");
+      if (m_getMc) {
+        mcObj = env->CallStaticObjectMethod(mcCls, m_getMc);
+        if (env->ExceptionCheck()) { env->ExceptionClear(); mcObj = nullptr; }
+      }
+    }
+
+    for (const char *fn : frNames) {
+      for (const char *fs : frSigs) {
+        jfieldID fid = env->GetFieldID(mcCls, fn, fs);
+        if (fid) {
+          if (mcObj) {
+            jobject testFr = env->GetObjectField(mcObj, fid);
+            if (testFr) {
+              if (!Lunar::isSGAFontRenderer(env, testFr)) {
+                f_fr = fid;
+              }
+              env->DeleteLocalRef(testFr);
+            } else {
+              f_fr = fid;
+            }
+          } else {
+            f_fr = fid;
+          }
+          if (f_fr) break;
+        }
+        if (env->ExceptionCheck()) env->ExceptionClear();
+      }
+      if (f_fr) break;
+    }
+    if (!f_fr && lc && lc->jvmti) {
+      jint fCount = 0;
+      jfieldID *fList = nullptr;
+      if (lc->jvmti->GetClassFields(mcCls, &fCount, &fList) == JVMTI_ERROR_NONE) {
+        for (int i = 0; i < fCount; i++) {
+          char *fn = nullptr, *fs = nullptr;
+          if (lc->jvmti->GetFieldName(mcCls, fList[i], &fn, &fs, nullptr) == JVMTI_ERROR_NONE) {
+            if (fs && (std::strcmp(fs, "Lavn;") == 0 || std::strstr(fs, "FontRenderer;") != nullptr)) {
+              std::string nameStr = fn ? fn : "";
+              std::string lowerStr = nameStr;
+              for (char &c : lowerStr) c = (char)::tolower((unsigned char)c);
+              bool isSga = (lowerStr.find("galactic") != std::string::npos ||
+                            lowerStr.find("sga") != std::string::npos ||
+                            lowerStr.find("enchant") != std::string::npos ||
+                            nameStr == "q" || nameStr == "field_71464_q");
+              if (!isSga && mcObj) {
+                jobject testFr = env->GetObjectField(mcObj, fList[i]);
+                if (testFr) {
+                  bool objIsSga = Lunar::isSGAFontRenderer(env, testFr);
+                  env->DeleteLocalRef(testFr);
+                  if (objIsSga) isSga = true;
+                }
+              }
+              if (!isSga) {
+                f_fr = fList[i];
+                lc->jvmti->Deallocate((unsigned char*)fn);
+                lc->jvmti->Deallocate((unsigned char*)fs);
+                break;
+              }
+            }
+            if (fn) lc->jvmti->Deallocate((unsigned char*)fn);
+            if (fs) lc->jvmti->Deallocate((unsigned char*)fs);
+          }
+        }
+        if (fList) lc->jvmti->Deallocate((unsigned char*)fList);
+      }
+    }
+    if (mcObj) env->DeleteLocalRef(mcObj);
+    m_ids.mc_fontRendererObj = (void *)f_fr;
 
     jclass rmCls =
         findCls("net.minecraft.client.renderer.entity.RenderManager",
@@ -211,6 +288,12 @@ void NameTagRenderer::initIds() {
         (void *)lc->GetFieldID(entCls, "prevPosY", "D", "field_70167_r", "q");
     m_ids.ent_prevZ =
         (void *)lc->GetFieldID(entCls, "prevPosZ", "D", "field_70166_s", "r");
+    m_ids.ent_lastTickX =
+        (void *)lc->GetFieldID(entCls, "lastTickPosX", "D", "field_70142_S", "P");
+    m_ids.ent_lastTickY =
+        (void *)lc->GetFieldID(entCls, "lastTickPosY", "D", "field_70137_T", "Q");
+    m_ids.ent_lastTickZ =
+        (void *)lc->GetFieldID(entCls, "lastTickPosZ", "D", "field_70136_U", "R");
 
     jclass epCls = findCls("net.minecraft.entity.player.EntityPlayer",
                            {"zw", "wn", "ahd", "xe", "yw"});
@@ -229,6 +312,18 @@ void NameTagRenderer::initIds() {
       m_ids.player_getGameProfile = (void *)env->GetMethodID(
           epCls, "getGameProfile", "()Lcom/mojang/authlib/GameProfile;");
       if (env->ExceptionCheck()) env->ExceptionClear();
+    }
+    m_ids.ent_canEntityBeSeen = (void *)lc->GetMethodID(
+        epCls, "canEntityBeSeen", "(Lnet/minecraft/entity/Entity;)Z",
+        "func_70685_l", "t", "(Lpk;)Z");
+    if (!m_ids.ent_canEntityBeSeen) {
+      jclass elbCls = findCls("net.minecraft.entity.EntityLivingBase", {"pr", "tl", "vp"});
+      if (elbCls) {
+        m_ids.ent_canEntityBeSeen = (void *)lc->GetMethodID(
+            elbCls, "canEntityBeSeen", "(Lnet/minecraft/entity/Entity;)Z",
+            "func_70685_l", "t", "(Lpk;)Z");
+        env->DeleteLocalRef(elbCls);
+      }
     }
 
     jclass gpCls = env->FindClass("com/mojang/authlib/GameProfile");
@@ -375,6 +470,7 @@ struct NameTagDraw {
   float pixelY = 0;
   float scale  = 1.0f;
   double dist  = 0.0;
+  bool occluded = false;
 };
 
 void NameTagRenderer::render(void *hdcPtr, double partialTicksManual) {
@@ -471,6 +567,7 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
     step = "GetObjectField(mc.renderManager)";
     jobject rm = env->GetObjectField(mcObj, (jfieldID)m_ids.mc_renderManager);
     if (rm) {
+
       step = "rm.viewerPosX";
       camX = env->GetDoubleField(rm, (jfieldID)m_ids.rm_viewerPosX);
       step = "rm.viewerPosY";
@@ -746,16 +843,24 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
     double cx = env->GetDoubleField(player, (jfieldID)m_ids.ent_posX);
     double cy = env->GetDoubleField(player, (jfieldID)m_ids.ent_posY);
     double cz = env->GetDoubleField(player, (jfieldID)m_ids.ent_posZ);
-    double px = env->GetDoubleField(player, (jfieldID)m_ids.ent_prevX);
-    double py = env->GetDoubleField(player, (jfieldID)m_ids.ent_prevY);
-    double pz = env->GetDoubleField(player, (jfieldID)m_ids.ent_prevZ);
+    double px = m_ids.ent_lastTickX ? env->GetDoubleField(player, (jfieldID)m_ids.ent_lastTickX)
+                                    : env->GetDoubleField(player, (jfieldID)m_ids.ent_prevX);
+    double py = m_ids.ent_lastTickY ? env->GetDoubleField(player, (jfieldID)m_ids.ent_lastTickY)
+                                    : env->GetDoubleField(player, (jfieldID)m_ids.ent_prevY);
+    double pz = m_ids.ent_lastTickZ ? env->GetDoubleField(player, (jfieldID)m_ids.ent_lastTickZ)
+                                    : env->GetDoubleField(player, (jfieldID)m_ids.ent_prevZ);
     double wx = px + (cx - px) * pt;
-    double wy = py + (cy - py) * pt + (double)Config::getNameTagHeight();
+    double playerFeetY = py + (cy - py) * pt;
+    double wy = playerFeetY + (double)Config::getNameTagHeight();
     double wz = pz + (cz - pz) * pt;
 
     double rx = wx - camX;
     double ry = wy - (useActiveRenderInfo ? feetY : camY);
     double rz = wz - camZ;
+
+    double hx = wx - camX;
+    double hy = playerFeetY - (useActiveRenderInfo ? feetY : camY);
+    double hz = wz - camZ;
 
     double ndcX = 0.0, ndcY = 0.0;
     double dist = 0.0;
@@ -886,6 +991,36 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
       return;
     }
 
+    std::string cleanName, lowerName, stripped;
+    for (size_t k = 0; k < name.size(); ++k) {
+      unsigned char ch = (unsigned char)name[k];
+      if (ch == 0xC2 && k + 2 < name.size() &&
+          (unsigned char)name[k + 1] == 0xA7) {
+        k += 2; // skip § + code byte
+        continue;
+      }
+      stripped += (char)ch;
+    }
+
+    for (char c : stripped) {
+      if (c >= 'A' && c <= 'Z')
+        cleanName += (char)(c + 32);
+      else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')
+        cleanName += c;
+    }
+    lowerName = stripped;
+    for (auto &ch2 : lowerName) {
+      if (ch2 >= 'A' && ch2 <= 'Z')
+        ch2 += 32;
+    }
+
+
+
+    if (!Config::isNameTagsEnabled()) {
+      env->DeleteLocalRef(player);
+      return;
+    }
+
     bool sneaking = Anticheat::isPlayerSneaking(name);
     if (logThisPass)
       ntLog("  [%d] sneak-check name='%s' result=%d", (int)i,
@@ -900,33 +1035,10 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
     bool foundStats = false;
     Hypixel::PlayerStats statsCopy;
     std::string hitKey;
-    std::string cleanName, lowerName, stripped;
     size_t cacheSize = 0;
     {
-      std::lock_guard<std::mutex> lk(OVson::g_statsMutex);
+      std::lock_guard<std::recursive_mutex> lk(OVson::g_statsMutex);
       cacheSize = OVson::g_playerStatsMap.size();
-
-      for (size_t k = 0; k < name.size(); ++k) {
-        unsigned char ch = (unsigned char)name[k];
-        if (ch == 0xC2 && k + 2 < name.size() &&
-            (unsigned char)name[k + 1] == 0xA7) {
-          k += 2; // skip § + code byte
-          continue;
-        }
-        stripped += (char)ch;
-      }
-
-      for (char c : stripped) {
-        if (c >= 'A' && c <= 'Z')
-          cleanName += (char)(c + 32);
-        else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')
-          cleanName += c;
-      }
-      lowerName = stripped;
-      for (auto &ch2 : lowerName) {
-        if (ch2 >= 'A' && ch2 <= 'Z')
-          ch2 += 32;
-      }
 
       auto it = OVson::g_playerStatsMap.find(cleanName);
       if (it != OVson::g_playerStatsMap.end()) hitKey = "cleanName";
@@ -976,6 +1088,8 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
     NameTagDraw d;
     if (isNicked) {
       d.label = "\xC2\xA7" "4[NICKED]";
+    } else if (Hypixel::isFreshAccount(statsCopy)) {
+      d.label = "\xC2\xA7" "5[FRESH]";
     } else {
       auto slots = Config::getNameTagStats();
       auto fmtF = [](float v) {
@@ -1000,7 +1114,7 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
         if (!slot.second) continue;
         std::string part;
         if (slot.first == "star") {
-          part = BedwarsStars::GetFormattedLevel(statsCopy.bedwarsStar);
+          part = BedwarsStars::GetFormattedLevel(statsCopy);
         } else if (slot.first == "fkdr") {
           const char *c =
               StatColors::getMcColor(StatColors::StatType::FKDR, fkdr);
@@ -1042,6 +1156,18 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
     if (s > 18.0f) s = 18.0f;
     d.scale = s;
     d.dist = dist;
+
+    bool occluded = false;
+    if (viewerEntity && m_ids.ent_canEntityBeSeen) {
+      jboolean canSee = env->CallBooleanMethod(
+          viewerEntity, (jmethodID)m_ids.ent_canEntityBeSeen, player);
+      if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+      } else {
+        occluded = !canSee;
+      }
+    }
+    d.occluded = occluded;
     draws.push_back(std::move(d));
 
     env->DeleteLocalRef(player);
@@ -1063,6 +1189,7 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
   glDisable(GL_CULL_FACE);
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
   glEnable(GL_TEXTURE_2D);
 
   GlGuard::GlMatrixGuard _gPr(GL_PROJECTION);
@@ -1094,7 +1221,11 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
 
     float halfW = (float)textWidth / 2.0f + 2.0f;
     glDisable(GL_TEXTURE_2D);
-    glColor4f(0.0f, 0.0f, 0.0f, 0.4f);
+    if (d.occluded) {
+      glColor4f(0.0f, 0.0f, 0.0f, 0.18f);
+    } else {
+      glColor4f(0.0f, 0.0f, 0.0f, 0.40f);
+    }
     glBegin(GL_QUADS);
     glVertex2f(-halfW, -5.0f);
     glVertex2f( halfW, -5.0f);
@@ -1103,10 +1234,17 @@ void NameTagRenderer::renderInner(void *hdcPtr, double partialTicksManual) {
     glEnd();
     glEnable(GL_TEXTURE_2D);
 
-    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-    env->CallIntMethod(fontObj, (jmethodID)m_ids.font_drawString, jlabel,
-                       (jfloat)(-textWidth / 2.0f), (jfloat)(-4.0f),
-                       (jint)0xFFFFFFFF);
+    if (d.occluded) {
+      glColor4f(1.0f, 1.0f, 1.0f, 0.32f);
+      env->CallIntMethod(fontObj, (jmethodID)m_ids.font_drawString, jlabel,
+                         (jfloat)(-textWidth / 2.0f), (jfloat)(-4.0f),
+                         (jint)0x4DFFFFFF);
+    } else {
+      glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+      env->CallIntMethod(fontObj, (jmethodID)m_ids.font_drawString, jlabel,
+                         (jfloat)(-textWidth / 2.0f), (jfloat)(-4.0f),
+                         (jint)0xFFFFFFFF);
+    }
     if (env->ExceptionCheck()) env->ExceptionClear();
 
     glPopMatrix();

@@ -89,10 +89,29 @@ bool findJsonInt(const std::string &json, const char *key, int &out) {
   return true;
 }
 
-int calculateNetworkLevel(long long exp) {
-  if (exp <= 0)
-    return 1;
-  return (int)std::floor((std::sqrt(2.0 * (double)exp + 30625.0) / 50.0) - 2.5);
+static bool findJsonDouble(const std::string &json, const char *key, double &out) {
+  std::string pat = std::string("\"") + key + "\"";
+  size_t k = json.find(pat);
+  if (k == std::string::npos)
+    return false;
+  size_t c = json.find(':', k);
+  if (c == std::string::npos)
+    return false;
+  size_t end = c + 1;
+  while (end < json.size() && (json[end] == ' ' || json[end] == '\t' || json[end] == '"'))
+    ++end;
+  if (end >= json.size())
+    return false;
+  char *endPtr = nullptr;
+  double val = strtod(json.c_str() + end, &endPtr);
+  if (endPtr == json.c_str() + end)
+    return false;
+  out = val;
+  return true;
+}
+
+int calculateNetworkLevel(double exp) {
+  return Hypixel::calculateNetworkLevel(exp);
 }
 
 int getLevelForExp(int exp) {
@@ -176,9 +195,12 @@ PrismService::getPlayerStats(const std::string &uuid) {
            body.size(), preview.c_str(),
            body.size() > 120 ? "..." : "");
 
-  Hypixel::PlayerStats ps;
-  ps.uuid = uuid;
-  ps.isFetched = true;
+  if (body.find("\"player\":null") != std::string::npos ||
+      body.find("\"player\": null") != std::string::npos) {
+    t_lastError = LastError::NoPlayerData;
+    prismDbg("NoPlayerData uuid=%s (player is null)", uuid.c_str());
+    return std::nullopt;
+  }
 
   size_t pPlayer = body.find("\"player\"");
   if (pPlayer == std::string::npos) {
@@ -196,7 +218,16 @@ PrismService::getPlayerStats(const std::string &uuid) {
     return std::nullopt;
   }
 
-  findJsonString(body, "displayname", ps.displayName);
+  Hypixel::PlayerStats ps;
+  ps.uuid = uuid;
+
+  if (!findJsonString(body, "displayname", ps.displayName) || ps.displayName.empty()) {
+    t_lastError = LastError::NoPlayerData;
+    prismDbg("NoPlayerData uuid=%s (no displayname)", uuid.c_str());
+    return std::nullopt;
+  }
+
+  ps.isFetched = true;
   findJsonString(body, "prefix", ps.prefix);
   findJsonString(body, "rank", ps.rank);
   findJsonString(body, "monthlyPackageRank", ps.monthlyPackageRank);
@@ -204,9 +235,14 @@ PrismService::getPlayerStats(const std::string &uuid) {
   findJsonString(body, "packageRank", ps.packageRank);
   findJsonString(body, "rankPlusColor", ps.rankPlusColor);
 
-  int networkExp = 0;
-  if (findJsonInt(body, "networkExp", networkExp)) {
-    ps.networkLevel = calculateNetworkLevel(networkExp);
+  double level = 0.0;
+  double netExp = 0.0;
+  if (findJsonDouble(body, "networkLevel", level) && level > 0.0) {
+    ps.networkLevel = (int)std::floor(level);
+  } else if (findJsonDouble(body, "networkExp", netExp)) {
+    ps.networkLevel = calculateNetworkLevel(netExp);
+  } else if (findJsonDouble(body, "network_exp", netExp)) {
+    ps.networkLevel = calculateNetworkLevel(netExp);
   }
 
   size_t pStats = body.find("\"stats\"");
@@ -251,10 +287,65 @@ PrismService::getPlayerStats(const std::string &uuid) {
               }
           }
       }
+
+      std::string bwJson = body.substr(pBw);
+      findJsonString(bwJson, "active_star", ps.activeStar);
+      findJsonString(bwJson, "active_prestige_scheme", ps.activePrestigeScheme);
+      findJsonString(bwJson, "active_prestige_bracket", ps.activePrestigeBracket);
+
+      findJsonInt(bwJson, "iron_resources_collected_bedwars", ps.ironCollected);
+      findJsonInt(bwJson, "gold_resources_collected_bedwars", ps.goldCollected);
+      findJsonInt(bwJson, "diamond_resources_collected_bedwars", ps.diamondCollected);
+      findJsonInt(bwJson, "emerald_resources_collected_bedwars", ps.emeraldCollected);
+      findJsonInt(bwJson, "resources_collected_bedwars", ps.resourcesCollected);
+      if (ps.resourcesCollected == 0) {
+        ps.resourcesCollected = ps.ironCollected + ps.goldCollected + ps.diamondCollected + ps.emeraldCollected;
+      }
+      size_t slumPos = bwJson.find("\"slumber\"");
+      if (slumPos != std::string::npos) {
+        std::string slumSub = bwJson.substr(slumPos, 4000);
+        if (!findJsonInt(slumSub, "tickets", ps.slumberTickets)) {
+          findJsonInt(slumSub, "total_tickets_earned", ps.slumberTickets);
+        }
+      }
+      if (ps.slumberTickets == 0) {
+        findJsonInt(bwJson, "slumber_tickets", ps.slumberTickets);
+      }
+      if (ps.slumberTickets == 0) {
+        findJsonInt(body, "bedwars_slumber_ticket_master", ps.slumberTickets);
+      }
+
+      if (!findJsonString(bwJson, "activeKillEffect", ps.activeKillEffect))
+        findJsonString(bwJson, "active_kill_effect", ps.activeKillEffect);
+
+      if (!findJsonString(bwJson, "activeDeathCry", ps.activeDeathCry))
+        findJsonString(bwJson, "active_death_cry", ps.activeDeathCry);
+
+      if (!findJsonString(bwJson, "activeVictoryDance", ps.activeVictoryDance))
+        findJsonString(bwJson, "active_victory_dance", ps.activeVictoryDance);
+
+      if (!findJsonString(bwJson, "activeProjectileTrail", ps.activeProjectileTrail))
+        findJsonString(bwJson, "active_projectile_trail", ps.activeProjectileTrail);
+
+      if (!findJsonString(bwJson, "activeIslandTopper", ps.activeIslandTopper))
+        findJsonString(bwJson, "active_island_topper", ps.activeIslandTopper);
+
+      if (!findJsonString(bwJson, "activeGlyph", ps.activeGlyph))
+        findJsonString(bwJson, "active_glyph", ps.activeGlyph);
+
+      if (!findJsonString(bwJson, "activeBedDestroy", ps.activeBedDestroy))
+        findJsonString(bwJson, "active_bed_destroy", ps.activeBedDestroy);
+
+      if (!findJsonString(bwJson, "active_star", ps.activeStar))
+        findJsonString(bwJson, "activeStar", ps.activeStar);
+
+      findJsonString(bwJson, "favourites_2", ps.quickBuy);
+      findJsonString(bwJson, "favorite_slots", ps.favoriteSlots);
     }
   }
 
-  prismDbg("PARSE OK uuid=%s star=%d fk=%d wins=%d", uuid.c_str(),
-           ps.bedwarsStar, ps.bedwarsFinalKills, ps.bedwarsWins);
+  prismDbg("PARSE OK uuid=%s star=%d active_star=%s scheme=%s fk=%d wins=%d", uuid.c_str(),
+           ps.bedwarsStar, ps.activeStar.c_str(), ps.activePrestigeScheme.c_str(),
+           ps.bedwarsFinalKills, ps.bedwarsWins);
   return ps;
 }

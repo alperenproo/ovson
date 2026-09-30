@@ -37,7 +37,7 @@ void render(void *hdc, int screenWidth, int screenHeight) {
 
   size_t cachedPlayers = 0;
   {
-    std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
+    std::lock_guard<std::recursive_mutex> lock(OVson::g_statsMutex);
     cachedPlayers = OVson::g_playerStatsMap.size();
   }
 
@@ -66,7 +66,7 @@ void render(void *hdc, int screenWidth, int screenHeight) {
 
   size_t cacheBytes = 0;
   {
-    std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
+    std::lock_guard<std::recursive_mutex> lock(OVson::g_statsMutex);
     for (const auto &pair : OVson::g_playerStatsMap) {
       cacheBytes += sizeof(pair.first) + pair.first.capacity();
       const auto &s = pair.second;

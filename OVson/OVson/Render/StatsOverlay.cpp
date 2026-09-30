@@ -151,6 +151,11 @@ static uint32_t hsbToRgb(float h, float s, float b) {
 
 void StatsOverlay::render(void *hdcPtr) {
   if (s_rendering) return;
+
+  // Fast exit: skip all JNI work when overlay mode is not "gui"
+  std::string mode = Config::getOverlayMode();
+  if (mode != "gui") return;
+
   s_rendering = true;
   HDC hdc = (HDC)hdcPtr;
   static bool s_loggedOnce = false;
@@ -325,11 +330,6 @@ void StatsOverlay::render(void *hdcPtr) {
   }
   env->DeleteLocalRef(mc);
 
-  std::string mode = Config::getOverlayMode();
-  if (mode != "gui") {
-    s_rendering = false;
-    return;
-  }
 
   // MOVED TO CLICKGUI
   /*SHORT insertState = GetAsyncKeyState(VK_INSERT);
@@ -370,7 +370,7 @@ void StatsOverlay::render(void *hdcPtr) {
   {
     bool activeMatch = OVson::isInHypixelGame() &&
                        !OVson::isInPreGameLobby();
-    std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
+    std::lock_guard<std::recursive_mutex> lock(OVson::g_statsMutex);
     std::unordered_set<std::string> seen;
     for (const auto &pair : OVson::g_playerStatsMap) {
       if (activeMatch && pair.second.teamColor.empty())
@@ -673,11 +673,16 @@ void StatsOverlay::render(void *hdcPtr) {
                       }
                   }
               }
-              if (!hasU && !hasS) g_font.drawString(currentTagX, currentY, "-", colorFromRGB(100, 100, 105));
           } else if (stats.isNicked && c.title != "PLAYER" && c.title != "PING") {
               if (c.title == "STAR") g_font.drawString(cx, currentY, "[NICKED]", colorFromRGB(170, 0, 0));
           } else {
-              if (c.title == "STAR") g_font.drawString(cx, currentY, std::to_string(stats.bedwarsStar), StatColors::getColor(StatColors::StatType::Star, stats.bedwarsStar));
+              if (c.title == "STAR") {
+                  if (Hypixel::isFreshAccount(stats)) {
+                      g_font.drawString(cx, currentY, "[FRESH]", colorFromRGB(170, 0, 170));
+                  } else {
+                      g_font.drawString(cx, currentY, std::to_string(stats.bedwarsStar), StatColors::getColor(StatColors::StatType::Star, stats.bedwarsStar));
+                  }
+              }
               else if (c.title == "F. KILLS") g_font.drawString(cx, currentY, fmtCommas(stats.bedwarsFinalKills), StatColors::getColor(StatColors::StatType::FinalKills, stats.bedwarsFinalKills));
               else if (c.title == "FKDR") {
                   std::stringstream ss; ss << std::fixed << std::setprecision(2) << fkdr;

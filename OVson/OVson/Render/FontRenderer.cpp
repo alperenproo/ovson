@@ -80,7 +80,8 @@ bool FontRenderer::init(HDC hdc) {
 
   memset(bits, 0xFF, m_bitmapWidth * m_bitmapHeight * 4);
 
-  SetBkMode(memDC, TRANSPARENT);
+  SetBkMode(memDC, OPAQUE);
+  SetBkColor(memDC, RGB(255, 255, 255));
   SetTextColor(memDC, RGB(0, 0, 0));
   SetTextAlign(memDC, TA_TOP | TA_LEFT);
 
@@ -109,7 +110,10 @@ bool FontRenderer::init(HDC hdc) {
 
   for (int i = 0; i < m_bitmapWidth * m_bitmapHeight; i++) {
     uint8_t b = src[i * 4 + 0];
-    uint8_t alpha = 255 - b;
+    uint8_t g = src[i * 4 + 1];
+    uint8_t r = src[i * 4 + 2];
+    int gray = (static_cast<int>(r) + static_cast<int>(g) + static_cast<int>(b)) / 3;
+    uint8_t alpha = static_cast<uint8_t>(255 - gray);
 
     dst[i * 4 + 0] = 255;
     dst[i * 4 + 1] = 255;

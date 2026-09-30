@@ -324,9 +324,330 @@ std::optional<PlayerTags> getPlayerTags(const std::string &username,
   return std::nullopt;
 }
 
+struct CachedMonthly {
+  MonthlyStats data;
+  std::chrono::steady_clock::time_point timestamp;
+};
+
+static std::unordered_map<std::string, CachedMonthly> g_monthlyCache;
+static std::mutex g_monthlyCacheMutex;
+static std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_pendingMonthlyFetches;
+static std::mutex g_pendingMonthlyMutex;
+static const size_t MAX_MONTHLY_CACHE_SIZE = 200;
+static const int MONTHLY_CACHE_EXPIRY_SECONDS = 300;
+
+static void pruneMonthlyCacheLocked() {
+  auto now = std::chrono::steady_clock::now();
+  for (auto it = g_monthlyCache.begin(); it != g_monthlyCache.end();) {
+    auto age = std::chrono::duration_cast<std::chrono::seconds>(now - it->second.timestamp).count();
+    if (age > MONTHLY_CACHE_EXPIRY_SECONDS) {
+      it = g_monthlyCache.erase(it);
+    } else {
+      ++it;
+    }
+  }
+
+  while (g_monthlyCache.size() > MAX_MONTHLY_CACHE_SIZE) {
+    auto oldest = g_monthlyCache.begin();
+    for (auto it = g_monthlyCache.begin(); it != g_monthlyCache.end(); ++it) {
+      if (it->second.timestamp < oldest->second.timestamp) {
+        oldest = it;
+      }
+    }
+    g_monthlyCache.erase(oldest);
+  }
+}
+
+static bool findJsonInt64(const std::string &json, const char *key, int64_t &out) {
+  std::string pat = std::string("\"") + key + "\"";
+  size_t k = json.find(pat);
+  if (k == std::string::npos) return false;
+  size_t c = json.find(':', k);
+  if (c == std::string::npos) return false;
+  size_t end = c + 1;
+  while (end < json.size() && (json[end] == ' ' || json[end] == '\t')) ++end;
+  if (end >= json.size()) return false;
+  if (json[end] == '-' || json[end] == '+' || isdigit((unsigned char)json[end])) {
+    out = _strtoi64(json.c_str() + end, nullptr, 10);
+    return true;
+  }
+  return false;
+}
+
+static bool extractDeltaInt(const std::string &json, const std::string &key, int &outVal) {
+  std::string needle = "\"" + key + "\"";
+  size_t k = json.find(needle);
+  if (k == std::string::npos)
+    return false;
+
+  size_t c = json.find(':', k + needle.size());
+  if (c == std::string::npos)
+    return false;
+
+  size_t p = c + 1;
+  while (p < json.size() && (json[p] == ' ' || json[p] == '\t' || json[p] == '\r' || json[p] == '\n'))
+    p++;
+  if (p >= json.size())
+    return false;
+
+  if (json[p] == '{') {
+    size_t objEnd = json.find('}', p);
+    if (objEnd == std::string::npos)
+      return false;
+    std::string inner = json.substr(p, objEnd - p + 1);
+    size_t newPos = inner.find("\"new\"");
+    if (newPos == std::string::npos)
+      return false;
+    size_t newColon = inner.find(':', newPos + 5);
+    if (newColon == std::string::npos)
+      return false;
+    size_t np = newColon + 1;
+    while (np < inner.size() && (inner[np] == ' ' || inner[np] == '\t' || inner[np] == '\r' || inner[np] == '\n'))
+      np++;
+    if (np >= inner.size() || inner[np] == 'n' /* null */) {
+      outVal = 0;
+      return true;
+    }
+    if (inner[np] == '-' || inner[np] == '+' || isdigit((unsigned char)inner[np])) {
+      outVal = (int)strtol(inner.c_str() + np, nullptr, 10);
+      return true;
+    }
+    return false;
+  }
+
+  if (json[p] == 'n' /* null */) {
+    outVal = 0;
+    return true;
+  }
+
+  if (json[p] == '-' || json[p] == '+' || isdigit((unsigned char)json[p])) {
+    outVal = (int)strtol(json.c_str() + p, nullptr, 10);
+    return true;
+  }
+
+  if (json[p] == '"') {
+    outVal = (int)strtol(json.c_str() + p + 1, nullptr, 10);
+    return true;
+  }
+
+  return false;
+}
+
+static bool parseMonthlyResponse(const std::string &body, MonthlyStats &result) {
+  if (body.empty() || body.find("\"error\"") != std::string::npos)
+    return false;
+
+  size_t dPos = body.find("\"delta\"");
+  if (dPos == std::string::npos)
+    return false;
+  size_t cPos = body.find(':', dPos + 7);
+  if (cPos == std::string::npos)
+    return false;
+  size_t vStart = cPos + 1;
+  while (vStart < body.size() && (body[vStart] == ' ' || body[vStart] == '\t' || body[vStart] == '\r' || body[vStart] == '\n'))
+    vStart++;
+  if (vStart >= body.size() || body[vStart] == 'n' /* null */) {
+    return false;
+  }
+
+  std::string deltaJson;
+  if (body[vStart] == '{') {
+    int depth = 1;
+    size_t i = vStart + 1;
+    while (i < body.size() && depth > 0) {
+      if (body[i] == '{') depth++;
+      else if (body[i] == '}') depth--;
+      i++;
+    }
+    if (depth == 0) {
+      deltaJson = body.substr(vStart, i - vStart);
+    } else {
+      deltaJson = body.substr(vStart);
+    }
+  } else {
+    deltaJson = body.substr(vStart);
+  }
+
+  findJsonString(body, "uuid", result.uuid);
+  findJsonString(body, "displayname", result.displayName);
+  findJsonString(body, "from_readable", result.fromReadable);
+  findJsonInt64(body, "from", result.fromTimestamp);
+
+  bool hasFk = extractDeltaInt(deltaJson, "final_kills_bedwars", result.finalKills);
+  bool hasFd = extractDeltaInt(deltaJson, "final_deaths_bedwars", result.finalDeaths);
+  bool hasWins = extractDeltaInt(deltaJson, "wins_bedwars", result.wins);
+  bool hasLosses = extractDeltaInt(deltaJson, "losses_bedwars", result.losses);
+  bool hasBeds = extractDeltaInt(deltaJson, "beds_broken_bedwars", result.bedsBroken);
+  bool hasBedsLost = extractDeltaInt(deltaJson, "beds_lost_bedwars", result.bedsLost);
+  bool hasKills = extractDeltaInt(deltaJson, "kills_bedwars", result.kills);
+  bool hasDeaths = extractDeltaInt(deltaJson, "deaths_bedwars", result.deaths);
+
+  bool hasAny = hasFk || hasFd || hasWins || hasLosses || hasBeds || hasBedsLost || hasKills || hasDeaths;
+  if (!hasAny) {
+    if (deltaJson.find("Bedwars") != std::string::npos || deltaJson.find("bedwars") != std::string::npos) {
+      hasAny = true;
+    }
+  }
+
+  if (!hasAny) {
+    return false;
+  }
+
+  result.hasData = true;
+  if (result.finalDeaths <= 0) {
+    result.fkdr = (result.finalKills > 0) ? (double)result.finalKills : 0.0;
+  } else {
+    result.fkdr = (double)result.finalKills / (double)result.finalDeaths;
+  }
+
+  if (result.losses <= 0) {
+    result.wlr = (result.wins > 0) ? (double)result.wins : 0.0;
+  } else {
+    result.wlr = (double)result.wins / (double)result.losses;
+  }
+
+  return true;
+}
+
+std::optional<MonthlyStats> getMonthlyStats(const std::string &player, bool wait) {
+  if (player.empty()) return std::nullopt;
+  std::string apiKey = Config::getUrchinApiKey();
+  if (apiKey.empty()) {
+    Logger::tagDebug("[Urchin] Monthly stats fetch skipped: API key empty");
+    return std::nullopt;
+  }
+
+  std::string lowerUser = toLower(player);
+  auto now = std::chrono::steady_clock::now();
+
+  {
+    std::lock_guard<std::mutex> lock(g_monthlyCacheMutex);
+    auto it = g_monthlyCache.find(lowerUser);
+    if (it != g_monthlyCache.end()) {
+      auto age = std::chrono::duration_cast<std::chrono::seconds>(now - it->second.timestamp).count();
+      if (age < MONTHLY_CACHE_EXPIRY_SECONDS) {
+        Logger::tagDebug("[Urchin] Monthly stats cache hit for '%s' (age %llds, fkdr: %.2f)", player.c_str(), (long long)age, it->second.data.fkdr);
+        if (it->second.data.hasData) return it->second.data;
+        return std::nullopt;
+      }
+    }
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(g_pendingMonthlyMutex);
+    auto it = g_pendingMonthlyFetches.find(lowerUser);
+    if (it != g_pendingMonthlyFetches.end()) {
+      auto age = std::chrono::duration_cast<std::chrono::seconds>(now - it->second).count();
+      if (age < 10) {
+        if (!wait) {
+          return std::nullopt;
+        }
+      }
+    }
+    g_pendingMonthlyFetches[lowerUser] = now;
+  }
+
+  std::string url = "https://api.urchin.gg/v3/player/sessions/monthly?player=" + player;
+
+  if (wait) {
+    std::string body;
+    bool ok = false;
+    int maxRetries = 3;
+    for (int attempt = 0; attempt < maxRetries; ++attempt) {
+      ok = Http::get(url, body, "X-API-Key", apiKey);
+      if (body.find("Rate limit exceeded") != std::string::npos ||
+          body.find("rate limit") != std::string::npos ||
+          body.find("429") != std::string::npos) {
+        if (attempt < maxRetries - 1) {
+          std::this_thread::sleep_for(std::chrono::seconds(2));
+          continue;
+        }
+      }
+      break;
+    }
+
+    MonthlyStats result;
+    bool parsed = ok && parseMonthlyResponse(body, result);
+
+    {
+      std::lock_guard<std::mutex> lock(g_monthlyCacheMutex);
+      pruneMonthlyCacheLocked();
+      g_monthlyCache[lowerUser] = {result, std::chrono::steady_clock::now()};
+    }
+    {
+      std::lock_guard<std::mutex> lock(g_pendingMonthlyMutex);
+      g_pendingMonthlyFetches.erase(lowerUser);
+    }
+
+    if (parsed) {
+      Logger::tagDebug("[Urchin] Monthly stats success for '%s': FK=%d, FD=%d, FKDR=%.2f", player.c_str(), result.finalKills, result.finalDeaths, result.fkdr);
+      return result;
+    }
+    return std::nullopt;
+  }
+
+  ThreadTracker::increment();
+  if (ThreadTracker::g_activeThreads.load() > 12) {
+    ThreadTracker::decrement();
+    std::lock_guard<std::mutex> lock(g_pendingMonthlyMutex);
+    g_pendingMonthlyFetches.erase(lowerUser);
+    return std::nullopt;
+  }
+
+  std::thread([player, lowerUser, url, apiKey]() {
+    SafeGuard::installSehTranslator();
+    SafeGuard::run("Urchin::monthlyWorker", [&]() {
+      if (ThreadTracker::shouldStop()) return;
+      std::string body;
+      bool ok = false;
+      int maxRetries = 3;
+      for (int attempt = 0; attempt < maxRetries; ++attempt) {
+        if (ThreadTracker::shouldStop()) return;
+        ok = Http::get(url, body, "X-API-Key", apiKey);
+        if (body.find("Rate limit exceeded") != std::string::npos ||
+            body.find("rate limit") != std::string::npos ||
+            body.find("429") != std::string::npos) {
+          if (attempt < maxRetries - 1) {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            continue;
+          }
+        }
+        break;
+      }
+
+      MonthlyStats result;
+      bool parsed = ok && parseMonthlyResponse(body, result);
+
+      {
+        std::lock_guard<std::mutex> lock(g_monthlyCacheMutex);
+        pruneMonthlyCacheLocked();
+        g_monthlyCache[lowerUser] = {result, std::chrono::steady_clock::now()};
+      }
+      {
+        std::lock_guard<std::mutex> lock(g_pendingMonthlyMutex);
+        g_pendingMonthlyFetches.erase(lowerUser);
+      }
+      if (parsed) {
+        Logger::tagDebug("[Urchin] Async monthly stats success for '%s': FK=%d, FD=%d, FKDR=%.2f", player.c_str(), result.finalKills, result.finalDeaths, result.fkdr);
+      }
+    });
+    ThreadTracker::decrement();
+  }).detach();
+
+  return std::nullopt;
+}
+
+void clearMonthlyCache() {
+  std::lock_guard<std::mutex> lock(g_monthlyCacheMutex);
+  g_monthlyCache.clear();
+}
+
 void clearCache() {
-  std::lock_guard<std::mutex> lock(g_cacheMutex);
-  g_cache.clear();
+  {
+    std::lock_guard<std::mutex> lock(g_cacheMutex);
+    g_cache.clear();
+  }
+  clearMonthlyCache();
 }
 
 bool hasAnyTags(const std::string &username) {

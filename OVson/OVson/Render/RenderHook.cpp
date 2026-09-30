@@ -14,12 +14,23 @@
 #include "../Utils/Watchdog.h"
 #include "BetterTab.h"
 #include "../ClickGUI/ClickGUI.h"
+#include "BedwarsOverlay.h"
+#include "MediaOverlay.h"
+#include "../Logic/MediaSession.h"
+#include "../Logic/Bedwars/BedwarsRuntime.h"
+#include "../Logic/Bedwars/BedwarsConfig.h"
+#include "../Logic/NickRoll/NickRollRuntime.h"
+#include "../Logic/PreventBowDrop.h"
 #include "DefenseRenderer.h"
 #include "NameTagRenderer.h"
 #include "NotificationManager.h"
 #include "StatsOverlay.h"
+#include "../Plugins/EventDispatcher.h"
+#include "../Plugins/PluginLoader.h"
 #include "TechOverlay.h"
 #include "Shader.h"
+#include "../Services/IrcService.h"
+#include <cstring>
 #include <fstream>
 #include <functional>
 #include "GL.h"
@@ -67,7 +78,12 @@ static jfieldID g_tabKeyCodeFid = nullptr;
 
 static int getPlayerListVK() {
   static bool s_logged = false;
-  static ULONGLONG s_last = 0;
+  static ULONGLONG s_lastFast = 0;  // throttle for fast GetIntField path
+  static ULONGLONG s_lastSlow = 0;  // throttle for heavy JVMTI discovery path
+
+  ULONGLONG now = GetTickCount64();
+  if (now - s_lastFast < 1000) return g_tabVK;
+  s_lastFast = now;
   
   JNIEnv *env = lc ? lc->getEnv() : nullptr;
   if (!env) return g_tabVK;
@@ -85,9 +101,8 @@ static int getPlayerListVK() {
     }
   }
 
-  ULONGLONG now = GetTickCount64();
-  if (now - s_last < 3000) return g_tabVK;
-  s_last = now;
+  if (now - s_lastSlow < 3000) return g_tabVK;
+  s_lastSlow = now;
 
   #define TABLOG(...) do { if (!s_logged) Logger::info(__VA_ARGS__); } while(0)
 
@@ -283,11 +298,33 @@ static wglSwapBuffers_t originalSwapBuffers = nullptr;
 typedef BOOL(WINAPI* SetCursorPos_t)(int, int);
 static SetCursorPos_t originalSetCursorPos = nullptr;
 
+struct HookedTarget {
+  LPVOID address = nullptr;
+  unsigned char prologue[16] = {};
+  bool valid = false;
+};
+
+static HookedTarget g_swapTarget;
+static HookedTarget g_cursorTarget;
+static std::atomic<bool> g_mustStayLoaded{false};
+
+static void snapshotPrologue(HookedTarget &target, LPVOID address) {
+  if (!address) return;
+  target.address = address;
+  memcpy(target.prologue, address, sizeof(target.prologue));
+  target.valid = true;
+}
+
+static bool prologueStillOurs(const HookedTarget &target) {
+  if (!target.valid || !target.address) return true;
+  return memcmp(target.address, target.prologue, sizeof(target.prologue)) == 0;
+}
+
 BOOL WINAPI hookedSetCursorPos(int X, int Y) {
   if (Config::isRawMouseFixEnabled()) {
     POINT pt;
     if (GetCursorPos(&pt) && pt.x == X && pt.y == Y) {
-      return TRUE; // Bypass redundant SetCursorPos calls
+      return TRUE;
     }
   }
   return originalSetCursorPos(X, Y);
@@ -492,8 +529,16 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT uMsg, WPARAM wParam,
       }
     }
 
+    if (uMsg == WM_KEYDOWN && !OVson::isChatOpen() && !Render::ClickGUI::isOpen()) {
+      if (PreventBowDrop::shouldBlockDropKey((int)wParam)) {
+        consume = true;
+        return;
+      }
+    }
+
     if (uMsg == WM_KEYDOWN && (int)wParam == g_tabVK) {
-      if (Config::isBetterTabModeEnabled() && OVson::isInHypixelGame() &&
+      if (Config::isBetterTabModeEnabled() &&
+          (OVson::isInHypixelGame() || OVson::isInReplay()) &&
           !OVson::isInPreGameLobby() && !OVson::isChatOpen()) {
         consume = true;
         return;
@@ -505,6 +550,33 @@ LRESULT CALLBACK hookedWndProc(HWND hwnd, UINT uMsg, WPARAM wParam,
         if (OVson::handleEnterKeyPress()) {
           consume = true;
           return;
+        }
+      }
+    }
+
+    if (PluginLoader::hasPlugins()) {
+      if (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) {
+        EventDispatcher::postKeyEvent("", (int)wParam, true, false);
+      } else if (uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP) {
+        EventDispatcher::postKeyEvent("", (int)wParam, false, false);
+      } else if (uMsg >= WM_MOUSEFIRST && uMsg <= WM_MOUSELAST) {
+        int button = -1;
+        bool pressed = false;
+        if (uMsg == WM_LBUTTONDOWN) { button = 0; pressed = true; }
+        else if (uMsg == WM_LBUTTONUP) { button = 0; pressed = false; }
+        else if (uMsg == WM_RBUTTONDOWN) { button = 1; pressed = true; }
+        else if (uMsg == WM_RBUTTONUP) { button = 1; pressed = false; }
+        else if (uMsg == WM_MBUTTONDOWN) { button = 2; pressed = true; }
+        else if (uMsg == WM_MBUTTONUP) { button = 2; pressed = false; }
+        
+        int x = (short)LOWORD(lParam);
+        int y = (short)HIWORD(lParam);
+        int scroll = (uMsg == WM_MOUSEWHEEL) ? GET_WHEEL_DELTA_WPARAM(wParam) : 0;
+        
+        if (button != -1 || scroll != 0) {
+          if (EventDispatcher::postMouseEvent(button, pressed, x, y, scroll)) {
+              consume = true;
+          }
         }
       }
     }
@@ -529,7 +601,10 @@ static void renderOverlayWorkBody(HDC hdc) {
   HWND currentHwnd = WindowFromDC(hdc);
   if (currentHwnd && IsWindow(currentHwnd) && currentHwnd != g_gameHwnd) {
     if (g_gameHwnd && IsWindow(g_gameHwnd) && originalWndProc) {
-      SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC, (LONG_PTR)originalWndProc);
+      if (GetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC) ==
+          (LONG_PTR)hookedWndProc) {
+        SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC, (LONG_PTR)originalWndProc);
+      }
     }
     g_gameHwnd = currentHwnd;
     originalWndProc = (WNDPROC)SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC,
@@ -793,8 +868,82 @@ static void renderOverlayWorkBody(HDC hdc) {
       }
     }
     for (auto &task : drained) {
-      runSubsystem("RenderHook::queuedTask", [&]() { task(); });
+      runSubsystem("RenderHook::queuedTask", [&]() {
+        try {
+          if (task) task();
+        } catch (...) {}
+      });
     }
+  }
+
+  runSubsystem("BedwarsRuntime::tick", []() {
+    OVson::Bedwars::Runtime::instance().tick();
+  });
+
+  runSubsystem("NickRoll::tick", []() { OVson::NickRoll::tick(); });
+
+  runSubsystem("IrcService::nameRefreshTick", []() {
+    if (!Config::isIrcEnabled()) return;
+    JNIEnv *env = lc ? lc->getEnv() : nullptr;
+    if (!env) return;
+
+    static jobject s_lastWorldRef = nullptr;
+    static ULONGLONG s_lastPeriodicCheck = 0;
+    static int s_worldChangePendingChecks = 0;
+    ULONGLONG now = GetTickCount64();
+
+    jobject curWorld = Mc::theWorld(env);
+    bool worldChanged = false;
+
+    if (curWorld != nullptr) {
+      if (s_lastWorldRef == nullptr || !env->IsSameObject(s_lastWorldRef, curWorld)) {
+        worldChanged = true;
+        if (s_lastWorldRef) {
+          env->DeleteGlobalRef(s_lastWorldRef);
+          s_lastWorldRef = nullptr;
+        }
+        s_lastWorldRef = env->NewGlobalRef(curWorld);
+        s_worldChangePendingChecks = 5;
+      }
+      env->DeleteLocalRef(curWorld);
+    } else {
+      if (s_lastWorldRef) {
+        env->DeleteGlobalRef(s_lastWorldRef);
+        s_lastWorldRef = nullptr;
+      }
+    }
+
+    if (worldChanged || s_worldChangePendingChecks > 0) {
+      if (s_worldChangePendingChecks > 0) s_worldChangePendingChecks--;
+      IrcService::checkPlayerNameRefresh(true);
+      s_lastPeriodicCheck = now;
+    } else if (s_lastPeriodicCheck == 0 || (now - s_lastPeriodicCheck >= 60000)) {
+      IrcService::checkPlayerNameRefresh(false);
+      s_lastPeriodicCheck = now;
+    }
+  });
+
+  if (Config::isMediaOverlayEnabled()) {
+    runSubsystem("MediaOverlay::render", [hdc]() {
+      GLint vp[4]{};
+      glGetIntegerv(GL_VIEWPORT, vp);
+      Render::MediaOverlay::render(hdc, vp[2], vp[3]);
+    });
+  }
+
+  if (OVson::Bedwars::Configuration::isMasterEnabled() && !OVson::isInPreGameLobby() && OVson::isInHypixelGame()) {
+    runSubsystem("BedwarsOverlay::render", [hdc]() {
+      GLint vp[4];
+      glGetIntegerv(GL_VIEWPORT, vp);
+      Render::BedwarsOverlay::render(hdc, vp[2], vp[3]);
+    });
+  }
+  
+  if (PluginLoader::hasPlugins()) {
+    runSubsystem("EventDispatcher::postRender2DEvent", []() {
+      EventDispatcher::postRender2DEvent(1.0f);
+      EventDispatcher::postTickEvent();
+    });
   }
 
   runSubsystem("ClickGUI::render", [hdc]() {
@@ -814,10 +963,10 @@ BOOL WINAPI hookedSwapBuffers(HDC hdc) {
   FlagReleaser _releaser(&s_inHook);
 
   HookGuard guard;
-  Watchdog::tickFrame();
   if (g_unloading) {
     return originalSwapBuffers(hdc);
   }
+  Watchdog::tickFrame();
 
   SafeGuard::installSehTranslator();
 
@@ -832,7 +981,7 @@ BOOL WINAPI hookedSwapBuffers(HDC hdc) {
 
   JNIEnv *env = (lc ? lc->getEnv() : nullptr);
   bool framePushed = false;
-  if (env && env->PushLocalFrame(128) == 0) {
+  if (env && env->PushLocalFrame(256) == 0) {
     framePushed = true;
   }
 
@@ -900,13 +1049,16 @@ bool RenderHook::install() {
     return false;
   }
   writeDebugLog("wglSwapBuffers hooked successfully!");
-  
+  snapshotPrologue(g_swapTarget, (LPVOID)pSwapBuffers);
+
   HMODULE hUser32 = GetModuleHandleA("user32.dll");
   if (hUser32) {
     FARPROC pSetCursorPos = GetProcAddress(hUser32, "SetCursorPos");
     if (pSetCursorPos) {
       if (pMH_CreateHook(pSetCursorPos, &hookedSetCursorPos, reinterpret_cast<LPVOID*>(&originalSetCursorPos)) == MH_OK) {
-        pMH_EnableHook(pSetCursorPos);
+        if (pMH_EnableHook(pSetCursorPos) == MH_OK) {
+          snapshotPrologue(g_cursorTarget, (LPVOID)pSetCursorPos);
+        }
         writeDebugLog("SetCursorPos hooked successfully!");
       }
     }
@@ -937,8 +1089,17 @@ void RenderHook::uninstall() {
     g_unloading = true;
 
     if (g_gameHwnd && IsWindow(g_gameHwnd) && originalWndProc) {
-      SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC, (LONG_PTR)originalWndProc);
-      writeDebugLog("WndProc restored");
+      if (GetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC) ==
+          (LONG_PTR)hookedWndProc) {
+        SetWindowLongPtr(g_gameHwnd, GWLP_WNDPROC, (LONG_PTR)originalWndProc);
+        writeDebugLog("WndProc restored");
+      } else {
+        g_mustStayLoaded.store(true);
+        Logger::info("RenderHook: another module subclassed the window after "
+                     "us -- leaving the WndProc chain intact so it keeps "
+                     "working.");
+        writeDebugLog("WndProc NOT restored (foreign subclass on top)");
+      }
     }
 
     for (int i = 0; i < 3; ++i) {
@@ -963,9 +1124,22 @@ void RenderHook::uninstall() {
           "WARNING: hook threads did NOT drain in 30s — skipping MinHook "
           "free to avoid a freed-trampoline crash. The DLL will leak; "
           "process exit will clean it up.");
+      g_mustStayLoaded.store(true);
     }
 
-    if (drained) {
+    const bool swapStillOurs = prologueStillOurs(g_swapTarget);
+    const bool cursorStillOurs = prologueStillOurs(g_cursorTarget);
+    const bool hooksStillOurs = swapStillOurs && cursorStillOurs;
+    if (!hooksStillOurs) {
+      g_mustStayLoaded.store(true);
+      Logger::info("RenderHook: another module hooked %s after us -- leaving "
+                   "MinHook installed so its hook and trampoline stay valid.",
+                   swapStillOurs ? "SetCursorPos" : "wglSwapBuffers");
+      writeDebugLog("MinHook NOT removed (foreign hook stacked on top)");
+    }
+
+    const bool safeToRemoveHooks = drained && hooksStillOurs;
+    if (safeToRemoveHooks) {
       if (pMH_DisableHook) {
         pMH_DisableHook(MH_ALL_HOOKS);
         writeDebugLog("MinHook disabled");
@@ -978,7 +1152,7 @@ void RenderHook::uninstall() {
 
     g_hookInstalled = false;
 
-    if (drained && g_MinHookModule) {
+    if (safeToRemoveHooks && g_MinHookModule) {
       FreeLibrary(g_MinHookModule);
       g_MinHookModule = nullptr;
       writeDebugLog("MinHook.x64.dll unloaded");
@@ -987,13 +1161,25 @@ void RenderHook::uninstall() {
 
   StatsOverlay::shutdown();
   Render::TechOverlay::shutdown();
+  Render::BedwarsOverlay::shutdown();
+  Render::MediaOverlay::shutdown();
+  OVson::Media::shutdown();
+  BetterTab::shutdown();
 }
+
+bool RenderHook::mustStayLoaded() { return g_mustStayLoaded.load(); }
+
+void *RenderHook::gameWindowHandle() { return (void *)g_gameHwnd; }
 
 void RenderHook::poll() {
   if (g_suppressVanillaTab.load()) suppressVanillaTab();
 }
 
 void RenderHook::enqueueTask(std::function<void()> task) {
+  if (g_unloading.load()) return;
   std::lock_guard<std::mutex> lock(g_queueMutex);
+  if (g_taskQueue.size() >= 512) {
+    g_taskQueue.pop();
+  }
   g_taskQueue.push(task);
 }

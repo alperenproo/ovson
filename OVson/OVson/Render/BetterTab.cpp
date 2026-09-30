@@ -12,6 +12,8 @@
 #include "../Utils/Anticheat/Anticheat.h"
 #include "../ClickGUI/ClickGUI.h"
 #include "../ClickGUI/Helpers.h"
+#include "../ClickGUI/Theme.h"
+#include "RenderUtils.h"
 #include "../Utils/SensitivityFix.h"
 #include <GL/gl.h>
 #include <algorithm>
@@ -42,6 +44,136 @@ static float g_lastScaleFactor = 2.0f;
 static float g_lastScaledWidth = 1920.0f;
 static float g_lastScaledHeight = 1080.0f;
 
+static bool g_draggingColorSv = false;
+static bool g_draggingColorHue = false;
+static bool g_draggingAlpha = false;
+static bool g_draggingPanel = false;
+static float g_panelDragOffsetX = 0.0f;
+static float g_panelDragOffsetY = 0.0f;
+static float g_customPanelX = -1.0f;
+static float g_customPanelY = -1.0f;
+static float g_colorHue = 0.0f;
+static float g_colorSat = 0.0f;
+static float g_colorVal = 0.0f;
+static bool g_colorHsvInit = false;
+
+static uint32_t hsvToColor(float hue, float saturation, float value) {
+  const float c = value * saturation;
+  const float hPrime = std::fmod(hue * 6.0f, 6.0f);
+  const float x = c * (1.0f - std::abs(std::fmod(hPrime, 2.0f) - 1.0f));
+  float r = 0, g = 0, b = 0;
+  int sector = static_cast<int>(hPrime);
+  switch (sector) {
+  case 0: r = c; g = x; b = 0; break;
+  case 1: r = x; g = c; b = 0; break;
+  case 2: r = 0; g = c; b = x; break;
+  case 3: r = 0; g = x; b = c; break;
+  case 4: r = x; g = 0; b = c; break;
+  default: r = c; g = 0; b = x; break;
+  }
+  const float m = value - c;
+  r += m; g += m; b += m;
+  return 0xFF000000u |
+         (static_cast<uint32_t>(std::clamp(r, 0.0f, 1.0f) * 255.0f + 0.5f) << 16) |
+         (static_cast<uint32_t>(std::clamp(g, 0.0f, 1.0f) * 255.0f + 0.5f) << 8) |
+         static_cast<uint32_t>(std::clamp(b, 0.0f, 1.0f) * 255.0f + 0.5f);
+}
+
+static void colorToHsv(uint32_t color, float &hue, float &saturation, float &value) {
+  const float r = ((color >> 16) & 0xFF) / 255.0f;
+  const float g = ((color >> 8) & 0xFF) / 255.0f;
+  const float b = (color & 0xFF) / 255.0f;
+  const float maximum = (std::max)({r, g, b});
+  const float minimum = (std::min)({r, g, b});
+  const float delta = maximum - minimum;
+  value = maximum;
+  saturation = maximum > 0.0f ? delta / maximum : 0.0f;
+  hue = 0.0f;
+  if (delta > 0.0001f) {
+    if (maximum == r)
+      hue = std::fmod((g - b) / delta, 6.0f);
+    else if (maximum == g)
+      hue = (b - r) / delta + 2.0f;
+    else
+      hue = (r - g) / delta + 4.0f;
+    hue /= 6.0f;
+    if (hue < 0.0f) hue += 1.0f;
+  }
+}
+
+struct CustomizePanelLayout {
+  float panelX = 0, panelY = 0;
+  float panelW = 250.0f, panelH = 196.0f;
+  float headerH = 24.0f;
+  float svX = 0, svY = 0, svW = 226.0f, svH = 56.0f;
+  float hueX = 0, hueY = 0, hueW = 226.0f, hueH = 8.0f;
+  float preX = 0, preY = 0, preW = 18.0f, preH = 15.0f, preGap = 4.0f;
+  float hexX = 0, hexY = 0, hexW = 66.0f, hexH = 15.0f;
+  float opacLabelY = 0;
+  float slX = 0, slY = 0, slW = 226.0f, slH = 6.0f;
+  float btnY = 0, btnH = 22.0f;
+  float rBtnX = 0, rBtnW = 96.0f;
+  float dBtnX = 0, dBtnW = 122.0f;
+};
+
+static CustomizePanelLayout getPanelLayout(float scaledWidth, float scaledHeight,
+                                           float startX, float startY,
+                                           float scaledBoxW, float scaledBoxH) {
+  CustomizePanelLayout l;
+  l.panelW = 250.0f;
+  l.panelH = 196.0f;
+
+  if (g_customPanelX < 0.0f || g_customPanelY < 0.0f) {
+    // Default: centered horizontally, docked to bottom of screen
+    l.panelX = std::floor((scaledWidth - l.panelW) / 2.0f);
+    l.panelY = std::clamp(scaledHeight - l.panelH - 12.0f, 8.0f, (std::max)(8.0f, scaledHeight - l.panelH - 8.0f));
+    g_customPanelX = l.panelX;
+    g_customPanelY = l.panelY;
+  } else {
+    l.panelX = std::clamp(g_customPanelX, 0.0f, (std::max)(0.0f, scaledWidth - l.panelW));
+    l.panelY = std::clamp(g_customPanelY, 0.0f, (std::max)(0.0f, scaledHeight - l.panelH));
+    g_customPanelX = l.panelX;
+    g_customPanelY = l.panelY;
+  }
+
+  l.headerH = 24.0f;
+  l.svX = l.panelX + 12.0f;
+  l.svY = l.panelY + 30.0f;
+  l.svW = l.panelW - 24.0f;
+  l.svH = 56.0f;
+
+  l.hueX = l.svX;
+  l.hueY = l.svY + l.svH + 7.0f;
+  l.hueW = l.svW;
+  l.hueH = 8.0f;
+
+  l.preX = l.svX;
+  l.preY = l.hueY + l.hueH + 7.0f;
+  l.preW = 18.0f;
+  l.preH = 15.0f;
+  l.preGap = 4.0f;
+
+  l.hexW = 66.0f;
+  l.hexH = 15.0f;
+  l.hexX = l.svX + l.svW - l.hexW;
+  l.hexY = l.preY;
+
+  l.opacLabelY = l.preY + l.preH + 8.0f;
+  l.slX = l.svX;
+  l.slY = l.opacLabelY + 12.0f;
+  l.slW = l.svW;
+  l.slH = 6.0f;
+
+  l.btnY = l.slY + l.slH + 11.0f;
+  l.btnH = 22.0f;
+  l.rBtnX = l.svX;
+  l.rBtnW = 96.0f;
+  l.dBtnX = l.rBtnX + l.rBtnW + 8.0f;
+  l.dBtnW = l.svW - l.rBtnW - 8.0f;
+
+  return l;
+}
+
 bool isResizeMode() { return g_resizeMode; }
 void setResizeMode(bool resize) { 
   if (g_resizeMode == resize) return;
@@ -51,9 +183,21 @@ void setResizeMode(bool resize) {
     FocusFix::setIngameFocus(false);
     Render::ClickGUIHelpers::setMouseGrabbed(false);
     ShowCursor(TRUE);
+    g_customPanelX = -1.0f;
+    g_customPanelY = -1.0f;
+    g_draggingPanel = false;
+    g_draggingColorSv = false;
+    g_draggingColorHue = false;
+    g_draggingAlpha = false;
+    colorToHsv(Config::getBetterTabBgColor(), g_colorHue, g_colorSat, g_colorVal);
+    g_colorHsvInit = true;
   } else {
     g_resizingTab = false;
     g_draggingTab = false;
+    g_draggingPanel = false;
+    g_draggingColorSv = false;
+    g_draggingColorHue = false;
+    g_draggingAlpha = false;
     Config::saveNow();
 
     FocusFix::setIngameFocus(true);
@@ -94,39 +238,90 @@ void handleMouseClick(int btn, int state, int x, int y) {
   float scaledBoxW = g_currentBoxWidth  * scale;
   float scaledBoxH = g_currentBoxHeight * scale;
 
-  if (state == 1) { // mouse down
-    float doneBtnW = 50.0f, doneBtnH = 16.0f;
-    float btnGap = 6.0f;
-    float resetBtnW = 50.0f, resetBtnH = 16.0f;
-    float totalW = doneBtnW + btnGap + resetBtnW;
-    float doneBtnX = startX + scaledBoxW / 2.0f - totalW / 2.0f;
-    float doneBtnY = startY + scaledBoxH + 14.0f;
-    float resetBtnX = doneBtnX + doneBtnW + btnGap;
-    float resetBtnY = doneBtnY;
+  auto l = getPanelLayout(g_lastScaledWidth, g_lastScaledHeight, startX, startY, scaledBoxW, scaledBoxH);
 
-    if (mx >= doneBtnX && mx <= doneBtnX + doneBtnW &&
-        my >= doneBtnY && my <= doneBtnY + doneBtnH) {
-      setResizeMode(false);
+  if (state == 1) { // mouse down
+    if (mx >= l.panelX && mx <= l.panelX + l.panelW &&
+        my >= l.panelY && my <= l.panelY + l.panelH) {
+
+      if (mx >= l.dBtnX && mx <= l.dBtnX + l.dBtnW && my >= l.btnY && my <= l.btnY + l.btnH) {
+        setResizeMode(false);
+        return;
+      }
+
+      if (mx >= l.rBtnX && mx <= l.rBtnX + l.rBtnW && my >= l.btnY && my <= l.btnY + l.btnH) {
+        Config::setBetterTabScale(1.0f);
+        Config::setBetterTabX(-1.0f);
+        Config::setBetterTabY(-1.0f);
+        Config::setBetterTabBgColor(0x000000);
+        Config::setBetterTabBgAlpha(0.5f);
+        colorToHsv(0x000000, g_colorHue, g_colorSat, g_colorVal);
+        Config::saveNow();
+        return;
+      }
+
+      if (my >= l.panelY && my <= l.panelY + l.headerH) {
+        g_draggingPanel = true;
+        g_panelDragOffsetX = mx - l.panelX;
+        g_panelDragOffsetY = my - l.panelY;
+        return;
+      }
+
+      const DWORD presets[7] = {
+        0x000000, 0x0B1220, 0x180D26, 0x240A0A, 0x082218, 0x1A1D24,
+        (DWORD)(Render::ClickGUITheme::accent() & 0xFFFFFF)
+      };
+      for (int i = 0; i < 7; ++i) {
+        float px = l.preX + i * (l.preW + l.preGap);
+        if (mx >= px && mx <= px + l.preW && my >= l.preY && my <= l.preY + l.preH) {
+          Config::setBetterTabBgColor(presets[i]);
+          colorToHsv(presets[i], g_colorHue, g_colorSat, g_colorVal);
+          Config::saveNow();
+          return;
+        }
+      }
+
+      if (mx >= l.svX && mx <= l.svX + l.svW && my >= l.svY && my <= l.svY + l.svH) {
+        g_draggingColorSv = true;
+        g_colorSat = std::clamp((mx - l.svX) / l.svW, 0.0f, 1.0f);
+        g_colorVal = std::clamp(1.0f - (my - l.svY) / l.svH, 0.0f, 1.0f);
+        DWORD col = hsvToColor(g_colorHue, g_colorSat, g_colorVal) & 0xFFFFFF;
+        Config::setBetterTabBgColor(col);
+        return;
+      }
+
+      if (mx >= l.hueX && mx <= l.hueX + l.hueW && my >= l.hueY - 3.0f && my <= l.hueY + l.hueH + 3.0f) {
+        g_draggingColorHue = true;
+        g_colorHue = std::clamp((mx - l.hueX) / l.hueW, 0.0f, 0.9999f);
+        DWORD col = hsvToColor(g_colorHue, g_colorSat, g_colorVal) & 0xFFFFFF;
+        Config::setBetterTabBgColor(col);
+        return;
+      }
+
+      if (mx >= l.slX && mx <= l.slX + l.slW && my >= l.slY - 5.0f && my <= l.slY + l.slH + 5.0f) {
+        g_draggingAlpha = true;
+        float newAlpha = std::clamp((mx - l.slX) / l.slW, 0.0f, 1.0f);
+        Config::setBetterTabBgAlpha(newAlpha);
+        return;
+      }
+
       return;
     }
-    if (mx >= resetBtnX && mx <= resetBtnX + resetBtnW &&
-        my >= resetBtnY && my <= resetBtnY + resetBtnH) {
-      Config::setBetterTabX(-1.0f);
-      Config::setBetterTabY(-1.0f);
-      Config::setBetterTabScale(1.0f);
-      Config::saveNow();
-      return;
-    }
+
     float hs = g_hoverScaleSize;
     int corner = hitTestCorner(mx, my, startX, startY, scaledBoxW, scaledBoxH, hs);
     if (corner >= 0) {
       g_resizingTab = true;
     }
   } else { // mouse up
-    if (g_resizingTab) {
+    if (g_resizingTab || g_draggingColorSv || g_draggingColorHue || g_draggingAlpha || g_draggingPanel) {
       Config::saveNow();
     }
     g_resizingTab = false;
+    g_draggingColorSv = false;
+    g_draggingColorHue = false;
+    g_draggingAlpha = false;
+    g_draggingPanel = false;
   }
 }
 
@@ -142,6 +337,35 @@ void handleMouseMove(int x, int y) {
   float scale  = Config::getBetterTabScale();
   float scaledBoxW = g_currentBoxWidth  * scale;
   float scaledBoxH = g_currentBoxHeight * scale;
+
+  auto l = getPanelLayout(g_lastScaledWidth, g_lastScaledHeight, startX, startY, scaledBoxW, scaledBoxH);
+
+  if (g_draggingPanel) {
+    g_customPanelX = std::clamp(mx - g_panelDragOffsetX, 0.0f, (std::max)(0.0f, g_lastScaledWidth - l.panelW));
+    g_customPanelY = std::clamp(my - g_panelDragOffsetY, 0.0f, (std::max)(0.0f, g_lastScaledHeight - l.panelH));
+    return;
+  }
+
+  if (g_draggingColorSv) {
+    g_colorSat = std::clamp((mx - l.svX) / l.svW, 0.0f, 1.0f);
+    g_colorVal = std::clamp(1.0f - (my - l.svY) / l.svH, 0.0f, 1.0f);
+    DWORD col = hsvToColor(g_colorHue, g_colorSat, g_colorVal) & 0xFFFFFF;
+    Config::setBetterTabBgColor(col);
+    return;
+  }
+
+  if (g_draggingColorHue) {
+    g_colorHue = std::clamp((mx - l.hueX) / l.hueW, 0.0f, 0.9999f);
+    DWORD col = hsvToColor(g_colorHue, g_colorSat, g_colorVal) & 0xFFFFFF;
+    Config::setBetterTabBgColor(col);
+    return;
+  }
+
+  if (g_draggingAlpha) {
+    float newAlpha = std::clamp((mx - l.slX) / l.slW, 0.0f, 1.0f);
+    Config::setBetterTabBgAlpha(newAlpha);
+    return;
+  }
 
   if (g_resizingTab) {
     float centerX = startX + scaledBoxW / 2.0f;
@@ -173,6 +397,7 @@ struct JCache {
   jmethodID m_srCtor = nullptr;
   jmethodID m_srGetScaleFactor = nullptr;
   jfieldID f_fontRenderer = nullptr;
+  jfieldID f_locationFontTexture = nullptr;
   jmethodID m_drawString = nullptr;
   jmethodID m_getStringWidth = nullptr;
   jfieldID f_theWorld = nullptr;
@@ -263,6 +488,15 @@ static void ensureFontMethods(JNIEnv *env) {
       env->ExceptionClear();
   }
   if (fontCls) {
+    g_jc.f_locationFontTexture =
+        lc->GetFieldID(fontCls, "locationFontTexture",
+                       "Lnet/minecraft/util/ResourceLocation;",
+                       "field_111273_g", "g", "Ljy;");
+    if (!g_jc.f_locationFontTexture) {
+      g_jc.f_locationFontTexture = lc->FindFieldBySignature(fontCls, "Ljy;");
+      if (env->ExceptionCheck())
+        env->ExceptionClear();
+    }
     g_jc.m_drawString =
         lc->GetMethodID(fontCls, "drawStringWithShadow",
                         "(Ljava/lang/String;FFI)I", "func_175063_a", "a");
@@ -313,20 +547,84 @@ static void ensureMcFields(JNIEnv *env) {
       lc->GetFieldID(g_jc.mcCls, "gameSettings",
                      "Lnet/minecraft/client/settings/GameSettings;",
                      "field_71474_y", "t", "Lavh;");
-  g_jc.f_fontRenderer = lc->GetFieldID(
-      g_jc.mcCls, "fontRendererObj", "Lnet/minecraft/client/gui/FontRenderer;",
-      "field_71466_p", "q", "Lavn;");
-  if (g_jc.f_fontRenderer)
-    logDiagnostic("Found fontRendererObj");
-  else
-    logDiagnostic("fontRendererObj NOT found, trying signature...");
-  if (!g_jc.f_fontRenderer)
-    g_jc.f_fontRenderer = lc->FindFieldBySignature(
-        g_jc.mcCls, "Lnet/minecraft/client/gui/FontRenderer;");
-  if (!g_jc.f_fontRenderer)
-    g_jc.f_fontRenderer = lc->FindFieldBySignature(g_jc.mcCls, "Lavn;");
-  if (g_jc.f_fontRenderer)
-    logDiagnostic("fontRendererObj resolved via signature");
+  g_jc.f_fontRenderer = nullptr;
+  const char *frNames[] = {"fontRendererObj", "fontRenderer", "field_71466_p", "l"};
+  const char *frSigs[] = {"Lnet/minecraft/client/gui/FontRenderer;", "Lavn;"};
+
+  jobject mcObj = nullptr;
+  if (g_jc.f_theMc) {
+    mcObj = env->GetStaticObjectField(g_jc.mcCls, g_jc.f_theMc);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); mcObj = nullptr; }
+  }
+  if (!mcObj) {
+    jmethodID m_getMc = lc->GetStaticMethodID(g_jc.mcCls, "getMinecraft", "()Lnet/minecraft/client/Minecraft;", "func_71410_x", "A", "()Lave;");
+    if (m_getMc) {
+      mcObj = env->CallStaticObjectMethod(g_jc.mcCls, m_getMc);
+      if (env->ExceptionCheck()) { env->ExceptionClear(); mcObj = nullptr; }
+    }
+  }
+
+  for (const char *fn : frNames) {
+    for (const char *fs : frSigs) {
+      jfieldID fid = env->GetFieldID(g_jc.mcCls, fn, fs);
+      if (fid) {
+        if (mcObj) {
+          jobject testFr = env->GetObjectField(mcObj, fid);
+          if (testFr) {
+            if (!Lunar::isSGAFontRenderer(env, testFr)) {
+              g_jc.f_fontRenderer = fid;
+            }
+            env->DeleteLocalRef(testFr);
+          } else {
+            g_jc.f_fontRenderer = fid;
+          }
+        } else {
+          g_jc.f_fontRenderer = fid;
+        }
+        if (g_jc.f_fontRenderer) break;
+      }
+      if (env->ExceptionCheck()) env->ExceptionClear();
+    }
+    if (g_jc.f_fontRenderer) break;
+  }
+  if (!g_jc.f_fontRenderer && lc && lc->jvmti) {
+    jint fCount = 0;
+    jfieldID *fList = nullptr;
+    if (lc->jvmti->GetClassFields(g_jc.mcCls, &fCount, &fList) == JVMTI_ERROR_NONE) {
+      for (int i = 0; i < fCount; i++) {
+        char *fn = nullptr, *fs = nullptr;
+        if (lc->jvmti->GetFieldName(g_jc.mcCls, fList[i], &fn, &fs, nullptr) == JVMTI_ERROR_NONE) {
+          if (fs && (std::strcmp(fs, "Lavn;") == 0 || std::strstr(fs, "FontRenderer;") != nullptr)) {
+            std::string nameStr = fn ? fn : "";
+            std::string lowerStr = nameStr;
+            for (char &c : lowerStr) c = (char)::tolower((unsigned char)c);
+            bool isSga = (lowerStr.find("galactic") != std::string::npos ||
+                          lowerStr.find("sga") != std::string::npos ||
+                          lowerStr.find("enchant") != std::string::npos ||
+                          nameStr == "q" || nameStr == "field_71464_q");
+            if (!isSga && mcObj) {
+              jobject testFr = env->GetObjectField(mcObj, fList[i]);
+              if (testFr) {
+                bool objIsSga = Lunar::isSGAFontRenderer(env, testFr);
+                env->DeleteLocalRef(testFr);
+                if (objIsSga) isSga = true;
+              }
+            }
+            if (!isSga) {
+              g_jc.f_fontRenderer = fList[i];
+              lc->jvmti->Deallocate((unsigned char*)fn);
+              lc->jvmti->Deallocate((unsigned char*)fs);
+              break;
+            }
+          }
+          if (fn) lc->jvmti->Deallocate((unsigned char*)fn);
+          if (fs) lc->jvmti->Deallocate((unsigned char*)fs);
+        }
+      }
+      if (fList) lc->jvmti->Deallocate((unsigned char*)fList);
+    }
+  }
+  if (mcObj) env->DeleteLocalRef(mcObj);
 
   g_jc.f_theWorld = lc->GetFieldID(
       g_jc.mcCls, "theWorld", "Lnet/minecraft/client/multiplayer/WorldClient;",
@@ -644,7 +942,7 @@ void init() {
 
 struct RenderCtx {
   JNIEnv *env = nullptr;
-  jobject mc = nullptr;           // local ref
+  jobject mc = nullptr;           // local ref (i dont beat my girl)
   jobject fontRenderer = nullptr; // local ref
   int guiScale = 0;
 };
@@ -696,7 +994,55 @@ static StringCacheEntry* getCachedString(RenderCtx &ctx, const std::string &text
   auto ins = g_widthCache.emplace(text, StringCacheEntry{w, globalJt, g_widthLru.begin()});
   return &ins.first->second;
 }
+
+static void clearStringCache(JNIEnv *env) {
+  if (env) {
+    for (auto &pair : g_widthCache) {
+      if (pair.second.jt) {
+        env->DeleteGlobalRef(pair.second.jt);
+      }
+    }
+  }
+  g_widthCache.clear();
+  g_widthLru.clear();
+}
 } // namespace
+
+static GLuint g_fontTextureId = 0;
+static jobject s_lastFontRenderer = nullptr;
+
+static void updateFontTexture(RenderCtx &ctx) {
+  if (!ctx.env || !ctx.mc || !ctx.fontRenderer || !g_jc.f_renderEngine || !g_jc.m_bindTexture || !g_jc.f_locationFontTexture)
+    return;
+
+  jobject loc = ctx.env->GetObjectField(ctx.fontRenderer, g_jc.f_locationFontTexture);
+  if (!loc) return;
+  jobject tm = ctx.env->GetObjectField(ctx.mc, g_jc.f_renderEngine);
+  if (tm) {
+    ctx.env->CallVoidMethod(tm, g_jc.m_bindTexture, loc);
+    if (ctx.env->ExceptionCheck()) {
+      ctx.env->ExceptionClear();
+    } else {
+      GLint bound = 0;
+      glGetIntegerv(GL_TEXTURE_BINDING_2D, &bound);
+      if (bound > 0) {
+        GLuint newId = static_cast<GLuint>(bound);
+        if (g_fontTextureId != 0 && newId != g_fontTextureId) {
+          clearStringCache(ctx.env);
+        }
+        g_fontTextureId = newId;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      }
+    }
+    ctx.env->DeleteLocalRef(tm);
+  }
+  ctx.env->DeleteLocalRef(loc);
+}
+
+static void bindFontTexture(RenderCtx &ctx) {
+  updateFontTexture(ctx);
+}
 
 static void drawString(RenderCtx &ctx, const std::string &text, float x,
                        float y, uint32_t color) {
@@ -704,6 +1050,15 @@ static void drawString(RenderCtx &ctx, const std::string &text, float x,
     return;
   StringCacheEntry* e = getCachedString(ctx, text);
   if (!e || !e->jt) return;
+
+  glEnable(GL_TEXTURE_2D);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glEnable(GL_ALPHA_TEST);
+  glAlphaFunc(GL_GREATER, 0.1f);
+  glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+  bindFontTexture(ctx);
+
   ctx.env->CallIntMethod(ctx.fontRenderer, g_jc.m_drawString, e->jt, x, y, (jint)color);
   if (ctx.env->ExceptionCheck())
     ctx.env->ExceptionClear();
@@ -1027,7 +1382,9 @@ static void drawHead(RenderCtx &ctx, jobject tm, jobject npi, GLuint glTexId,
   glVertex2f(x + size, y);
   glEnd();
 
-  if (prevTex > 0) {
+  if (g_fontTextureId != 0 && glIsTexture(g_fontTextureId)) {
+    glBindTexture(GL_TEXTURE_2D, g_fontTextureId);
+  } else if (prevTex > 0) {
     glBindTexture(GL_TEXTURE_2D, (GLuint)prevTex);
   }
 }
@@ -1142,6 +1499,334 @@ static ULONGLONG g_lastUpdate = 0;
 
 static bool s_rendering = false;
 
+static void renderCustomizePanel(RenderCtx &ctx, const CustomizePanelLayout &l, float scale) {
+  if (!g_draggingColorSv && !g_draggingColorHue) {
+    colorToHsv(Config::getBetterTabBgColor(), g_colorHue, g_colorSat, g_colorVal);
+  }
+
+  DWORD accentCol = Render::ClickGUITheme::accent();
+
+  auto resetGLState = []() {
+    glDisable(GL_LIGHTING);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_ALPHA_TEST);
+    glDisable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+  };
+
+  resetGLState();
+
+  glColor4f(0.08f, 0.09f, 0.12f, 0.96f);
+  glBegin(GL_QUADS);
+  glVertex2f(l.panelX, l.panelY);
+  glVertex2f(l.panelX + l.panelW, l.panelY);
+  glVertex2f(l.panelX + l.panelW, l.panelY + l.panelH);
+  glVertex2f(l.panelX, l.panelY + l.panelH);
+  glEnd();
+
+  glColor4f(0.24f, 0.28f, 0.36f, 1.0f);
+  glLineWidth(1.2f);
+  glBegin(GL_LINE_LOOP);
+  glVertex2f(l.panelX, l.panelY);
+  glVertex2f(l.panelX + l.panelW, l.panelY);
+  glVertex2f(l.panelX + l.panelW, l.panelY + l.panelH);
+  glVertex2f(l.panelX, l.panelY + l.panelH);
+  glEnd();
+
+  glColor4f(1.0f, 1.0f, 1.0f, 0.12f);
+  glLineWidth(1.0f);
+  glBegin(GL_LINES);
+  glVertex2f(l.panelX + 8.0f, l.panelY + l.headerH);
+  glVertex2f(l.panelX + l.panelW - 8.0f, l.panelY + l.headerH);
+  glEnd();
+
+  drawString(ctx, "\xC2\xA7" "fCustomize BetterTab", l.panelX + 10.0f, l.panelY + 6.0f, 0xFFFFFFFF);
+
+  char scaleBuf[32];
+  snprintf(scaleBuf, sizeof(scaleBuf), "\xC2\xA7" "7Scale: \xC2\xA7" "e%.2fx", scale);
+  int scW = measure(ctx, scaleBuf);
+  drawString(ctx, scaleBuf, l.panelX + l.panelW - scW - 10.0f, l.panelY + 6.0f, 0xFFFFFFFF);
+
+  resetGLState();
+
+  uint32_t hueColor = hsvToColor(g_colorHue, 1.0f, 1.0f);
+  float hueR = ((hueColor >> 16) & 0xFF) / 255.0f;
+  float hueG = ((hueColor >> 8) & 0xFF) / 255.0f;
+  float hueB = (hueColor & 0xFF) / 255.0f;
+
+  glShadeModel(GL_SMOOTH);
+  glBegin(GL_QUADS);
+  glColor4f(1.0f, 1.0f, 1.0f, 1.0f); glVertex2f(l.svX, l.svY);
+  glColor4f(hueR, hueG, hueB, 1.0f); glVertex2f(l.svX + l.svW, l.svY);
+  glColor4f(hueR, hueG, hueB, 1.0f); glVertex2f(l.svX + l.svW, l.svY + l.svH);
+  glColor4f(1.0f, 1.0f, 1.0f, 1.0f); glVertex2f(l.svX, l.svY + l.svH);
+  glEnd();
+
+  glBegin(GL_QUADS);
+  glColor4f(0.0f, 0.0f, 0.0f, 0.0f); glVertex2f(l.svX, l.svY);
+  glColor4f(0.0f, 0.0f, 0.0f, 0.0f); glVertex2f(l.svX + l.svW, l.svY);
+  glColor4f(0.0f, 0.0f, 0.0f, 1.0f); glVertex2f(l.svX + l.svW, l.svY + l.svH);
+  glColor4f(0.0f, 0.0f, 0.0f, 1.0f); glVertex2f(l.svX, l.svY + l.svH);
+  glEnd();
+  glShadeModel(GL_FLAT);
+
+  glColor4f(1.0f, 1.0f, 1.0f, 0.4f);
+  glLineWidth(1.0f);
+  glBegin(GL_LINE_LOOP);
+  glVertex2f(l.svX, l.svY);
+  glVertex2f(l.svX + l.svW, l.svY);
+  glVertex2f(l.svX + l.svW, l.svY + l.svH);
+  glVertex2f(l.svX, l.svY + l.svH);
+  glEnd();
+
+  float curX = l.svX + g_colorSat * l.svW;
+  float curY = l.svY + (1.0f - g_colorVal) * l.svH;
+  glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+  glLineWidth(2.0f);
+  glBegin(GL_LINE_LOOP);
+  for (int i = 0; i < 20; ++i) {
+    float a = i * 6.2831853f / 20.0f;
+    glVertex2f(curX + cosf(a) * 4.5f, curY + sinf(a) * 4.5f);
+  }
+  glEnd();
+  glColor4f(0.0f, 0.0f, 0.0f, 0.8f);
+  glLineWidth(1.0f);
+  glBegin(GL_LINE_LOOP);
+  for (int i = 0; i < 20; ++i) {
+    float a = i * 6.2831853f / 20.0f;
+    glVertex2f(curX + cosf(a) * 5.5f, curY + sinf(a) * 5.5f);
+  }
+  glEnd();
+
+  static const float stops[7][3] = {
+      {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 1, 1},
+      {0, 0, 1}, {1, 0, 1}, {1, 0, 0}};
+  glShadeModel(GL_SMOOTH);
+  for (int i = 0; i < 6; ++i) {
+    float left = l.hueX + l.hueW * (float)i / 6.0f;
+    float right = l.hueX + l.hueW * (float)(i + 1) / 6.0f;
+    glBegin(GL_QUADS);
+    glColor4f(stops[i][0], stops[i][1], stops[i][2], 1.0f);
+    glVertex2f(left, l.hueY);
+    glVertex2f(left, l.hueY + l.hueH);
+    glColor4f(stops[i + 1][0], stops[i + 1][1], stops[i + 1][2], 1.0f);
+    glVertex2f(right, l.hueY + l.hueH);
+    glVertex2f(right, l.hueY);
+    glEnd();
+  }
+  glShadeModel(GL_FLAT);
+
+  glColor4f(1.0f, 1.0f, 1.0f, 0.4f);
+  glLineWidth(1.0f);
+  glBegin(GL_LINE_LOOP);
+  glVertex2f(l.hueX, l.hueY);
+  glVertex2f(l.hueX + l.hueW, l.hueY);
+  glVertex2f(l.hueX + l.hueW, l.hueY + l.hueH);
+  glVertex2f(l.hueX, l.hueY + l.hueH);
+  glEnd();
+
+  float hueCurX = l.hueX + g_colorHue * l.hueW;
+  glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+  glBegin(GL_QUADS);
+  glVertex2f(hueCurX - 2.0f, l.hueY - 1.5f);
+  glVertex2f(hueCurX + 2.0f, l.hueY - 1.5f);
+  glVertex2f(hueCurX + 2.0f, l.hueY + l.hueH + 1.5f);
+  glVertex2f(hueCurX - 2.0f, l.hueY + l.hueH + 1.5f);
+  glEnd();
+  glColor4f(0.0f, 0.0f, 0.0f, 1.0f);
+  glLineWidth(1.0f);
+  glBegin(GL_LINE_LOOP);
+  glVertex2f(hueCurX - 2.0f, l.hueY - 1.5f);
+  glVertex2f(hueCurX + 2.0f, l.hueY - 1.5f);
+  glVertex2f(hueCurX + 2.0f, l.hueY + l.hueH + 1.5f);
+  glVertex2f(hueCurX - 2.0f, l.hueY + l.hueH + 1.5f);
+  glEnd();
+
+  const DWORD presets[7] = {
+    0x000000, 0x0B1220, 0x180D26, 0x240A0A, 0x082218, 0x1A1D24,
+    (DWORD)(accentCol & 0xFFFFFF)
+  };
+  DWORD curColor = Config::getBetterTabBgColor() & 0xFFFFFF;
+
+  for (int i = 0; i < 7; ++i) {
+    float px = l.preX + i * (l.preW + l.preGap);
+    bool isSel = (presets[i] == curColor);
+    bool hov = (g_mouseX >= px && g_mouseX <= px + l.preW &&
+                g_mouseY >= l.preY && g_mouseY <= l.preY + l.preH);
+
+    float pr = ((presets[i] >> 16) & 0xFF) / 255.0f;
+    float pg = ((presets[i] >> 8) & 0xFF) / 255.0f;
+    float pb = (presets[i] & 0xFF) / 255.0f;
+
+    glColor4f(pr, pg, pb, 1.0f);
+    glBegin(GL_QUADS);
+    glVertex2f(px, l.preY);
+    glVertex2f(px + l.preW, l.preY);
+    glVertex2f(px + l.preW, l.preY + l.preH);
+    glVertex2f(px, l.preY + l.preH);
+    glEnd();
+
+    if (isSel) {
+      glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+      glLineWidth(1.6f);
+    } else if (hov) {
+      glColor4f(1.0f, 1.0f, 1.0f, 0.8f);
+      glLineWidth(1.2f);
+    } else {
+      glColor4f(1.0f, 1.0f, 1.0f, 0.3f);
+      glLineWidth(1.0f);
+    }
+    glBegin(GL_LINE_LOOP);
+    glVertex2f(px, l.preY);
+    glVertex2f(px + l.preW, l.preY);
+    glVertex2f(px + l.preW, l.preY + l.preH);
+    glVertex2f(px, l.preY + l.preH);
+    glEnd();
+  }
+
+  glColor4f(0.12f, 0.14f, 0.18f, 1.0f);
+  glBegin(GL_QUADS);
+  glVertex2f(l.hexX, l.hexY);
+  glVertex2f(l.hexX + l.hexW, l.hexY);
+  glVertex2f(l.hexX + l.hexW, l.hexY + l.hexH);
+  glVertex2f(l.hexX, l.hexY + l.hexH);
+  glEnd();
+
+  glColor4f(1.0f, 1.0f, 1.0f, 0.35f);
+  glLineWidth(1.0f);
+  glBegin(GL_LINE_LOOP);
+  glVertex2f(l.hexX, l.hexY);
+  glVertex2f(l.hexX + l.hexW, l.hexY);
+  glVertex2f(l.hexX + l.hexW, l.hexY + l.hexH);
+  glVertex2f(l.hexX, l.hexY + l.hexH);
+  glEnd();
+
+  char hexBuf[16];
+  snprintf(hexBuf, sizeof(hexBuf), "#%06X", curColor);
+  int hexW = measure(ctx, hexBuf);
+  drawString(ctx, hexBuf, l.hexX + (l.hexW - hexW) / 2.0f, l.hexY + 3.0f, 0xFFFFFFFF);
+
+  drawString(ctx, "\xC2\xA7" "7Opacity", l.svX, l.opacLabelY, 0xFFFFFFFF);
+  char alphaBuf[16];
+  snprintf(alphaBuf, sizeof(alphaBuf), "\xC2\xA7" "e%.0f%%", Config::getBetterTabBgAlpha() * 100.0f);
+  int alW = measure(ctx, alphaBuf);
+  drawString(ctx, alphaBuf, l.svX + l.svW - alW, l.opacLabelY, 0xFFFFFFFF);
+
+  resetGLState();
+
+  glColor4f(0.14f, 0.16f, 0.20f, 1.0f);
+  glBegin(GL_QUADS);
+  glVertex2f(l.slX, l.slY);
+  glVertex2f(l.slX + l.slW, l.slY);
+  glVertex2f(l.slX + l.slW, l.slY + l.slH);
+  glVertex2f(l.slX, l.slY + l.slH);
+  glEnd();
+
+  float filledW = Config::getBetterTabBgAlpha() * l.slW;
+  if (filledW > 1.0f) {
+    float ar = ((accentCol >> 16) & 0xFF) / 255.0f;
+    float ag = ((accentCol >> 8) & 0xFF) / 255.0f;
+    float ab = (accentCol & 0xFF) / 255.0f;
+    glColor4f(ar, ag, ab, 1.0f);
+    glBegin(GL_QUADS);
+    glVertex2f(l.slX, l.slY);
+    glVertex2f(l.slX + filledW, l.slY);
+    glVertex2f(l.slX + filledW, l.slY + l.slH);
+    glVertex2f(l.slX, l.slY + l.slH);
+    glEnd();
+  }
+
+  glColor4f(1.0f, 1.0f, 1.0f, 0.25f);
+  glLineWidth(1.0f);
+  glBegin(GL_LINE_LOOP);
+  glVertex2f(l.slX, l.slY);
+  glVertex2f(l.slX + l.slW, l.slY);
+  glVertex2f(l.slX + l.slW, l.slY + l.slH);
+  glVertex2f(l.slX, l.slY + l.slH);
+  glEnd();
+
+  float thX = l.slX + filledW;
+  float thY = l.slY + l.slH * 0.5f;
+  glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+  glBegin(GL_TRIANGLE_FAN);
+  glVertex2f(thX, thY);
+  for (int i = 0; i <= 20; ++i) {
+    float a = i * 6.2831853f / 20.0f;
+    glVertex2f(thX + cosf(a) * 5.0f, thY + sinf(a) * 5.0f);
+  }
+  glEnd();
+  float ar = ((accentCol >> 16) & 0xFF) / 255.0f;
+  float ag = ((accentCol >> 8) & 0xFF) / 255.0f;
+  float ab = (accentCol & 0xFF) / 255.0f;
+  glColor4f(ar, ag, ab, 1.0f);
+  glBegin(GL_TRIANGLE_FAN);
+  glVertex2f(thX, thY);
+  for (int i = 0; i <= 20; ++i) {
+    float a = i * 6.2831853f / 20.0f;
+    glVertex2f(thX + cosf(a) * 3.0f, thY + sinf(a) * 3.0f);
+  }
+  glEnd();
+
+  bool hReset = (g_mouseX >= l.rBtnX && g_mouseX <= l.rBtnX + l.rBtnW &&
+                 g_mouseY >= l.btnY && g_mouseY <= l.btnY + l.btnH);
+  if (hReset) {
+    glColor4f(0.24f, 0.12f, 0.14f, 1.0f);
+  } else {
+    glColor4f(0.16f, 0.08f, 0.10f, 1.0f);
+  }
+  glBegin(GL_QUADS);
+  glVertex2f(l.rBtnX, l.btnY);
+  glVertex2f(l.rBtnX + l.rBtnW, l.btnY);
+  glVertex2f(l.rBtnX + l.rBtnW, l.btnY + l.btnH);
+  glVertex2f(l.rBtnX, l.btnY + l.btnH);
+  glEnd();
+  glColor4f(1.0f, 0.25f, 0.25f, hReset ? 1.0f : 0.5f);
+  glLineWidth(1.0f);
+  glBegin(GL_LINE_LOOP);
+  glVertex2f(l.rBtnX, l.btnY);
+  glVertex2f(l.rBtnX + l.rBtnW, l.btnY);
+  glVertex2f(l.rBtnX + l.rBtnW, l.btnY + l.btnH);
+  glVertex2f(l.rBtnX, l.btnY + l.btnH);
+  glEnd();
+
+  bool hDone = (g_mouseX >= l.dBtnX && g_mouseX <= l.dBtnX + l.dBtnW &&
+                g_mouseY >= l.btnY && g_mouseY <= l.btnY + l.btnH);
+  float dr = ((accentCol >> 16) & 0xFF) / 255.0f;
+  float dg = ((accentCol >> 8) & 0xFF) / 255.0f;
+  float db = (accentCol & 0xFF) / 255.0f;
+  if (hDone) {
+    dr = (std::min)(1.0f, dr * 1.15f + 0.1f);
+    dg = (std::min)(1.0f, dg * 1.15f + 0.1f);
+    db = (std::min)(1.0f, db * 1.15f + 0.1f);
+  }
+  glColor4f(dr, dg, db, 1.0f);
+  glBegin(GL_QUADS);
+  glVertex2f(l.dBtnX, l.btnY);
+  glVertex2f(l.dBtnX + l.dBtnW, l.btnY);
+  glVertex2f(l.dBtnX + l.dBtnW, l.btnY + l.btnH);
+  glVertex2f(l.dBtnX, l.btnY + l.btnH);
+  glEnd();
+  glColor4f(1.0f, 1.0f, 1.0f, 0.35f);
+  glLineWidth(1.0f);
+  glBegin(GL_LINE_LOOP);
+  glVertex2f(l.dBtnX, l.btnY);
+  glVertex2f(l.dBtnX + l.dBtnW, l.btnY);
+  glVertex2f(l.dBtnX + l.dBtnW, l.btnY + l.btnH);
+  glVertex2f(l.dBtnX, l.btnY + l.btnH);
+  glEnd();
+
+  std::string rTxt = "\xC2\xA7" "cReset Defaults";
+  int rw = measure(ctx, rTxt);
+  drawString(ctx, rTxt, l.rBtnX + (l.rBtnW - rw) / 2.0f, l.btnY + 6.0f, 0xFFFFFFFF);
+
+  std::string dTxt = "\xC2\xA7" "f\xC2\xA7" "lDone";
+  int dw = measure(ctx, dTxt);
+  drawString(ctx, dTxt, l.dBtnX + (l.dBtnW - dw) / 2.0f, l.btnY + 6.0f, 0xFFFFFFFF);
+}
+
 void render(void *hdcPtr) {
   if (s_rendering)
     return;
@@ -1164,6 +1849,19 @@ void render(void *hdcPtr) {
   ctx.fontRenderer = g_jc.f_fontRenderer
                          ? ctx.env->GetObjectField(ctx.mc, g_jc.f_fontRenderer)
                          : nullptr;
+  if (!ctx.fontRenderer)
+    return;
+
+  if (!s_lastFontRenderer || !ctx.env->IsSameObject(s_lastFontRenderer, ctx.fontRenderer)) {
+    if (s_lastFontRenderer) {
+      ctx.env->DeleteGlobalRef(s_lastFontRenderer);
+    }
+    s_lastFontRenderer = ctx.env->NewGlobalRef(ctx.fontRenderer);
+    g_fontTextureId = 0;
+    clearStringCache(ctx.env);
+  }
+
+  updateFontTexture(ctx);
 
   if (ctx.mc && g_jc.srCls && g_jc.m_srCtor && g_jc.m_srGetScaleFactor) {
       static int s_cachedFallbackScale = 2;
@@ -1259,7 +1957,7 @@ void render(void *hdcPtr) {
 
   std::unordered_map<std::string, Hypixel::PlayerStats> statsSnap;
   {
-    std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
+    std::lock_guard<std::recursive_mutex> lock(OVson::g_statsMutex);
     statsSnap = OVson::g_playerStatsMap;
   }
   std::unordered_map<std::string, Hypixel::PlayerStats> pendingSnap;
@@ -1527,6 +2225,9 @@ void render(void *hdcPtr) {
                               shouldHide = true;
                           }
                       }
+                      if (Hypixel::isFreshAccount(stats) && stats.inGameHealth <= 0) {
+                          shouldHide = true;
+                      }
                       
                       if (!shouldHide) {
                         GLuint glTex =
@@ -1611,7 +2312,7 @@ void render(void *hdcPtr) {
     ctx.env->DeleteLocalRef(scoreboard);
 
   if (!healthWrites.empty() || !pingWrites.empty()) {
-    std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
+    std::lock_guard<std::recursive_mutex> lock(OVson::g_statsMutex);
     for (auto& hw : healthWrites) {
       auto it = OVson::g_playerStatsMap.find(hw.k1);
       if (it == OVson::g_playerStatsMap.end())
@@ -1734,10 +2435,10 @@ void render(void *hdcPtr) {
 
     bool hasStats = s.isFetched;
     auto fmtStat = [&](int val) -> std::string {
-      return (hasStats && (!s.isNicked || hasRealName)) ? fmtCommas(val) : "-";
+      return (hasStats && (!s.isNicked || hasRealName || Hypixel::isFreshAccount(s))) ? fmtCommas(val) : "-";
     };
     auto fmtVal2 = [&](double val) -> std::string {
-      return (hasStats && (!s.isNicked || hasRealName)) ? fmt2(val) : "-";
+      return (hasStats && (!s.isNicked || hasRealName || Hypixel::isFreshAccount(s))) ? fmt2(val) : "-";
     };
     uint32_t defaultColor = hasStats ? 0xFFFFFFFF : 0xFFAAAAAA;
     switch (k) {
@@ -1748,7 +2449,11 @@ void render(void *hdcPtr) {
         return {"\xC2\xA7"
                 "4[NICKED]",
                 0xFFFFFFFF};
-      return {hasStats ? BedwarsStars::GetFormattedLevel(s.bedwarsStar) : "-",
+      if (Hypixel::isFreshAccount(s))
+        return {"\xC2\xA7"
+                "5[FRESH]",
+                0xFFAA00AA};
+      return {hasStats ? BedwarsStars::GetFormattedLevel(s) : "-",
               hasStats ? StatColors::getColor(StatColors::StatType::Star,
                                               s.bedwarsStar)
                        : defaultColor};
@@ -1965,7 +2670,12 @@ void render(void *hdcPtr) {
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
   glDisable(GL_TEXTURE_2D);
-  glColor4f(0.0f, 0.0f, 0.0f, 0.5f);
+  DWORD btBgColor = Config::getBetterTabBgColor();
+  float btBgAlpha = Config::getBetterTabBgAlpha();
+  float btR = ((btBgColor >> 16) & 0xFF) / 255.0f;
+  float btG = ((btBgColor >> 8) & 0xFF) / 255.0f;
+  float btB = (btBgColor & 0xFF) / 255.0f;
+  glColor4f(btR, btG, btB, btBgAlpha);
   glBegin(GL_QUADS);
   glVertex2f(startX, startY);
   glVertex2f(startX, startY + boxHeight);
@@ -1974,6 +2684,7 @@ void render(void *hdcPtr) {
   glEnd();
   glEnable(GL_TEXTURE_2D);
   glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+  bindFontTexture(ctx);
 
   float currentY = startY + padding;
 
@@ -2056,19 +2767,48 @@ void render(void *hdcPtr) {
   if (g_resizeMode) {
       glMatrixMode(GL_MODELVIEW);
       glLoadIdentity();
-      
-      std::string instr = "DRAG CORNER TO RESIZE";
+
+      glDisable(GL_LIGHTING);
+      glDisable(GL_DEPTH_TEST);
+      glDisable(GL_CULL_FACE);
+      glDisable(GL_ALPHA_TEST);
+      glDisable(GL_TEXTURE_2D);
+      glEnable(GL_BLEND);
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+      std::string instr = "\xC2\xA7" "e\xC2\xA7" "lCUSTOMIZE BETTERTAB \xC2\xA7" "7- Drag corners to resize, use panel to adjust color & opacity";
       int instrW = measure(ctx, instr);
-      drawString(ctx, instr, (scaledWidth - instrW) / 2.0f, 3.0f, 0xFFFFAA00);
-      
+      float bannerX = (scaledWidth - instrW) / 2.0f;
+      float bannerY = 4.0f;
+      glColor4f(0.08f, 0.09f, 0.13f, 0.90f);
+      glBegin(GL_QUADS);
+      glVertex2f(bannerX - 10.0f, bannerY - 2.0f);
+      glVertex2f(bannerX + (float)instrW + 10.0f, bannerY - 2.0f);
+      glVertex2f(bannerX + (float)instrW + 10.0f, bannerY + 13.0f);
+      glVertex2f(bannerX - 10.0f, bannerY + 13.0f);
+      glEnd();
+      glColor4f(1.0f, 1.0f, 1.0f, 0.3f);
+      glLineWidth(1.0f);
+      glBegin(GL_LINE_LOOP);
+      glVertex2f(bannerX - 10.0f, bannerY - 2.0f);
+      glVertex2f(bannerX + (float)instrW + 10.0f, bannerY - 2.0f);
+      glVertex2f(bannerX + (float)instrW + 10.0f, bannerY + 13.0f);
+      glVertex2f(bannerX - 10.0f, bannerY + 13.0f);
+      glEnd();
+      drawString(ctx, instr, bannerX, bannerY + 1.0f, 0xFFFFFFFF);
+
       float scaledBoxW = boxWidth * scale;
       float scaledBoxH = boxHeight * scale;
+      glDisable(GL_LIGHTING);
+      glDisable(GL_DEPTH_TEST);
+      glDisable(GL_CULL_FACE);
+      glDisable(GL_ALPHA_TEST);
       glDisable(GL_TEXTURE_2D);
       glEnable(GL_BLEND);
       glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
       
       float ts = 10.0f; // triangle size
-      glColor4f(1.0f, 1.0f, 1.0f, 0.5f);
+      glColor4f(1.0f, 1.0f, 1.0f, 0.65f);
       glBegin(GL_TRIANGLES);
       glVertex2f(startX + scaledBoxW, startY + scaledBoxH);
       glVertex2f(startX + scaledBoxW - ts, startY + scaledBoxH);
@@ -2089,45 +2829,27 @@ void render(void *hdcPtr) {
       glVertex2f(startX + ts, startY);
       glVertex2f(startX, startY + ts);
       glEnd();
-      
-      float doneBtnW = 50.0f, doneBtnH = 16.0f;
-      float btnGap = 6.0f;
-      float resetBtnW = 50.0f, resetBtnH = 16.0f;
-      float totalW = doneBtnW + btnGap + resetBtnW;
-      float doneBtnX = startX + scaledBoxW / 2.0f - totalW / 2.0f;
-      float doneBtnY = startY + scaledBoxH + 14.0f;
-      float resetBtnX = doneBtnX + doneBtnW + btnGap;
-      float resetBtnY = doneBtnY;
-      
-      glColor4f(0.15f, 0.65f, 0.15f, 0.85f);
-      glBegin(GL_QUADS);
-      glVertex2f(doneBtnX, doneBtnY);
-      glVertex2f(doneBtnX, doneBtnY + doneBtnH);
-      glVertex2f(doneBtnX + doneBtnW, doneBtnY + doneBtnH);
-      glVertex2f(doneBtnX + doneBtnW, doneBtnY);
-      glEnd();
-      
-      glColor4f(0.6f, 0.15f, 0.15f, 0.85f);
-      glBegin(GL_QUADS);
-      glVertex2f(resetBtnX, resetBtnY);
-      glVertex2f(resetBtnX, resetBtnY + resetBtnH);
-      glVertex2f(resetBtnX + resetBtnW, resetBtnY + resetBtnH);
-      glVertex2f(resetBtnX + resetBtnW, resetBtnY);
-      glEnd();
-      
       glEnable(GL_TEXTURE_2D);
-      std::string doneTxt = "Done";
-      int dw = measure(ctx, doneTxt);
-      drawString(ctx, doneTxt, doneBtnX + (doneBtnW - dw) / 2.0f, doneBtnY + 4.0f, 0xFFFFFFFF);
-      
-      std::string resetTxt = "Reset";
-      int rw = measure(ctx, resetTxt);
-      drawString(ctx, resetTxt, resetBtnX + (resetBtnW - rw) / 2.0f, resetBtnY + 4.0f, 0xFFFFFFFF);
+
+      auto l = getPanelLayout(scaledWidth, scaledHeight, startX, startY, scaledBoxW, scaledBoxH);
+      renderCustomizePanel(ctx, l, scale);
   }
 
   // _gMv / _gPr / _gAttrib unwind here automatically.
 
   s_rendering = false;
+}
+
+void shutdown() {
+  JNIEnv *env = lc ? lc->getEnv() : nullptr;
+  if (env) {
+    if (s_lastFontRenderer) {
+      env->DeleteGlobalRef(s_lastFontRenderer);
+      s_lastFontRenderer = nullptr;
+    }
+    clearStringCache(env);
+  }
+  g_fontTextureId = 0;
 }
 
 } // namespace BetterTab

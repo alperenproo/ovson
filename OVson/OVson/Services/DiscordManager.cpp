@@ -211,7 +211,7 @@ void DiscordManager::update() {
   bool inGame = OVson::isInHypixelGame();
 
   if (wasInGame && !inGame) {
-    std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
+    std::lock_guard<std::recursive_mutex> lock(OVson::g_statsMutex);
     sessionWins++;
   }
   wasInGame = inGame;

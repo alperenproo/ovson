@@ -7,152 +7,169 @@
 
 
 static bool callSendChatMessage(const std::string &text) {
-  JNIEnv *env = lc->getEnv();
-  if (!env)
-    return false;
-  CMinecraft mc;
-  CPlayer player = mc.GetLocalPlayer();
-  if (!player.Get())
-    return false;
+  try {
+    JNIEnv *env = lc ? lc->getEnv() : nullptr;
+    if (!env)
+      return false;
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    CMinecraft mc;
+    CPlayer player = mc.GetLocalPlayer();
+    if (!player.Get())
+      return false;
 
-  jclass playerCls = lc->GetClass("net.minecraft.client.entity.EntityPlayerSP");
-  if (!playerCls) {
+    jclass playerCls = lc->GetClass("net.minecraft.client.entity.EntityPlayerSP");
+    if (!playerCls) {
+      player.Cleanup();
+      return false;
+    }
+
+    jmethodID sendChat =
+        lc->GetMethodID(playerCls, "sendChatMessage", "(Ljava/lang/String;)V",
+                        "func_71165_d", "e");
+
+    if (!sendChat) {
+      player.Cleanup();
+      return false;
+    }
+
+    jstring jtext = Lunar::createSafeJString(env, text);
+    if (!jtext) {
+      player.Cleanup();
+      return false;
+    }
+    env->CallVoidMethod(player.Get(), sendChat, jtext);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    env->DeleteLocalRef(jtext);
     player.Cleanup();
+    return true;
+  } catch (...) {
     return false;
   }
-
-  jmethodID sendChat =
-      lc->GetMethodID(playerCls, "sendChatMessage", "(Ljava/lang/String;)V",
-                      "func_71165_d", "e");
-
-  if (!sendChat) {
-    player.Cleanup();
-    return false;
-  }
-
-  jstring jtext = env->NewStringUTF(text.c_str());
-  env->CallVoidMethod(player.Get(), sendChat, jtext);
-  env->DeleteLocalRef(jtext);
-  player.Cleanup();
-  return true;
 }
 
 static bool callAddChatMessage(const std::string &text) {
-  JNIEnv *env = lc->getEnv();
-  if (!env)
-    return false;
-  jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
-  if (!mcCls)
-    return false;
+  try {
+    JNIEnv *env = lc ? lc->getEnv() : nullptr;
+    if (!env)
+      return false;
 
-  jfieldID theMc = lc->GetStaticFieldID(mcCls, "theMinecraft",
-                                        "Lnet/minecraft/client/Minecraft;",
-                                        "field_71432_P", "S", "Lave;");
-  if (!theMc)
-    return false;
+    if (env->ExceptionCheck()) env->ExceptionClear();
 
-  jobject mcObj = env->GetStaticObjectField(mcCls, theMc);
-  if (!mcObj)
-    return false;
-
-  jfieldID f_ingame =
-      lc->GetFieldID(mcCls, "ingameGUI", "Lnet/minecraft/client/gui/GuiIngame;",
-                     "field_71456_v", "q", "Lavo;");
-  if (!f_ingame)
-    f_ingame =
-        lc->FindFieldBySignature(mcCls, "Lnet/minecraft/client/gui/GuiIngame;");
-  if (!f_ingame)
-    f_ingame = lc->FindFieldBySignature(mcCls, "Laxe;");
-
-  if (!f_ingame) {
-    env->DeleteLocalRef(mcObj);
-    return false;
-  }
-
-  jobject ingame = env->GetObjectField(mcObj, f_ingame);
-  if (!ingame) {
-    env->DeleteLocalRef(mcObj);
-    return false;
-  }
-
-  // get chat gui
-  jclass igCls = lc->GetClass("net.minecraft.client.gui.GuiIngame");
-  if (!igCls) {
-    env->DeleteLocalRef(ingame);
-    env->DeleteLocalRef(mcObj);
-    return false;
-  }
-
-  jmethodID getChatGUI = lc->GetMethodID(
-      igCls, "getChatGUI", "()Lnet/minecraft/client/gui/GuiNewChat;",
-      "func_146158_b", "d", "()Lavt;");
-  if (!getChatGUI)
-    getChatGUI = lc->FindMethodBySignature(
-        igCls, "()Lnet/minecraft/client/gui/GuiNewChat;");
-  if (!getChatGUI)
-    getChatGUI = lc->FindMethodBySignature(igCls, "()Lavt;");
-
-  if (!getChatGUI) {
-    env->DeleteLocalRef(ingame);
-    env->DeleteLocalRef(mcObj);
-    return false;
-  }
-
-  jobject chatGui = env->CallObjectMethod(ingame, getChatGUI);
-  if (!chatGui) {
-    env->DeleteLocalRef(ingame);
-    env->DeleteLocalRef(mcObj);
-    return false;
-  }
-
-  jclass cctCls = lc->GetClass("net.minecraft.util.ChatComponentText");
-  if (!cctCls) {
-    env->DeleteLocalRef(chatGui);
-    env->DeleteLocalRef(ingame);
-    env->DeleteLocalRef(mcObj);
-    return false;
-  }
-  jmethodID cctCtor =
-      env->GetMethodID(cctCls, "<init>", "(Ljava/lang/String;)V");
-  if (!cctCtor) {
-    if (env->ExceptionCheck())
-      env->ExceptionClear();
-    env->DeleteLocalRef(chatGui);
-    env->DeleteLocalRef(ingame);
-    env->DeleteLocalRef(mcObj);
-    return false;
-  }
-  jstring jtext = env->NewStringUTF(text.c_str());
-  jobject component = env->NewObject(cctCls, cctCtor, jtext);
-
-  jclass gncCls = lc->GetClass("net.minecraft.client.gui.GuiNewChat");
-  if (!gncCls) {
-    env->DeleteLocalRef(component);
+    jclass cctCls = lc->GetClass("net.minecraft.util.ChatComponentText");
+    if (!cctCls)
+      return false;
+    jmethodID cctCtor =
+        env->GetMethodID(cctCls, "<init>", "(Ljava/lang/String;)V");
+    if (!cctCtor) {
+      if (env->ExceptionCheck())
+        env->ExceptionClear();
+      return false;
+    }
+    jstring jtext = Lunar::createSafeJString(env, text);
+    if (!jtext) return false;
+    jobject component = env->NewObject(cctCls, cctCtor, jtext);
     env->DeleteLocalRef(jtext);
-    env->DeleteLocalRef(chatGui);
-    env->DeleteLocalRef(ingame);
-    env->DeleteLocalRef(mcObj);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (!component)
+      return false;
+
+  jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
+  if (mcCls) {
+    jmethodID getMc = lc->GetStaticMethodID(
+        mcCls, "getMinecraft", "()Lnet/minecraft/client/Minecraft;",
+        "func_71410_x", "A", "()Lave;");
+    jobject mcObj = getMc ? env->CallStaticObjectMethod(mcCls, getMc) : nullptr;
+    if (mcObj) {
+      // 1. Direct thePlayer.addChatMessage
+      jfieldID f_player = lc->GetFieldID(
+          mcCls, "thePlayer", "Lnet/minecraft/client/entity/EntityPlayerSP;",
+          "field_71439_g", "h", "Lbew;");
+      if (f_player) {
+        jobject playerObj = env->GetObjectField(mcObj, f_player);
+        if (playerObj) {
+          jclass pCls = env->GetObjectClass(playerObj);
+          jmethodID addChat = lc->GetMethodID(
+              pCls, "addChatMessage", "(Lnet/minecraft/util/IChatComponent;)V",
+              "func_145747_a", "a", "(Leu;)V");
+          if (!addChat)
+            addChat = lc->FindMethodBySignature(
+                pCls, "(Lnet/minecraft/util/IChatComponent;)V");
+          if (!addChat)
+            addChat = lc->FindMethodBySignature(pCls, "(Leu;)V");
+          if (addChat) {
+            env->CallVoidMethod(playerObj, addChat, component);
+            env->DeleteLocalRef(pCls);
+            env->DeleteLocalRef(playerObj);
+            env->DeleteLocalRef(mcObj);
+            env->DeleteLocalRef(component);
+            if (env->ExceptionCheck())
+              env->ExceptionClear();
+            return true;
+          }
+          env->DeleteLocalRef(pCls);
+          env->DeleteLocalRef(playerObj);
+        }
+      }
+
+      // 2. ingameGUI.getChatGUI().printChatMessage
+      jfieldID f_ingame = lc->GetFieldID(
+          mcCls, "ingameGUI", "Lnet/minecraft/client/gui/GuiIngame;",
+          "field_71456_v", "q", "Lavo;");
+      if (!f_ingame)
+        f_ingame = lc->FindFieldBySignature(
+            mcCls, "Lnet/minecraft/client/gui/GuiIngame;");
+      if (f_ingame) {
+        jobject ingame = env->GetObjectField(mcObj, f_ingame);
+        if (ingame) {
+          jclass igCls = env->GetObjectClass(ingame);
+          jmethodID getChatGUI = lc->GetMethodID(
+              igCls, "getChatGUI", "()Lnet/minecraft/client/gui/GuiNewChat;",
+              "func_146158_b", "d", "()Lavt;");
+          if (!getChatGUI)
+            getChatGUI = lc->FindMethodBySignature(
+                igCls, "()Lnet/minecraft/client/gui/GuiNewChat;");
+          if (getChatGUI) {
+            jobject chatGui = env->CallObjectMethod(ingame, getChatGUI);
+            if (chatGui) {
+              jclass gncCls = env->GetObjectClass(chatGui);
+              jmethodID print = lc->GetMethodID(
+                  gncCls, "printChatMessage",
+                  "(Lnet/minecraft/util/IChatComponent;)V", "func_146227_a",
+                  "a", "(Leu;)V");
+              if (!print)
+                print = lc->FindMethodBySignature(
+                    gncCls, "(Lnet/minecraft/util/IChatComponent;)V");
+              if (print) {
+                env->CallVoidMethod(chatGui, print, component);
+                env->DeleteLocalRef(gncCls);
+                env->DeleteLocalRef(chatGui);
+                env->DeleteLocalRef(igCls);
+                env->DeleteLocalRef(ingame);
+                env->DeleteLocalRef(mcObj);
+                env->DeleteLocalRef(component);
+                if (env->ExceptionCheck())
+                  env->ExceptionClear();
+                return true;
+              }
+              env->DeleteLocalRef(gncCls);
+              env->DeleteLocalRef(chatGui);
+            }
+          }
+          env->DeleteLocalRef(igCls);
+          env->DeleteLocalRef(ingame);
+        }
+      }
+      env->DeleteLocalRef(mcObj);
+    }
+  }
+
+  env->DeleteLocalRef(component);
+  if (env->ExceptionCheck())
+    env->ExceptionClear();
+  return false;
+  } catch (...) {
     return false;
   }
-  jmethodID print = lc->GetMethodID(gncCls, "printChatMessage",
-                                    "(Lnet/minecraft/util/IChatComponent;)V",
-                                    "func_146227_a", "a", "(Leu;)V");
-  if (!print)
-    print = lc->FindMethodBySignature(gncCls,
-                                      "(Lnet/minecraft/util/IChatComponent;)V");
-  if (!print)
-    print = lc->FindMethodBySignature(gncCls, "(Leu;)V");
-
-  if (print) {
-    env->CallVoidMethod(chatGui, print, component);
-  }
-
-  env->DeleteLocalRef(jtext);
-  env->DeleteLocalRef(component);
-  env->DeleteLocalRef(chatGui);
-  env->DeleteLocalRef(ingame);
-  env->DeleteLocalRef(mcObj);
-  return true;
 }
 
 bool ChatSDK::sendClientChat(const std::string &text) {
@@ -165,10 +182,12 @@ bool ChatSDK::showClientMessage(const std::string &text) {
 
 bool ChatSDK::showJsonMessage(const std::string &json,
                               const std::string &fallback) {
-  JNIEnv *env = lc->getEnv();
-  if (!env) {
-    return fallback.empty() ? false : callAddChatMessage(fallback);
-  }
+  try {
+    JNIEnv *env = lc ? lc->getEnv() : nullptr;
+    if (!env) {
+      return fallback.empty() ? false : callAddChatMessage(fallback);
+    }
+    if (env->ExceptionCheck()) env->ExceptionClear();
 
   jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
   if (!mcCls) goto fall;
@@ -254,7 +273,11 @@ bool ChatSDK::showJsonMessage(const std::string &json,
       goto fall;
     }
 
-    jstring jsonStr = env->NewStringUTF(json.c_str());
+    jstring jsonStr = Lunar::createSafeJString(env, json);
+    if (!jsonStr) {
+      env->DeleteLocalRef(chatGui);
+      goto fall;
+    }
     jobject component = env->CallStaticObjectMethod(serCls, jsonToComp,
                                                      jsonStr);
     if (env->ExceptionCheck()) {
@@ -300,6 +323,9 @@ bool ChatSDK::showJsonMessage(const std::string &json,
 fall:
   Logger::hoverDebug("[ChatSDK] showJsonMessage FALLBACK to raw text message: %s", fallback.c_str());
   return fallback.empty() ? false : callAddChatMessage(fallback);
+  } catch (...) {
+    return false;
+  }
 }
 
 bool ChatSDK::showTagsMessage(const std::string &msg, const std::vector<std::pair<std::string, std::string>> &tags) {
@@ -657,7 +683,8 @@ std::vector<std::string> ChatSDK::getChatHistory(int maxCount) {
 
         jclass clCls = env->GetObjectClass(chatLine);
         jmethodID getComp = lc->GetMethodID(clCls, "getChatComponent",
-            "()Lnet/minecraft/util/IChatComponent;", "func_151461_a", "a");
+            "()Lnet/minecraft/util/IChatComponent;", "func_151461_a", "a",
+            "()Leu;");
         if (!getComp) getComp = lc->FindMethodBySignature(clCls,
             "()Lnet/minecraft/util/IChatComponent;");
         if (!getComp) getComp = lc->FindMethodBySignature(clCls, "()Leu;");
@@ -761,6 +788,47 @@ std::vector<std::string> ChatSDK::getSentHistory(int maxCount) {
     env->DeleteLocalRef(sentList);
     if (env->ExceptionCheck()) env->ExceptionClear();
     return result;
+}
+
+std::string ChatSDK::getLatestChatMessage() {
+    auto history = getChatHistory(1);
+    if (!history.empty()) {
+        return history[0];
+    }
+    return "";
+}
+
+std::vector<std::string> ChatSDK::getNewMessages() {
+    static std::string s_lastKnownMessage = "";
+    static bool s_initialized = false;
+
+    auto history = getChatHistory(20);
+    std::vector<std::string> newMessages;
+
+    if (history.empty()) {
+        return newMessages;
+    }
+
+    if (!s_initialized) {
+        s_lastKnownMessage = history[0];
+        s_initialized = true;
+        return newMessages;
+    }
+
+    if (history[0] == s_lastKnownMessage) {
+        return newMessages; // No new messages
+    }
+
+    for (size_t i = 0; i < history.size(); ++i) {
+        if (history[i] == s_lastKnownMessage) {
+            break;
+        }
+        newMessages.push_back(history[i]);
+    }
+
+    s_lastKnownMessage = history[0];
+    std::reverse(newMessages.begin(), newMessages.end());
+    return newMessages;
 }
 
 std::string ChatSDK::formatPrefix() {

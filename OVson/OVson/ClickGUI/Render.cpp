@@ -1,7 +1,11 @@
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS
 #endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include "ClickGUI.h"
+#include <algorithm>
 #include "ClickGUI_Bridge.h"
 #include "State.h"
 #include "Theme.h"
@@ -13,6 +17,11 @@
 #include "../Render/NotificationManager.h"
 #include "../Render/StatsOverlay.h"
 #include "../Logic/BedDefense/BedDefenseManager.h"
+#include "../Logic/Bedwars/BedwarsConfig.h"
+#include "../Logic/Bedwars/BedwarsCore.h"
+#include "../Logic/Bedwars/BedwarsRuntime.h"
+#include "../Render/BedwarsOverlay.h"
+#include "../Logic/BlockHitSound.h"
 #include "../Config/Config.h"
 #include "../Utils/GlGuard.h"
 #include "../Utils/SensitivityFix.h"
@@ -24,6 +33,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <sstream>
 #include <gl/GL.h>
 
 namespace Render {
@@ -195,6 +205,28 @@ static void drawTabIcon(int idx, float x, float y, float s, DWORD col,
     glEnd();
     ring(cx + s * 0.20f, cy - s * 0.20f, s * 0.13f);
     break;
+  case 8:
+    glBegin(GL_LINE_LOOP);  // mattress
+    glVertex2f(cx - s * 0.40f, cy - s * 0.02f);
+    glVertex2f(cx + s * 0.40f, cy - s * 0.02f);
+    glVertex2f(cx + s * 0.40f, cy + s * 0.20f);
+    glVertex2f(cx - s * 0.40f, cy + s * 0.20f);
+    glEnd();
+    glBegin(GL_LINE_LOOP);  // pillow
+    glVertex2f(cx - s * 0.34f, cy - s * 0.24f);
+    glVertex2f(cx - s * 0.06f, cy - s * 0.24f);
+    glVertex2f(cx - s * 0.06f, cy - s * 0.02f);
+    glVertex2f(cx - s * 0.34f, cy - s * 0.02f);
+    glEnd();
+    glBegin(GL_LINES);
+    glVertex2f(cx + s * 0.04f, cy - s * 0.02f);  // blanket seam
+    glVertex2f(cx + s * 0.04f, cy + s * 0.20f);
+    glVertex2f(cx - s * 0.34f, cy + s * 0.20f);  // legs
+    glVertex2f(cx - s * 0.34f, cy + s * 0.34f);
+    glVertex2f(cx + s * 0.34f, cy + s * 0.20f);
+    glVertex2f(cx + s * 0.34f, cy + s * 0.34f);
+    glEnd();
+    break;
   default:
     glBegin(GL_LINE_LOOP);
     glVertex2f(cx - s * 0.30f, cy - s * 0.30f);
@@ -238,7 +270,7 @@ static void drawCaret(float cx, float cy, float s, bool open, uint32_t col, floa
   glEnable(GL_TEXTURE_2D);
 }
 
-enum class LbKind { Toggle, Slider, Choice, Label, Input };
+enum class LbKind { Toggle, Slider, Choice, Label, Input, Action };
 struct LbSub {
   const char *name;
   LbKind kind = LbKind::Toggle;
@@ -257,6 +289,8 @@ struct LbSub {
   std::string *inputBufPtr = nullptr;
   std::function<std::string()> sget;
   std::function<void(const std::string &)> sset;
+  std::function<std::string()> labelGet;
+  std::function<void()> action;
   bool isPassword = false;
 };
 struct LbModule {
@@ -265,6 +299,7 @@ struct LbModule {
   std::function<void(bool)> set;
   std::vector<LbSub> subs;   // right-click to reveal
   bool expanded = false;     // sub-settings shown?
+  std::function<bool()> savedGet;
 };
 struct LbWindow {
   const char *title;
@@ -295,6 +330,7 @@ static void setNameTagStat(const std::string &key, bool val) {
 }
 
 static std::vector<LbWindow> s_lbWins;
+static ULONGLONG s_bedwarsResetArmedAt = 0;
 static bool s_lbInit = false;
 
 static LbSub subToggle(const char *n, std::function<bool()> g,
@@ -317,6 +353,12 @@ static LbSub subChoice(const char *n, std::vector<const char *> opts,
 static LbSub subLabel(const char *n) {
   LbSub sb; sb.name = n; sb.kind = LbKind::Label; sb.open = true; return sb;
 }
+static LbSub subDynamicLabel(const char *n,
+                             std::function<std::string()> get) {
+  LbSub sb = subLabel(n);
+  sb.labelGet = std::move(get);
+  return sb;
+}
 static LbSub subInput(const char *n, bool *typingState, std::string *buf,
                       std::function<std::string()> g,
                       std::function<void(const std::string &)> s,
@@ -330,6 +372,22 @@ static LbSub subInput(const char *n, bool *typingState, std::string *buf,
   sb.sset = s;
   sb.isPassword = isPwd;
   return sb;
+}
+static LbSub subAction(const char *n, std::function<void()> action,
+                       std::function<std::string()> value = {}) {
+  LbSub sb;
+  sb.name = n;
+  sb.kind = LbKind::Action;
+  sb.action = std::move(action);
+  sb.sget = std::move(value);
+  return sb;
+}
+
+static std::string shortBlockHitFilename() {
+  const std::string &filename = Config::getBlockHitSoundFilename();
+  constexpr std::size_t kMaximumDisplayLength = 20U;
+  if (filename.size() <= kMaximumDisplayLength) return filename;
+  return filename.substr(0U, kMaximumDisplayLength - 3U) + "...";
 }
 
 static const float kDdOptH = 26.0f;  // dropdown option row height
@@ -345,10 +403,53 @@ static float lbSubH(const LbSub &s) {
   }
 }
 
+static float s_sbX = 0, s_sbY = 0, s_sbW = 0, s_sbH = 0;
+
+static bool isModuleVisible(const char* modName) {
+    if (s_moduleSearch.empty()) return true;
+    if (!modName) return false;
+    std::string nameStr = modName;
+    std::string queryStr = s_moduleSearch;
+    std::transform(nameStr.begin(), nameStr.end(), nameStr.begin(), ::tolower);
+    std::transform(queryStr.begin(), queryStr.end(), queryStr.begin(), ::tolower);
+
+    if (nameStr.find(queryStr) != std::string::npos) return true;
+    if (queryStr.find(nameStr) != std::string::npos) return true;
+
+    if (nameStr.find("hitbox") != std::string::npos) {
+      if (queryStr.find("hitbox") != std::string::npos ||
+          queryStr.find("hitboxes") != std::string::npos ||
+          queryStr.find("color") != std::string::npos ||
+          queryStr.find("team") != std::string::npos) {
+        return true;
+      }
+    }
+
+    std::istringstream iss(queryStr);
+    std::string token;
+    bool allTokensMatch = true;
+    int tokenCount = 0;
+    while (iss >> token) {
+      tokenCount++;
+      std::string rootToken = token;
+      if (rootToken.size() > 4 && rootToken.ends_with("es")) rootToken.resize(rootToken.size() - 2);
+      else if (rootToken.size() > 3 && rootToken.ends_with("s")) rootToken.resize(rootToken.size() - 1);
+
+      if (nameStr.find(token) == std::string::npos && nameStr.find(rootToken) == std::string::npos) {
+        allTokensMatch = false;
+        break;
+      }
+    }
+    if (tokenCount > 0 && allTokensMatch) return true;
+
+    return false;
+}
+
 static float lbWinHeight(const LbWindow &w, float titleH, float rowH) {
   float wh = titleH;
   if (w.open) {
-    for (const auto &m : w.mods) {
+        for (const auto &m : w.mods) {
+      if (!isModuleVisible(m.name)) continue;
       wh += rowH;
       if (m.expanded) {
         wh += 18.0f;  // group padding (6 top + 12 bottom)
@@ -380,14 +481,22 @@ static void saveLayoutB(const std::vector<LbWindow> &wins) {
 static void loadLayoutB(std::vector<LbWindow> &wins) {
   const std::string &s = Config::getLayoutBData();
   if (s.empty()) return;
-  if (std::count(s.begin(), s.end(), ';') != (long long)wins.size()) return;
+  const std::size_t storedCount =
+      static_cast<std::size_t>(std::count(s.begin(), s.end(), ';'));
+  const bool legacyWithoutBedwars = storedCount + 1 == wins.size();
   size_t i = 0, wi = 0;
   while (i < s.size() && wi < wins.size()) {
     size_t semi = s.find(';', i);
     if (semi == std::string::npos) break;
     float x, y; int o;
     if (sscanf(s.substr(i, semi - i).c_str(), "%f,%f,%d", &x, &y, &o) == 3) {
-      wins[wi].x = x; wins[wi].y = y; wins[wi].open = (o != 0);
+      const std::size_t target =
+          legacyWithoutBedwars && wi >= 2 ? wi + 1 : wi;
+      if (target < wins.size()) {
+        wins[target].x = x;
+        wins[target].y = y;
+        wins[target].open = (o != 0);
+      }
     }
     i = semi + 1;
     ++wi;
@@ -468,10 +577,12 @@ static void ensureLbWindows() {
                                    [](const char *v) { Config::setTeamReportChannel(v); })}});
       w.mods.push_back({"Tech Overlay", &Config::isTechEnabled,
                         &Config::setTechEnabled, {}});
-      w.mods.push_back({"Notifications", &Config::isNotificationsEnabled,
-                        &Config::setNotificationsEnabled, {}});
+      w.mods.push_back({"Team Hitboxes", &Config::isTeamColoredHitboxesEnabled,
+                        &Config::setTeamColoredHitboxesEnabled, {}});
       w.mods.push_back({"Lobby Mention Stats", &Config::isLobbyMentionStatsEnabled,
                         &Config::setLobbyMentionStatsEnabled, {}});
+      w.mods.push_back({"In-Game Chat Stats", &Config::isChatStatsEnabled,
+                        &Config::setChatStatsEnabled, {}});
       s_lbWins.push_back(std::move(w));
     }
     {
@@ -482,6 +593,40 @@ static void ensureLbWindows() {
                           auto *bd = BedDefense::BedDefenseManager::getInstance();
                           if (b) bd->enable(); else bd->disable();
                         }, {}});
+      w.mods.push_back({"Mute Own Steps", &Config::isMuteOwnStepsEnabled,
+                        &Config::setMuteOwnStepsEnabled, {}});
+      w.mods.push_back({"Bow Hit Distance", &Config::isBowDistanceEnabled,
+                        &Config::setBowDistanceEnabled, {}});
+      w.mods.push_back({"Prevent Bow Drop", &Config::isPreventBowDropEnabled,
+                        &Config::setPreventBowDropEnabled, {}});
+      w.mods.push_back({"Mojang Capes", &Config::isMojangCapeEnabled,
+                        &Config::setMojangCapeEnabled,
+                        {subToggle("Only Nicked", &Config::isMojangCapeOnlyNicked,
+                                   &Config::setMojangCapeOnlyNicked)}});
+      w.mods.push_back(
+          {"Block-Hit Sound (Client Heuristic)", &Config::isBlockHitSoundEnabled,
+           &Config::setBlockHitSoundEnabled,
+           {subChoice("Sound Source", {"Default", "Custom"},
+                      [] { return Config::getBlockHitSoundSource().c_str(); },
+                      [](const char *value) {
+                        Config::setBlockHitSoundSource(value);
+                      }),
+            subSlider("Volume", &Config::getBlockHitSoundVolume,
+                      &Config::setBlockHitSoundVolume, 0.0f, 100.0f, "%"),
+            subAction("Next WAV", &BlockHitSound::requestSelectNextCustomSound,
+                      &shortBlockHitFilename),
+            subAction("Reload WAV", &BlockHitSound::requestCustomSoundReload),
+            subAction("Preview", &BlockHitSound::requestPreview),
+            subAction("Open sounds folder", [] {
+              if (!BlockHitSound::openSoundsDirectory()) {
+                NotificationManager::getInstance()->add(
+                    "Block-Hit Sound", "Could not open the sounds folder",
+                    NotificationType::Warning);
+              }
+            }),
+            subToggle("Debug trigger/rejection reasons",
+                      &Config::isBlockHitSoundDebugEnabled,
+                      &Config::setBlockHitSoundDebugEnabled)}});
       w.mods.push_back({"Anticheat", &Config::isAnticheatEnabled,
                         &Config::setAnticheatEnabled,
                         {subToggle("NoSlow", &Config::isAnticheatNoSlowEnabled,
@@ -502,6 +647,239 @@ static void ensureLbWindows() {
                         &Config::setNickedBypass, {}});
       w.mods.push_back({"Number Denicker", &Config::isNumberDenickerEnabled,
                         &Config::setNumberDenickerEnabled, {}});
+      w.mods.push_back({"Nick Score Alerts", &Config::isNickRollEnabled,
+                        &Config::setNickRollEnabled, {}});
+      s_lbWins.push_back(std::move(w));
+    }
+    {
+      namespace BwConfig = OVson::Bedwars::Configuration;
+      using OVson::Bedwars::Module;
+      using OVson::Bedwars::HudId;
+      using OVson::Bedwars::HudLayout;
+      using OVson::Bedwars::VisibilityMode;
+      using OVson::Bedwars::AlertOutput;
+      LbWindow w{"Bedwars", 30, 360, true, {}};
+      w.mods.push_back({"Bedwars Tools", &BwConfig::isMasterEnabled,
+                        &BwConfig::setMasterEnabled,
+                        {subToggle("Alert Sounds", &BwConfig::areSoundsEnabled,
+                                   &BwConfig::setSoundsEnabled),
+                         subToggle("Debug Diagnostics", &BwConfig::isDebugEnabled,
+                                   &BwConfig::setDebugEnabled),
+                         subToggle("Arm Settings Reset", [] { return false; },
+                                   [](bool enabled) {
+                                     if (!enabled) return;
+                                     const ULONGLONG now = GetTickCount64();
+                                     if (s_bedwarsResetArmedAt != 0 &&
+                                         now - s_bedwarsResetArmedAt < 8000) {
+                                       BwConfig::save(BwConfig::Settings{});
+                                       s_bedwarsResetArmedAt = 0;
+                                     } else {
+                                       s_bedwarsResetArmedAt = now;
+                                     }
+                                   }),
+                         subDynamicLabel("Reset confirmation", [] {
+                           const ULONGLONG now = GetTickCount64();
+                           return s_bedwarsResetArmedAt != 0 &&
+                                          now - s_bedwarsResetArmedAt < 8000
+                                      ? std::string("Click reset again within 8 seconds")
+                                      : std::string("Reset requires two clicks within 8 seconds");
+                         })}});
+
+      w.mods.push_back({
+          "Player Alert Settings", [] {
+            return BwConfig::isMasterEnabled();
+          }, [](bool) {},
+          {subChoice(
+               "Visibility Mode", {"Range Only", "Line of Sight", "Camera View"},
+               []() -> const char * {
+                 switch (BwConfig::getVisibilityMode()) {
+                 case VisibilityMode::RangeOnly: return "Range Only";
+                 case VisibilityMode::CameraView: return "Camera View";
+                 default: return "Line of Sight";
+                 }
+               },
+               [](const char *value) {
+                 if (strcmp(value, "Range Only") == 0)
+                   BwConfig::setVisibilityMode(VisibilityMode::RangeOnly);
+                 else if (strcmp(value, "Camera View") == 0)
+                   BwConfig::setVisibilityMode(VisibilityMode::CameraView);
+                 else
+                   BwConfig::setVisibilityMode(VisibilityMode::LineOfSight);
+               }),
+           subChoice(
+               "Alert Output", {"Alert", "Chat", "Chat + Alert"},
+               []() -> const char * {
+                 return OVson::Bedwars::alertOutputName(
+                     BwConfig::getAlertOutput());
+               },
+               [](const char *value) {
+                 if (strcmp(value, "Chat") == 0)
+                   BwConfig::setAlertOutput(AlertOutput::Chat);
+                 else if (strcmp(value, "Chat + Alert") == 0)
+                   BwConfig::setAlertOutput(AlertOutput::Both);
+                 else
+                   BwConfig::setAlertOutput(AlertOutput::Overlay);
+               }),
+           subSlider("Player Range", &BwConfig::getPlayerAlertRange,
+                     &BwConfig::setPlayerAlertRange, 4.0f, 256.0f, "m"),
+           subToggle("Show Distance", &BwConfig::isAlertShowDistanceEnabled,
+                     &BwConfig::setAlertShowDistanceEnabled),
+           subToggle("Share to Game Chat", &BwConfig::isAlertShareChatEnabled,
+                     &BwConfig::setAlertShareChatEnabled),
+           subChoice(
+               "Share Channel", {"/pc", "/gc", "/ac"},
+               []() -> const char * {
+                 return BwConfig::getAlertShareChannelName();
+               },
+               [](const char *value) {
+                 if (strcmp(value, "/gc") == 0)
+                   BwConfig::setAlertShareChannel(1);
+                 else if (strcmp(value, "/ac") == 0)
+                   BwConfig::setAlertShareChannel(2);
+                 else
+                   BwConfig::setAlertShareChannel(0);
+               }),
+           subToggle("Share Items", &BwConfig::isAlertShareItemsEnabled,
+                     &BwConfig::setAlertShareItemsEnabled),
+           subToggle("Share KB Stick", &BwConfig::isAlertShareKbStickEnabled,
+                     &BwConfig::setAlertShareKbStickEnabled),
+           subToggle("Share Potions", &BwConfig::isAlertSharePotionsEnabled,
+                     &BwConfig::setAlertSharePotionsEnabled),
+           subToggle("Share Consumes", &BwConfig::isAlertShareConsumesEnabled,
+                     &BwConfig::setAlertShareConsumesEnabled),
+           subToggle("Share Armor", &BwConfig::isAlertShareArmorEnabled,
+                     &BwConfig::setAlertShareArmorEnabled),
+           subToggle("Share Upgrades", &BwConfig::isAlertShareUpgradesEnabled,
+                     &BwConfig::setAlertShareUpgradesEnabled)}});
+
+      w.mods.push_back({"Notification Sounds", &BwConfig::areSoundsEnabled,
+                        &BwConfig::setSoundsEnabled});
+
+      LbModule hudSettings{
+          "HUD and Layout",
+          [] { return Render::BedwarsOverlay::isLayoutMode(); },
+          [](bool enabled) { Render::BedwarsOverlay::setLayoutMode(enabled); },
+          {}};
+      for (std::size_t hudIndex = 0;
+           hudIndex < OVson::Bedwars::kHudCount; ++hudIndex) {
+        const HudId hud = static_cast<HudId>(hudIndex);
+        hudSettings.subs.push_back(subLabel(OVson::Bedwars::hudName(hud)));
+        hudSettings.subs.push_back(subToggle(
+            "Visible",
+            [hud] { return BwConfig::getHudLayout(hud).visible; },
+            [hud](bool enabled) {
+              HudLayout layout = BwConfig::getHudLayout(hud);
+              layout.visible = enabled;
+              BwConfig::setHudLayout(hud, layout);
+            }));
+        hudSettings.subs.push_back(subSlider(
+            "X", [hud] { return BwConfig::getHudLayout(hud).x; },
+            [hud](float value) {
+              HudLayout layout = BwConfig::getHudLayout(hud);
+              layout.x = value;
+              BwConfig::setHudLayout(hud, layout);
+            },
+            0.0f, 1.0f, "", true));
+        hudSettings.subs.push_back(subSlider(
+            "Y", [hud] { return BwConfig::getHudLayout(hud).y; },
+            [hud](float value) {
+              HudLayout layout = BwConfig::getHudLayout(hud);
+              layout.y = value;
+              BwConfig::setHudLayout(hud, layout);
+            },
+            0.0f, 1.0f, "", true));
+        hudSettings.subs.push_back(subSlider(
+            "Scale", [hud] { return BwConfig::getHudLayout(hud).scale; },
+            [hud](float value) {
+              HudLayout layout = BwConfig::getHudLayout(hud);
+              layout.scale = value;
+              BwConfig::setHudLayout(hud, layout);
+            },
+            0.5f, 2.5f));
+        hudSettings.subs.push_back(subToggle(
+            "Reset Position", [] { return false; },
+            [hud](bool enabled) {
+              if (enabled) BwConfig::resetHudLayout(hud);
+            }));
+      }
+      hudSettings.subs.push_back(subLabel("All HUDs"));
+      hudSettings.subs.push_back(subToggle(
+          "Reset All Positions", [] { return false; }, [](bool enabled) {
+            if (enabled) BwConfig::resetAllHudLayouts();
+          }));
+      w.mods.push_back(std::move(hudSettings));
+
+      for (std::size_t i = 0; i < OVson::Bedwars::kModuleCount; ++i) {
+        const Module module = static_cast<Module>(i);
+        LbModule item;
+        item.name = OVson::Bedwars::moduleName(module);
+        item.get = [module] {
+          return OVson::Bedwars::isModuleAvailable(module) &&
+                 BwConfig::isMasterEnabled() &&
+                 BwConfig::isModuleEnabled(module);
+        };
+        item.savedGet = [module] { return BwConfig::isModuleEnabled(module); };
+        item.set = [module](bool enabled) {
+          if (OVson::Bedwars::isModuleAvailable(module))
+            BwConfig::setModuleEnabled(module, enabled);
+        };
+        if (!OVson::Bedwars::isModuleAvailable(module)) {
+          item.subs.push_back(subLabel("Unavailable: missing safe hook"));
+        } else if (module == Module::EventTimers) {
+          item.subs.push_back(subToggle("Only Next Event",
+                                        &BwConfig::isOnlyNextEvent,
+                                        &BwConfig::setOnlyNextEvent));
+          item.subs.push_back(subSlider("HUD X", &BwConfig::getTimerX,
+                                        &BwConfig::setTimerX, 0.0f, 1.0f, "",
+                                        true));
+          item.subs.push_back(subSlider("HUD Y", &BwConfig::getTimerY,
+                                        &BwConfig::setTimerY, 0.0f, 1.0f, "",
+                                        true));
+          item.subs.push_back(subSlider("Scale", &BwConfig::getTimerScale,
+                                        &BwConfig::setTimerScale, 0.5f, 2.5f));
+        } else if (module == Module::HeightOverlay) {
+          item.subs.push_back(subSlider("HUD X", &BwConfig::getHeightX,
+                                        &BwConfig::setHeightX, 0.0f, 1.0f, "",
+                                        true));
+          item.subs.push_back(subSlider("HUD Y", &BwConfig::getHeightY,
+                                        &BwConfig::setHeightY, 0.0f, 1.0f, "",
+                                        true));
+          item.subs.push_back(subSlider("Scale", &BwConfig::getHeightScale,
+                                        &BwConfig::setHeightScale, 0.5f, 2.5f));
+          item.subs.push_back(subSlider(
+              "Limit Override",
+              [] { return (float)BwConfig::getHeightLimitOverride(); },
+              [](float value) {
+                BwConfig::setHeightLimitOverride((int)(value + 0.5f));
+              },
+              0.0f, 256.0f));
+        } else if (module == Module::TrapNotifier) {
+          item.subs.push_back(subSlider(
+              "Reminder Interval",
+              [] { return (float)BwConfig::getTrapReminderSeconds(); },
+              [](float value) {
+                BwConfig::setTrapReminderSeconds((int)(value + 0.5f));
+              },
+              15.0f, 600.0f, "s"));
+        } else if (module == Module::ResourceTracker) {
+          item.subs.push_back(subToggle("Resource HUD",
+                                        &BwConfig::isResourceHudEnabled,
+                                        &BwConfig::setResourceHudEnabled));
+          for (std::size_t resourceIndex = 0;
+               resourceIndex < OVson::Bedwars::kResourceCount;
+               ++resourceIndex) {
+            const auto resource =
+                static_cast<OVson::Bedwars::Resource>(resourceIndex);
+            item.subs.push_back(subToggle(
+                OVson::Bedwars::resourceName(resource),
+                [resource] { return BwConfig::isResourceEnabled(resource); },
+                [resource](bool enabled) {
+                  BwConfig::setResourceEnabled(resource, enabled);
+                }));
+          }
+        }
+        w.mods.push_back(std::move(item));
+      }
       s_lbWins.push_back(std::move(w));
     }
     {
@@ -661,6 +1039,7 @@ static void ensureLbWindows() {
 
         LbModule lm;
         lm.name = mod.name.c_str();
+        lm.expanded = true;
         lm.get = [moduleObj = mod.moduleObj]() {
           return ClickGUIBridge::getToggleValue(moduleObj);
         };
@@ -712,6 +1091,14 @@ static void ensureLbWindows() {
             sub.sset = [settingObj = set.settingObj](const std::string &s) {
               ClickGUIBridge::setInputValue(settingObj, s);
             };
+          } else if (set.kind == "button" || set.kind == "action") {
+            sub.kind = LbKind::Action;
+            sub.action = [settingObj = set.settingObj]() {
+              ClickGUIBridge::clickButton(settingObj);
+            };
+          } else if (set.kind == "description" || set.kind == "label") {
+            sub.kind = LbKind::Label;
+            sub.open = true;
           }
           lm.subs.push_back(sub);
         }
@@ -719,13 +1106,12 @@ static void ensureLbWindows() {
       }
     }();
 
-    loadLayoutB(s_lbWins);  // restore saved window positions
+    loadLayoutB(s_lbWins);
 }
 
 static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
                           bool rClickEvent, float sw, float sh) {
   using namespace ClickGUITheme;
-  (void)sw; (void)sh;
   ensureLbWindows();
 
   static int s_dragWin = -1;
@@ -813,8 +1199,9 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
       glScissor((int)win.x, (int)(sh - (win.y + drawnH)), (int)ww, (int)(drawnH - titleH));
 
       float ry = win.y + titleH - win.scrollOffset;
-      for (size_t mi = 0; mi < win.mods.size(); ++mi) {
+            for (size_t mi = 0; mi < win.mods.size(); ++mi) {
         LbModule &m = win.mods[mi];
+        if (!isModuleVisible(m.name)) continue;
         if (strcmp(m.name, "GUI Keybind") == 0 ||
             strncmp(m.name, "Bind: ", 6) == 0 ||
             strcmp(m.name, "Press a key...") == 0) {
@@ -864,8 +1251,10 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
         g_guiFont.drawString(win.x + 16, ry + rowH * 0.5f - 6.5f, m.name,
                              applyAlpha(on ? textPrimary() : textSecondary(),
                                         s_animAlpha), 0.5f);
-        if (clickEvent && isHit && hov && s_dragWin < 0)
-          m.set(!on);
+        if (clickEvent && isHit && hov && s_dragWin < 0) {
+          const bool toggleValue = m.savedGet ? m.savedGet() : on;
+          m.set(!toggleValue);
+        }
         if (rClickEvent && isHit && hov && hasSubs)
           m.expanded = !m.expanded;
         ry += rowH;
@@ -904,42 +1293,45 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
             continue;
           }
 
-          float sh = lbSubH(sb);
+          float subHeight = lbSubH(sb);
           int sid = 9000 + (int)(unsigned char)win.title[0] * 97 +
                     (int)mi * 17 + (int)si;
 
           if (sb.kind == LbKind::Label) {
-            bool lhov = inVisibleArea && isHovered(mx, my, win.x + 10, ry, ww - 20, sh) && isHit;
+            const std::string dynamicLabel =
+                sb.labelGet ? sb.labelGet() : std::string(sb.name);
+            bool lhov = inVisibleArea && isHovered(mx, my, win.x + 10, ry, ww - 20, subHeight) && isHit;
             glEnable(GL_TEXTURE_2D);
             DWORD labelColor = lhov ? accent() : textMuted();
-            g_guiFont.drawString(lx, ry + sh - 13.0f, sb.name,
+            g_guiFont.drawString(lx, ry + subHeight - 13.0f,
+                                 dynamicLabel,
                                  applyAlpha(labelColor, 0.85f * s_animAlpha),
                                  0.4f);
 
-            drawChevron(rx - 10.0f, ry + sh * 0.5f - 1.0f, 3.5f, sb.open, labelColor, s_animAlpha);
+            drawChevron(rx - 10.0f, ry + subHeight * 0.5f - 1.0f, 3.5f, sb.open, labelColor, s_animAlpha);
             glDisable(GL_TEXTURE_2D);
 
             if ((clickEvent || rClickEvent) && isHit && lhov && s_dragWin < 0) {
               sb.open = !sb.open;
             }
 
-            ry += sh;
+            ry += subHeight;
             continue;
           }
 
           if (sb.kind == LbKind::Toggle) {
             bool son = sb.bget();
-            bool shov = inVisibleArea && isHovered(mx, my, win.x + 10, ry, ww - 20, sh) && isHit;
+            bool shov = inVisibleArea && isHovered(mx, my, win.x + 10, ry, ww - 20, subHeight) && isHit;
             glDisable(GL_TEXTURE_2D);
             if (shov) {
               DWORD hb = surface2();
-              RenderUtils::drawRoundedRect(win.x + 10, ry + 2, ww - 20, sh - 4,
+              RenderUtils::drawRoundedRect(win.x + 10, ry + 2, ww - 20, subHeight - 4,
                                            5.0f, hb,
                                            (((hb >> 24) & 0xFF) / 255.0f) *
                                                0.55f * A);
             }
 
-            float sdx = rx - 5.0f, sdy = ry + sh * 0.5f;
+            float sdx = rx - 5.0f, sdy = ry + subHeight * 0.5f;
             if (son) {
               RenderUtils::drawCircle(sdx, sdy, 3.0f, accent(), subFade);
             } else {
@@ -947,36 +1339,42 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
             }
 
             glEnable(GL_TEXTURE_2D);
-            g_guiFont.drawString(lx, ry + sh * 0.5f - 6.0f, sb.name,
+            g_guiFont.drawString(lx, ry + subHeight * 0.5f - 6.0f, sb.name,
                                  applyAlpha(son ? textPrimary() : textSecondary(),
                                             subFade), 0.45f);
             glDisable(GL_TEXTURE_2D);
             if (clickEvent && isHit && shov && s_dragWin < 0)
               sb.bset(!son);
-            ry += sh;
+            ry += subHeight;
             continue;
           }
 
           if (sb.kind == LbKind::Slider) {
             float sval = sb.fget();
-            char vb[24];
-            if (sb.pct)
-              snprintf(vb, sizeof(vb), "%d%%", (int)(sval * 100.0f + 0.5f));
-            else
-              snprintf(vb, sizeof(vb), "%.1f%s", sval, sb.unit);
             glEnable(GL_TEXTURE_2D);
             g_guiFont.drawString(lx, ry + 8.0f, sb.name,
                                  applyAlpha(textSecondary(), subFade), 0.42f);
-            float vbw = g_guiFont.getStringWidth(vb) * (0.42f / 0.5f);
-            g_guiFont.drawString(rx - vbw, ry + 8.0f, vb,
-                                 applyAlpha(accent(), subFade), 0.42f);
             glDisable(GL_TEXTURE_2D);
 
             bool sch = drawSlider(sid, lx, ry + 28.0f, rx - lx, 8.0f, sval,
                                   sb.fmin, sb.fmax, mx, my,
                                   lClick && isHit && inVisibleArea, subFade);
+            glEnable(GL_TEXTURE_2D);
+            float displayed = sb.pct ? sval * 100.0f : sval;
+            const float displayMin = sb.pct ? sb.fmin * 100.0f : sb.fmin;
+            const float displayMax = sb.pct ? sb.fmax * 100.0f : sb.fmax;
+            const char *unit = sb.pct ? "%" : sb.unit;
+            const bool typed = drawNumericInput(
+                sid, rx - 62.0f, ry + 1.0f, 62.0f, 25.0f, displayed,
+                displayMin, displayMax, sb.pct ? 0 : 1, unit, mx, my,
+                clickEvent && isHit && inVisibleArea, subFade);
+            glDisable(GL_TEXTURE_2D);
+            if (typed) {
+              sval = sb.pct ? displayed / 100.0f : displayed;
+              sch = true;
+            }
             if (sch) sb.fset(sval);
-            ry += sh;
+            ry += subHeight;
             continue;
           }
 
@@ -1031,7 +1429,39 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
                 }
               }
             }
-            ry += sh;
+            ry += subHeight;
+            continue;
+          }
+
+          if (sb.kind == LbKind::Action) {
+            const bool shov = inVisibleArea &&
+                              isHovered(mx, my, win.x + 10, ry, ww - 20, subHeight) &&
+                              isHit;
+            glDisable(GL_TEXTURE_2D);
+            if (shov) {
+              DWORD hb = surface2();
+              RenderUtils::drawRoundedRect(
+                  win.x + 10, ry + 2, ww - 20, subHeight - 4, 5.0f, hb,
+                  (((hb >> 24) & 0xFF) / 255.0f) * 0.7f * A);
+            }
+            glEnable(GL_TEXTURE_2D);
+            g_guiFont.drawString(lx, ry + subHeight * 0.5f - 6.0f, sb.name,
+                                 applyAlpha(shov ? textPrimary()
+                                                 : textSecondary(),
+                                            subFade),
+                                 0.44f);
+            if (sb.sget) {
+              const std::string value = sb.sget();
+              const float valueWidth =
+                  g_guiFont.getStringWidth(value) * (0.38f / 0.5f);
+              g_guiFont.drawString(rx - valueWidth, ry + subHeight * 0.5f - 5.0f,
+                                   value.c_str(), applyAlpha(accent(), subFade),
+                                   0.38f);
+            }
+            glDisable(GL_TEXTURE_2D);
+            if (clickEvent && shov && s_dragWin < 0 && sb.action)
+              sb.action();
+            ry += subHeight;
             continue;
           }
 
@@ -1070,7 +1500,7 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
             glDisable(GL_TEXTURE_2D);
 
             if (clickEvent && isHit && bhov && s_dragWin < 0) {
-              s_typingSearch = s_typingApiKey = s_typingAutoGG = s_typingUrchinKey =
+              s_typingModuleSearch = s_typingModuleSearch = s_typingSearch = s_typingApiKey = s_typingAutoGG = s_typingUrchinKey =
                   s_typingSeraphKey = s_typingAuroraApiKey = s_typingPrefix = false;
               if (sb.typingStatePtr) {
                 *(sb.typingStatePtr) = true;
@@ -1087,7 +1517,7 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
               }
             }
 
-            ry += sh;
+            ry += subHeight;
             continue;
           }
         }
@@ -1177,6 +1607,7 @@ static void renderLayoutB(float mx, float my, bool lClick, bool clickEvent,
     }
     glEnable(GL_TEXTURE_2D);
   }
+
 }
 
 void ClickGUI::handleScrollB(float mx, float my, int delta) {
@@ -1294,6 +1725,26 @@ void ClickGUI::render(HDC hdc) {
     }
   }
 
+  if (s_open && s_waitingForNickRollKey) {
+    for (int k = 1; k < 255; ++k) {
+      if (k == VK_LBUTTON || k == VK_RBUTTON || k == VK_MBUTTON)
+        continue;
+      if ((GetAsyncKeyState(k) & 0x8000) != 0) {
+        if (k == VK_ESCAPE) {
+          s_waitingForNickRollKey = false;
+        } else {
+          Config::setNickRollToggleKey(k);
+          Config::save();
+          NotificationManager::getInstance()->add(
+              "Nick Score", "Toggle bind set to " + getKeyName(k),
+              NotificationType::Success);
+          s_waitingForNickRollKey = false;
+        }
+        break;
+      }
+    }
+  }
+
   if (s_open && s_waitingForUninjectKey) {
     for (int k = 1; k < 255; ++k) {
       if (k == VK_LBUTTON || k == VK_RBUTTON || k == VK_MBUTTON)
@@ -1304,6 +1755,7 @@ void ClickGUI::render(HDC hdc) {
         } else {
           Config::setUninjectKey(k);
           Config::save();
+          Config::suppressUninjectCheck();
           NotificationManager::getInstance()->add(
               "Settings", "Uninject bind set to " + getKeyName(k),
               NotificationType::Success);
@@ -1356,26 +1808,69 @@ void ClickGUI::render(HDC hdc) {
   ScreenToClient(hwnd, &pt);
   float mx = (float)pt.x;
   float my = (float)pt.y;
-  bool lClick = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+
+  HWND fgWnd = GetForegroundWindow();
+  bool isWindowActive = (fgWnd == hwnd || IsChild(hwnd, fgWnd));
+  bool isCursorInsideWindow = (mx >= 0.0f && mx <= sw && my >= 0.0f && my <= sh);
+
+  bool lClick = isWindowActive && isCursorInsideWindow && ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0);
   bool clickEvent = lClick && !s_lastLButton;
   s_lastLButton = lClick;
-  bool rClick = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+  bool rClick = isWindowActive && isCursorInsideWindow && ((GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0);
   static bool s_lastRButton = false;
   bool rClickEvent = rClick && !s_lastRButton;
   s_lastRButton = rClick;
 
+  if (s_animAlpha < 0.90f) {
+    lClick = false;
+    clickEvent = false;
+    rClick = false;
+    rClickEvent = false;
+  }
+
   if (Config::getClickGuiLayout() == "B") {
     RenderUtils::drawRect(0, 0, sw, sh, applyAlpha(0xB0000000, s_animAlpha));
+    drawThemeBackground(sw, sh, mx, my, s_animAlpha);
     renderLayoutB(mx, my, lClick, clickEvent, rClickEvent, sw, sh);
     return;
   }
 
-  DWORD dim = (style() == Style::LiquidGlass) ? 0x00000000 : 0xB0000000;
+  constexpr float kMinGuiWidth = 640.0f;
+  constexpr float kMinGuiHeight = 520.0f;
+  constexpr float kScreenMargin = 8.0f;
+  static bool geometryLoaded = false;
+  static int resizeEdges = 0; // 1=left, 2=right, 4=top, 8=bottom
+  static float resizeMouseX = 0.0f, resizeMouseY = 0.0f;
+  static float resizeX = 0.0f, resizeY = 0.0f;
+  static float resizeW = 0.0f, resizeH = 0.0f;
+  if (!geometryLoaded) {
+    g_x = Config::getClickGuiX();
+    g_y = Config::getClickGuiY();
+    g_w = Config::getClickGuiWidth();
+    g_h = Config::getClickGuiHeight();
+    geometryLoaded = true;
+  }
+
+  const float maximumW = (std::max)(320.0f, sw - kScreenMargin * 2.0f);
+  const float maximumH = (std::max)(300.0f, sh - kScreenMargin * 2.0f);
+  const float minimumW = (std::min)(kMinGuiWidth, maximumW);
+  const float minimumH = (std::min)(kMinGuiHeight, maximumH);
+
+  if (sw >= 400.0f && sh >= 300.0f) {
+    g_w = std::clamp(g_w, minimumW, maximumW);
+    g_h = std::clamp(g_h, minimumH, maximumH);
+    g_x = std::clamp(g_x, kScreenMargin,
+                     (std::max)(kScreenMargin, sw - g_w - kScreenMargin));
+    g_y = std::clamp(g_y, kScreenMargin,
+                     (std::max)(kScreenMargin, sh - g_h - kScreenMargin));
+  }
+
+  DWORD dim = (style() == Style::LiquidGlass) ? 0x25000000 : 0x8A000000;
   if (dim != 0) {
     RenderUtils::drawRect(0, 0, sw, sh, applyAlpha(dim, s_animAlpha));
   }
 
-  drawThemeBackground(sw, sh, s_animAlpha);
+  drawThemeBackground(sw, sh, mx, my, s_animAlpha);
 
   GlGuard::GlMatrixGuard _gMvInner(GL_MODELVIEW);
   float centerX = g_x + g_w / 2;
@@ -1384,24 +1879,127 @@ void ClickGUI::render(HDC hdc) {
   glScalef(s_openingScale, s_openingScale, 1.0f);
   glTranslatef(-centerX, -centerY, 0);
 
-  if (s_open && s_animAlpha >= 0.95f) {
-    if (lClick) {
-      if (!s_dragging) {
-        if (isHovered(mx, my, g_x, g_y, g_w, 60)) {
-          s_dragging = true;
-          s_dragOffsetX = mx - g_x;
-          s_dragOffsetY = my - g_y;
-        }
-      } else {
-        g_x = mx - s_dragOffsetX;
-        g_y = my - s_dragOffsetY;
-      }
-    } else {
-      s_dragging = false;
-    }
+  if (s_openingScale > 0.05f && std::fabs(s_openingScale - 1.0f) > 0.001f) {
+    mx = centerX + (mx - centerX) / s_openingScale;
+    my = centerY + (my - centerY) / s_openingScale;
   }
 
+  if (s_open && s_animAlpha >= 0.5f) {
+    constexpr float edgeHit = 8.0f;
+    constexpr float kCornerGrip = 24.0f;
 
+    const bool insideGripBR =
+        isHovered(mx, my, g_x + g_w - kCornerGrip, g_y + g_h - kCornerGrip,
+                  kCornerGrip + 4.0f, kCornerGrip + 4.0f);
+
+    const bool insideExpanded =
+        isHovered(mx, my, g_x - edgeHit, g_y - edgeHit,
+                  g_w + edgeHit * 2.0f, g_h + edgeHit * 2.0f);
+    const bool nearLeft   = insideExpanded && std::fabs(mx - g_x) <= edgeHit;
+    const bool nearRight  = insideExpanded && (std::fabs(mx - (g_x + g_w)) <= edgeHit || insideGripBR);
+    const bool nearTop    = insideExpanded && std::fabs(my - g_y) <= edgeHit;
+    const bool nearBottom = insideExpanded && (std::fabs(my - (g_y + g_h)) <= edgeHit || insideGripBR);
+
+    if (!s_dragging) {
+      if (resizeEdges != 0) {
+        if ((resizeEdges & 1 && resizeEdges & 4) || (resizeEdges & 2 && resizeEdges & 8)) {
+          SetCursor(LoadCursorA(nullptr, IDC_SIZENWSE));
+        } else if ((resizeEdges & 2 && resizeEdges & 4) || (resizeEdges & 1 && resizeEdges & 8)) {
+          SetCursor(LoadCursorA(nullptr, IDC_SIZENESW));
+        } else if (resizeEdges & 1 || resizeEdges & 2) {
+          SetCursor(LoadCursorA(nullptr, IDC_SIZEWE));
+        } else if (resizeEdges & 4 || resizeEdges & 8) {
+          SetCursor(LoadCursorA(nullptr, IDC_SIZENS));
+        }
+      } else if (insideGripBR || (nearRight && nearBottom)) {
+        SetCursor(LoadCursorA(nullptr, IDC_SIZENWSE));
+      } else if (nearLeft && nearTop) {
+        SetCursor(LoadCursorA(nullptr, IDC_SIZENWSE));
+      } else if ((nearRight && nearTop) || (nearLeft && nearBottom)) {
+        SetCursor(LoadCursorA(nullptr, IDC_SIZENESW));
+      } else if (nearLeft || nearRight) {
+        SetCursor(LoadCursorA(nullptr, IDC_SIZEWE));
+      } else if (nearTop || nearBottom) {
+        SetCursor(LoadCursorA(nullptr, IDC_SIZENS));
+      }
+    }
+
+    if (clickEvent && resizeEdges == 0 && !s_dragging) {
+      if (insideGripBR || (nearRight && nearBottom)) {
+        resizeEdges = 2 | 8;
+        resizeMouseX = mx;
+        resizeMouseY = my;
+        resizeX = g_x;
+        resizeY = g_y;
+        resizeW = g_w;
+        resizeH = g_h;
+        clickEvent = false;
+      } else if (nearLeft || nearRight || nearTop || nearBottom) {
+        resizeEdges = (nearLeft ? 1 : 0) | (nearRight ? 2 : 0) |
+                      (nearTop ? 4 : 0) | (nearBottom ? 8 : 0);
+        resizeMouseX = mx;
+        resizeMouseY = my;
+        resizeX = g_x;
+        resizeY = g_y;
+        resizeW = g_w;
+        resizeH = g_h;
+        clickEvent = false;
+      }
+    }
+
+    if (resizeEdges != 0) {
+      if (!lClick) {
+        resizeEdges = 0;
+        Config::setClickGuiBounds(g_x, g_y, g_w, g_h);
+      } else {
+        const float dx = mx - resizeMouseX;
+        const float dy = my - resizeMouseY;
+        const float originalRight = resizeX + resizeW;
+        const float originalBottom = resizeY + resizeH;
+        if (resizeEdges & 1) {
+          g_x = std::clamp(resizeX + dx, kScreenMargin,
+                           originalRight - minimumW);
+          g_w = originalRight - g_x;
+        } else if (resizeEdges & 2) {
+          float maxAllowedW = (std::max)(minimumW, sw - kScreenMargin - resizeX);
+          g_w = std::clamp(resizeW + dx, minimumW, maxAllowedW);
+        }
+        if (resizeEdges & 4) {
+          g_y = std::clamp(resizeY + dy, kScreenMargin,
+                           originalBottom - minimumH);
+          g_h = originalBottom - g_y;
+        } else if (resizeEdges & 8) {
+          float maxAllowedH = (std::max)(minimumH, sh - kScreenMargin - resizeY);
+          g_h = std::clamp(resizeH + dy, minimumH, maxAllowedH);
+        }
+        clickEvent = false;
+      }
+    } else if (lClick) {
+      bool overSearchBar = isHovered(mx, my, s_sbX, s_sbY, s_sbW, s_sbH);
+      if (!s_dragging && clickEvent && !overSearchBar &&
+          isHovered(mx, my, g_x + edgeHit, g_y + edgeHit,
+                    g_w - edgeHit * 2.0f, 60.0f - edgeHit) &&
+          mx < g_x + g_w - 54.0f) {
+        s_dragging = true;
+        s_dragOffsetX = mx - g_x;
+        s_dragOffsetY = my - g_y;
+        clickEvent = false;
+      } else if (s_dragging) {
+        g_x = std::clamp(mx - s_dragOffsetX, kScreenMargin,
+                         (std::max)(kScreenMargin,
+                                  sw - g_w - kScreenMargin));
+        g_y = std::clamp(my - s_dragOffsetY, kScreenMargin,
+                         (std::max)(kScreenMargin,
+                                  sh - g_h - kScreenMargin));
+        clickEvent = false;
+      }
+    } else {
+      if (s_dragging) {
+        s_dragging = false;
+        Config::setClickGuiBounds(g_x, g_y, g_w, g_h);
+      }
+    }
+  }
 
   const float mainX = g_x;
   const float mainY = g_y;
@@ -1409,6 +2007,45 @@ void ClickGUI::render(HDC hdc) {
 
   drawThemePanel(mainX, mainY, g_w, g_h, s_animAlpha);
   drawThemeSidebar(mainX, mainY, sidebarW, g_h, s_animAlpha);
+
+  glDisable(GL_TEXTURE_2D);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glEnable(GL_LINE_SMOOTH);
+  glLineWidth(1.8f);
+
+  const bool isGripActive = (resizeEdges & 2) && (resizeEdges & 8);
+  const bool isGripHover = isHovered(mx, my, mainX + g_w - 24.0f, mainY + g_h - 24.0f, 24.0f, 24.0f);
+  const DWORD gripCol = (isGripActive || isGripHover) ? accent() : textMuted();
+  const DWORD grip = applyAlpha(gripCol, s_animAlpha * (isGripActive ? 1.0f : (isGripHover ? 0.95f : 0.6f)));
+
+  if (isGripActive || isGripHover) {
+    DWORD triCol = applyAlpha(accent(), 0.12f * s_animAlpha);
+    glColor4ub(static_cast<GLubyte>((triCol >> 16) & 0xFF),
+               static_cast<GLubyte>((triCol >> 8) & 0xFF),
+               static_cast<GLubyte>(triCol & 0xFF),
+               static_cast<GLubyte>((triCol >> 24) & 0xFF));
+    glBegin(GL_TRIANGLES);
+    glVertex2f(mainX + g_w - 20.0f, mainY + g_h);
+    glVertex2f(mainX + g_w, mainY + g_h - 20.0f);
+    glVertex2f(mainX + g_w, mainY + g_h);
+    glEnd();
+  }
+
+  glColor4ub(static_cast<GLubyte>((grip >> 16) & 0xFF),
+             static_cast<GLubyte>((grip >> 8) & 0xFF),
+             static_cast<GLubyte>(grip & 0xFF),
+             static_cast<GLubyte>((grip >> 24) & 0xFF));
+  glBegin(GL_LINES);
+  glVertex2f(mainX + g_w - 18.0f, mainY + g_h - 5.0f);
+  glVertex2f(mainX + g_w - 5.0f,  mainY + g_h - 18.0f);
+  glVertex2f(mainX + g_w - 12.0f, mainY + g_h - 5.0f);
+  glVertex2f(mainX + g_w - 5.0f,  mainY + g_h - 12.0f);
+  glVertex2f(mainX + g_w - 6.0f,  mainY + g_h - 5.0f);
+  glVertex2f(mainX + g_w - 5.0f,  mainY + g_h - 6.0f);
+  glEnd();
+  glDisable(GL_LINE_SMOOTH);
+  glEnable(GL_TEXTURE_2D);
 
   RenderUtils::drawRect(mainX + sidebarW, mainY + 60, g_w - sidebarW, 1,
                         applyAlpha(0x18FFFFFF, s_animAlpha));
@@ -1427,13 +2064,14 @@ void ClickGUI::render(HDC hdc) {
   }
   g_guiFont.drawString(mainX + 56, mainY + 22.0f, "OVSON",
                        applyAlpha(textPrimary(), s_animAlpha));
-  g_guiFont.drawString(mainX + 56, mainY + 40.0f, "CLIENT",
+  g_guiFont.drawString(mainX + 56, mainY + 40.0f, "OVERLAY",
                        applyAlpha(accent(), s_animAlpha), 0.45f);
 
   {
-    static const char *tabNm[] = {"Visuals", "Players", "Tags", "Settings",
-                                  "Colors", "Debug", "Utils", "Plugins"};
-    int ti = (s_targetTab >= 0 && s_targetTab < 8) ? s_targetTab : 0;
+     static const char *tabNm[] = {"Visuals", "Players", "Tags", "Settings",
+                                   "Colors", "Debug", "Utils", "Plugins",
+                                   "Bedwars"};
+    int ti = (s_targetTab >= 0 && s_targetTab < 9) ? s_targetTab : 0;
     float hbX = mainX + sidebarW + 30.0f, hbY = mainY + 22.0f;
     // getStringWidth() is measured at scale 0.5, so visual width of
     // drawString(text, S) == getStringWidth(text) * (S / 0.5).
@@ -1441,33 +2079,111 @@ void ClickGUI::render(HDC hdc) {
     g_guiFont.drawString(ox, hbY, "OVSON",
                          applyAlpha(textPrimary(), s_animAlpha));   // scale 0.5
     ox += g_guiFont.getStringWidth("OVSON") + 8.0f;
-    g_guiFont.drawString(ox, hbY + 1.0f, "CLIENT",
+    g_guiFont.drawString(ox, hbY + 1.0f, "OVERLAY",
                          applyAlpha(accent(), s_animAlpha), 0.42f);
-    ox += g_guiFont.getStringWidth("CLIENT") * (0.42f / 0.5f) + 10.0f;
-    std::string bc = std::string("/  ") + tabNm[ti];
+    ox += g_guiFont.getStringWidth("OVERLAY") * (0.42f / 0.5f) + 10.0f;
+
+    std::string bc = std::string("/  ") + (!s_moduleSearch.empty() ? "Search" : tabNm[ti]);
     g_guiFont.drawString(ox, hbY + 1.0f, bc.c_str(),
                          applyAlpha(textMuted(), s_animAlpha), 0.42f);
+
+    ox += g_guiFont.getStringWidth(bc.c_str()) * (0.42f / 0.5f) + 25.0f;
 
     std::string srv = getServerIp();
     float srvW = g_guiFont.getStringWidth(srv) * (0.4f / 0.5f);
     float chipH = 26.0f;
-    float chipW = 26.0f + srvW + 14.0f;  // grows with the IP length
+    float chipW = 26.0f + srvW + 14.0f;
     float chipX = mainX + g_w - 16.0f - 28.0f - 12.0f - chipW;
-    float chipY = mainY + 17.0f;
+
+    float spaceBeforeChip = chipX - 16.0f - ox;
+    float searchW = 340.0f;
+    if (spaceBeforeChip >= 160.0f) {
+      searchW = std::min(spaceBeforeChip, 600.0f);
+    } else {
+      float spaceBeforeClose = (mainX + g_w - 16.0f - 28.0f - 16.0f) - ox;
+      searchW = std::clamp(spaceBeforeClose, 120.0f, 340.0f);
+    }
+
+    float searchH = 34.0f;
+    float searchY = hbY - 7.0f;
+    float searchBarEndX = ox + searchW;
+
+    s_sbX = ox; s_sbY = searchY; s_sbW = searchW; s_sbH = searchH;
+
+    float clearBtnSize = 20.0f;
+    float clearBtnX = ox + searchW - clearBtnSize - 6.0f;
+    float clearBtnY = searchY + (searchH - clearBtnSize) * 0.5f;
+    bool showClear = !s_moduleSearch.empty();
+    bool hClear = showClear && isHovered(mx, my, clearBtnX, clearBtnY, clearBtnSize, clearBtnSize);
+
+    bool hSearch = isHovered(mx, my, ox, searchY, searchW, searchH) && !hClear;
+    
+    if (clickEvent && hClear) {
+        s_moduleSearch.clear();
+        s_typingModuleSearch = false;
+        clickEvent = false;
+    } else if (clickEvent && hSearch) {
+        s_typingModuleSearch = true;
+        clickEvent = false;
+    } else if (clickEvent && !isHovered(mx, my, ox, searchY, searchW, searchH) && s_typingModuleSearch) {
+        s_typingModuleSearch = false;
+    }
+
     glDisable(GL_TEXTURE_2D);
-    DWORD cb = ClickGUITheme::surface2();
-    RenderUtils::drawRoundedRect(chipX, chipY, chipW, chipH, chipH * 0.5f, cb,
-                                 (((cb >> 24) & 0xFF) / 255.0f) * s_animAlpha);
-    DWORD cbd = ClickGUITheme::hairline();
-    RenderUtils::drawRoundedOutline(chipX, chipY, chipW, chipH, chipH * 0.5f,
-                                    1.0f, cbd,
-                                    (((cbd >> 24) & 0xFF) / 255.0f) * s_animAlpha);
-    RenderUtils::drawCircle(chipX + 13.0f, chipY + chipH * 0.5f, 3.0f,
-                            ClickGUITheme::online(), s_animAlpha);
+    drawTextInput(ox, searchY, searchW, searchH, s_typingModuleSearch, hSearch || hClear, s_animAlpha);
     glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(chipX + 21.0f, chipY + 4.5f,
-                         srv.c_str(), applyAlpha(textSecondary(), s_animAlpha),
-                         0.4f);
+
+    std::string dispSearch = s_moduleSearch;
+    if (s_typingModuleSearch && (GetTickCount64() / 500) % 2 == 0)
+        dispSearch += "|";
+    if (dispSearch.empty() && !s_typingModuleSearch) {
+        if (searchW < 170.0f) {
+            dispSearch = "Search...";
+        } else if (searchW < 260.0f) {
+            dispSearch = "Search modules...";
+        } else {
+            dispSearch = "Search for modules...";
+        }
+    }
+
+    g_guiFont.drawString(ox + 14.0f, searchY + 7.0f, dispSearch, 
+                         applyAlpha(s_typingModuleSearch ? 0xFFFFFFFF : 0xFF606065, s_animAlpha), 0.48f);
+
+    if (showClear) {
+        DWORD clearCol = hClear ? 0xFFFFFFFF : 0xFF808085;
+        float cx2 = clearBtnX + clearBtnSize * 0.5f;
+        float cy2 = clearBtnY + clearBtnSize * 0.5f;
+        float cs = 5.0f;
+        glDisable(GL_TEXTURE_2D);
+        glLineWidth(2.0f);
+        glColor4f(((clearCol >> 16) & 0xFF) / 255.0f,
+                  ((clearCol >> 8) & 0xFF) / 255.0f,
+                  (clearCol & 0xFF) / 255.0f,
+                  s_animAlpha);
+        glBegin(GL_LINES);
+        glVertex2f(cx2 - cs, cy2 - cs); glVertex2f(cx2 + cs, cy2 + cs);
+        glVertex2f(cx2 + cs, cy2 - cs); glVertex2f(cx2 - cs, cy2 + cs);
+        glEnd();
+        glLineWidth(1.0f);
+        glEnable(GL_TEXTURE_2D);
+    }
+    if (chipX > searchBarEndX + 12.0f) {
+        float chipY = mainY + 17.0f;
+        glDisable(GL_TEXTURE_2D);
+        DWORD cb = ClickGUITheme::surface2();
+        RenderUtils::drawRoundedRect(chipX, chipY, chipW, chipH, chipH * 0.5f, cb,
+                                     (((cb >> 24) & 0xFF) / 255.0f) * s_animAlpha);
+        DWORD cbd = ClickGUITheme::hairline();
+        RenderUtils::drawRoundedOutline(chipX, chipY, chipW, chipH, chipH * 0.5f,
+                                        1.0f, cbd,
+                                        (((cbd >> 24) & 0xFF) / 255.0f) * s_animAlpha);
+        RenderUtils::drawCircle(chipX + 13.0f, chipY + chipH * 0.5f, 3.0f,
+                                ClickGUITheme::online(), s_animAlpha);
+        glEnable(GL_TEXTURE_2D);
+        g_guiFont.drawString(chipX + 21.0f, chipY + 4.5f,
+                             srv.c_str(), applyAlpha(textSecondary(), s_animAlpha),
+                             0.4f);
+    }
   }
 
   {
@@ -1485,9 +2201,6 @@ void ClickGUI::render(HDC hdc) {
     }
     glEnable(GL_TEXTURE_2D);
 
-    const char *glyph = "X";
-    float glyphW = g_guiFont.getStringWidth(glyph);
-    
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_LINE_SMOOTH);
@@ -1513,7 +2226,8 @@ void ClickGUI::render(HDC hdc) {
   }
 
   const float tabStartY = 96.0f;
-  const float tabRowH = 48.0f;
+  const float tabRowH =
+      std::clamp((g_h - tabStartY - 94.0f) / 9.0f, 36.0f, 48.0f);
   float targetY = tabStartY + (s_targetTab * tabRowH);
   s_tabIndicatorY += (targetY - s_tabIndicatorY) * 0.22f;
 
@@ -1545,7 +2259,8 @@ void ClickGUI::render(HDC hdc) {
   s_scrollOffset += (s_targetScroll - s_scrollOffset) * 0.18f;
 
   const char *tabs[] = {"Visuals", "Players", "Tags",  "Settings",
-                        "Colors",  "Debug",   "Utils", "Plugins", nullptr};
+                        "Colors",  "Debug",   "Utils", "Plugins",
+                        "Bedwars", nullptr};
   float ty = mainY + tabStartY;
   for (int i = 0; tabs[i]; ++i) {
     bool hover = isHovered(mx, my, mainX + 12, ty - 10, sidebarW - 24, 42);
@@ -1582,6 +2297,7 @@ void ClickGUI::render(HDC hdc) {
     if (clickEvent && hover) {
       s_targetTab = i;
       s_isDropdownOpen = false;
+      ClickGUIHelpers::cancelInlineEditors();
     }
     ty += tabRowH;
   }
@@ -1674,19 +2390,46 @@ void ClickGUI::render(HDC hdc) {
   glScissor((int)(mainX + sidebarW), (int)(sh - (mainY + g_h - 10)),
             (int)(g_w - sidebarW), (int)(g_h - 70));
 
-  TabCtx ctx{hwnd, mainX, mainY, cx, startCy, cy,
-             mx, my, lClick, clickEvent, alpha};
+  const float contentMinX = mainX + sidebarW;
+  const float contentMaxX = mainX + g_w - 14.0f; // exclude right scrollbar
+  const float contentMinY = mainY + 62.0f;        // below top header
+  const float contentMaxY = mainY + g_h - 10.0f;  // above bottom margin
+  const bool mouseInContentArea = (mx >= contentMinX && mx <= contentMaxX &&
+                                   my >= contentMinY && my <= contentMaxY);
 
-  switch (s_activeTab) {
-  case 0: Tabs::renderVisuals (ctx); break;
-  case 1: Tabs::renderPlayers (ctx); break;
-  case 2: Tabs::renderTags    (ctx); break;
-  case 3: Tabs::renderSettings(ctx); break;
-  case 4: Tabs::renderColors  (ctx); break;
-  case 5: Tabs::renderDebug   (ctx); break;
-  case 6: Tabs::renderUtils   (ctx); break;
-  case 7: Tabs::renderPlugins (ctx); break;
-  default: break;
+  bool tabLClick = lClick && (resizeEdges == 0) && !s_dragging && mouseInContentArea;
+  bool tabClickEvent = clickEvent && (resizeEdges == 0) && !s_dragging && mouseInContentArea;
+  TabCtx ctx{hwnd, mainX, mainY, cx, startCy, cy,
+             mx, my, tabLClick, tabClickEvent, alpha};
+
+  if (!s_moduleSearch.empty()) {
+    float startSearchCy = cy;
+    Tabs::renderVisuals (ctx); 
+    Tabs::renderUtils   (ctx);
+    Tabs::renderBedwars (ctx);
+    Tabs::renderSettings(ctx);
+    Tabs::renderPlugins (ctx);
+    Tabs::renderCustomScripts(ctx);
+
+    if (cy <= startSearchCy + 2.0f) {
+      std::string noMatch = "No results found for \"" + s_moduleSearch + "\"";
+      g_guiFont.drawString(cx, cy + 20, noMatch.c_str(),
+                           applyAlpha(0xFF808085, alpha), 0.48f);
+      cy += 60;
+    }
+  } else {
+    switch (s_activeTab) {
+    case 0: Tabs::renderVisuals (ctx); break;
+    case 1: Tabs::renderPlayers (ctx); break;
+    case 2: Tabs::renderTags    (ctx); break;
+    case 3: Tabs::renderSettings(ctx); break;
+    case 4: Tabs::renderColors  (ctx); break;
+    case 5: Tabs::renderDebug   (ctx); break;
+    case 6: Tabs::renderUtils   (ctx); break;
+    case 7: Tabs::renderPlugins (ctx); break;
+    case 8: Tabs::renderBedwars (ctx); break;
+    default: break;
+    }
   }
 
   float contentHeight = (cy + s_scrollOffset) - startCy;
@@ -1748,4 +2491,9 @@ void ClickGUI::resetLayoutB() {
 }
 
 } // namespace Render
+
+
+
+
+
 

@@ -8,6 +8,7 @@
 namespace Config {
 bool initialize(HMODULE selfModule);
 HMODULE getModuleHandle();
+std::string getDataDirectory();
 void update();
 bool save();
 bool saveNow();
@@ -39,6 +40,11 @@ float getBetterTabY();
 void setBetterTabY(float y);
 float getBetterTabScale();
 void setBetterTabScale(float scale);
+
+DWORD getBetterTabBgColor();
+void setBetterTabBgColor(DWORD color);
+float getBetterTabBgAlpha();
+void setBetterTabBgAlpha(float alpha);
 
 bool isPreGameChatStatsEnabled();
 void setPreGameChatStatsEnabled(bool enabled);
@@ -81,8 +87,90 @@ void setBedDefenseEnabled(bool enabled);
 bool isNickedBypass();
 void setNickedBypass(bool enabled);
 
+bool isMojangCapeEnabled();
+void setMojangCapeEnabled(bool enabled);
+int getMojangCapeStyle();
+void setMojangCapeStyle(int style);
+bool isMojangCapeOnlyNicked();
+void setMojangCapeOnlyNicked(bool onlyNicked);
+
 bool isRawMouseFixEnabled();
 void setRawMouseFixEnabled(bool enabled);
+
+bool isBlockHitSoundEnabled();
+void setBlockHitSoundEnabled(bool enabled);
+bool isBlockHitSoundDebugEnabled();
+void setBlockHitSoundDebugEnabled(bool enabled);
+const std::string &getBlockHitSoundSource();
+void setBlockHitSoundSource(const std::string &source);
+const std::string &getBlockHitSoundFilename();
+void setBlockHitSoundFilename(const std::string &filename);
+float getBlockHitSoundVolume();
+void setBlockHitSoundVolume(float volumePercent);
+bool isBlockHitWaitForServerEnabled();
+void setBlockHitWaitForServerEnabled(bool enabled);
+bool isMediaOverlayEnabled();
+void setMediaOverlayEnabled(bool enabled);
+float getMediaOverlayX();
+void setMediaOverlayX(float x);
+float getMediaOverlayY();
+void setMediaOverlayY(float y);
+float getMediaOverlayScale();
+void setMediaOverlayScale(float scale);
+// 0 = wide landscape card, 1 = compact portrait card.
+int getMediaOverlayLayout();
+void setMediaOverlayLayout(int layout);
+// Card appearance. Colours are stored as 0xRRGGBB; opacity is separate so the
+// background can be tinted and faded independently.
+unsigned long getMediaOverlayBgColor();
+void setMediaOverlayBgColor(unsigned long rgb);
+unsigned long getMediaOverlayAccentColor();
+void setMediaOverlayAccentColor(unsigned long rgb);
+unsigned long getMediaOverlayTextColor();
+void setMediaOverlayTextColor(unsigned long rgb);
+float getMediaOverlayOpacity();
+void setMediaOverlayOpacity(float opacity);
+float getMediaOverlayCorner();
+void setMediaOverlayCorner(float radius);
+bool isMediaOverlayArtEnabled();
+void setMediaOverlayArtEnabled(bool enabled);
+
+bool isMuteOwnStepsEnabled();
+void setMuteOwnStepsEnabled(bool enabled);
+bool isBowDistanceEnabled();
+void setBowDistanceEnabled(bool enabled);
+bool isPreventBowDropEnabled();
+void setPreventBowDropEnabled(bool enabled);
+
+int getNickScoreThreshold();
+void setNickScoreThreshold(int threshold);
+bool isNickRollEnabled();
+void setNickRollEnabled(bool enabled);
+bool isNickScorePingEnabled();
+void setNickScorePingEnabled(bool enabled);
+bool isNickScoreAlertEveryEnabled();
+void setNickScoreAlertEveryEnabled(bool enabled);
+bool isNickRollLogAllEnabled();
+void setNickRollLogAllEnabled(bool enabled);
+
+bool isTeamColoredHitboxesEnabled();
+void setTeamColoredHitboxesEnabled(bool enabled);
+bool isTeamHitboxesFilled();
+void setTeamHitboxesFilled(bool filled);
+bool isNickRollAutoRerollEnabled();
+void setNickRollAutoRerollEnabled(bool enabled);
+int getNickRollRerollDelayMs();
+void setNickRollRerollDelayMs(int milliseconds);
+int getNickRollRerollCap();
+void setNickRollRerollCap(int cap);
+int getNickRollToggleKey();
+void setNickRollToggleKey(int virtualKey);
+const std::string &getNickRollTargetWord();
+void setNickRollTargetWord(const std::string &targetWord);
+bool isNickRollLimboRecoveryEnabled();
+void setNickRollLimboRecoveryEnabled(bool enabled);
+int getNickRollLobbySwapInterval();
+void setNickRollLobbySwapInterval(int interval);
 
 // click gui settings
 int getClickGuiKey();
@@ -91,6 +179,8 @@ int getUninjectKey();
 void setUninjectKey(int key);
 bool isUninjectKeyEnabled();
 void setUninjectKeyEnabled(bool enabled);
+void suppressUninjectCheck();     // suppress for 1 second after key assignment
+bool isUninjectCheckSuppressed(); // true while suppression is active
 
 bool isNotificationsEnabled();
 void setNotificationsEnabled(bool enabled);
@@ -138,14 +228,23 @@ void addMutedTagPlayer(const std::string &name);
 void removeMutedTagPlayer(const std::string &name);
 bool isMuteSelfTagAlertsEnabled();
 void setMuteSelfTagAlertsEnabled(bool enabled);
+bool isMuteTeamTagAlertsEnabled();
+void setMuteTeamTagAlertsEnabled(bool enabled);
 
 // ClickGUI visual theme: "LiquidGlass" (default) | "Minimal".
 const std::string &getClickGuiTheme();
 void setClickGuiTheme(const std::string &theme);
 const std::string &getClickGuiLayout();
 void setClickGuiLayout(const std::string &layout);
+float getClickGuiX();
+float getClickGuiY();
+float getClickGuiWidth();
+float getClickGuiHeight();
+void setClickGuiBounds(float x, float y, float width, float height);
 const std::string &getLayoutBData();
 void setLayoutBData(const std::string &data);
+const std::string &getBedwarsSettingsData();
+void setBedwarsSettingsData(const std::string &data);
 
 bool isLiquidGlassWiggleEnabled();
 void setLiquidGlassWiggleEnabled(bool enabled);
@@ -328,4 +427,20 @@ int getAnticheatVl();
 void setAnticheatVl(int vl);
 int getAnticheatCooldownSec();
 void setAnticheatCooldownSec(int sec);
+
+// IRC
+bool isIrcEnabled();
+void setIrcEnabled(bool enabled);
+bool isIrcDingEnabled();
+void setIrcDingEnabled(bool enabled);
+bool isIrcMuted();
+void setIrcMuted(bool muted);
+bool isIrcAppearOffline();
+void setIrcAppearOffline(bool offline);
+const std::string &getIrcServerUrl();
+void setIrcServerUrl(const std::string &url);
+const std::string &getIrcSecretKey();
+void setIrcSecretKey(const std::string &secret);
+const std::string &getIrcRanksUrl();
+void setIrcRanksUrl(const std::string &url);
 } // namespace Config

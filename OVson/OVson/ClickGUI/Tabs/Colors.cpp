@@ -8,6 +8,7 @@
 #include "../../Config/Config.h"
 #include "../../Config/StatColors.h"
 #include <Windows.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -29,179 +30,56 @@ void renderColors(TabCtx &ctx) {
   const bool  lClick = ctx.lClick;
   const bool  clickEvent = ctx.clickEvent;
   const float alpha = ctx.alpha;
+  static std::uint32_t statPickerColor = 0xFF3D6EF5u;
 
   {
-    using namespace ClickGUITheme;
-    auto hsv32 = [](float h, float s, float v) -> uint32_t {
-      float h6 = h * 6.0f; int hi = (int)h6 % 6; float f = h6 - (int)h6;
-      float p = v*(1-s), q = v*(1-f*s), t = v*(1-(1-f)*s); float r,g,b;
-      switch (hi) { case 0: r=v;g=t;b=p;break; case 1: r=q;g=v;b=p;break;
-        case 2: r=p;g=v;b=t;break; case 3: r=p;g=q;b=v;break;
-        case 4: r=t;g=p;b=v;break; default: r=v;g=p;b=q;break; }
-      return 0xFF000000u | ((uint8_t)(r*255)<<16) | ((uint8_t)(g*255)<<8) | (uint8_t)(b*255);
-    };
-    auto rgbToHsv = [](uint32_t c, float &h, float &s, float &v) {
-      float rf=((c>>16)&0xFF)/255.0f, gf=((c>>8)&0xFF)/255.0f, bf=(c&0xFF)/255.0f;
-      float cmax = fmaxf(rf, fmaxf(gf,bf)), cmin = fminf(rf, fminf(gf,bf));
-      float d = cmax - cmin; v = cmax; s = cmax>0 ? d/cmax : 0; float hh=0;
-      if (d > 0.0001f) {
-        if (cmax==rf) hh = fmodf((gf-bf)/d, 6.0f);
-        else if (cmax==gf) hh = (bf-rf)/d + 2.0f;
-        else hh = (rf-gf)/d + 4.0f;
-        hh /= 6.0f; if (hh<0) hh += 1.0f;
-      }
-      h = hh;
-    };
-
-    if (!s_accentInit) {
-      rgbToHsv(Config::getThemeColor(), s_accentHue, s_accentSat, s_accentVal);
-      s_accentInit = true;
-    }
-
     drawSectionLabel(cx, cy, "Accent Color", alpha);
-    cy += 26;
-
-
-    float svX = cx, svY = cy;
-    float svW = g_w - 230.0f; if (svW < 180.0f) svW = 180.0f;
-    float svH = 132.0f;
-    uint32_t hueTop = hsv32(s_accentHue, 1.0f, 1.0f);
-    float hr=((hueTop>>16)&0xFF)/255.0f, hg=((hueTop>>8)&0xFF)/255.0f, hb=(hueTop&0xFF)/255.0f;
-
-    glDisable(GL_TEXTURE_2D); glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); glShadeModel(GL_SMOOTH);
-    glBegin(GL_QUADS);
-      glColor4f(hr,hg,hb,alpha); glVertex2f(svX,svY); glVertex2f(svX+svW,svY);
-      glVertex2f(svX+svW,svY+svH); glVertex2f(svX,svY+svH);
-    glEnd();
-    glBegin(GL_QUADS);
-      glColor4f(1,1,1,alpha); glVertex2f(svX,svY); glVertex2f(svX,svY+svH);
-      glColor4f(1,1,1,0);     glVertex2f(svX+svW,svY+svH); glVertex2f(svX+svW,svY);
-    glEnd();
-    glBegin(GL_QUADS);
-      glColor4f(0,0,0,0);     glVertex2f(svX,svY); glVertex2f(svX+svW,svY);
-      glColor4f(0,0,0,alpha); glVertex2f(svX+svW,svY+svH); glVertex2f(svX,svY+svH);
-    glEnd();
-    float curX = svX + s_accentSat*svW, curY = svY + (1.0f-s_accentVal)*svH;
-    glShadeModel(GL_FLAT); glColor4f(1,1,1,alpha); glLineWidth(1.5f);
-    glBegin(GL_LINE_LOOP);
-    for (int a=0;a<18;++a){ float an=a*6.2831853f/18.0f;
-      glVertex2f(curX+cosf(an)*5, curY+sinf(an)*5); }
-    glEnd(); glLineWidth(1.0f);
-
-    bool changed = false;
-    if (isHovered(mx,my,svX,svY,svW,svH) && lClick) s_accentDragSV = true;
-    if (s_accentDragSV) {
-      if (lClick) {
-        s_accentSat = (mx-svX)/svW; s_accentVal = 1.0f-(my-svY)/svH;
-        s_accentSat = s_accentSat<0?0:(s_accentSat>1?1:s_accentSat);
-        s_accentVal = s_accentVal<0?0:(s_accentVal>1?1:s_accentVal);
-        changed = true;
-      } else s_accentDragSV = false;
+    cy += 26.0f;
+    std::uint32_t accentColor = Config::getThemeColor();
+    bool rainbow = Config::isChromaEnabled();
+    const bool colorChanged =
+        drawColorPicker(9000, cx, cy, (std::max)(180.0f, g_w - 230.0f),
+                        accentColor, mx, my, lClick, clickEvent, alpha,
+                        &rainbow);
+    if (colorChanged) {
+      Config::setThemeColor(accentColor);
+      s_accentInit = false;
     }
-
-    float hueX = svX, hueY = svY + svH + 10.0f, hueW = svW, hueH = 13.0f;
-    const float stops[7][3] = {{1,0,0},{1,1,0},{0,1,0},{0,1,1},{0,0,1},{1,0,1},{1,0,0}};
-    glShadeModel(GL_SMOOTH);
-    for (int i=0;i<6;++i){
-      float x0=hueX+hueW*i/6.0f, x1=hueX+hueW*(i+1)/6.0f;
-      glBegin(GL_QUADS);
-        glColor4f(stops[i][0],stops[i][1],stops[i][2],alpha);     glVertex2f(x0,hueY);
-        glColor4f(stops[i+1][0],stops[i+1][1],stops[i+1][2],alpha); glVertex2f(x1,hueY);
-        glColor4f(stops[i+1][0],stops[i+1][1],stops[i+1][2],alpha); glVertex2f(x1,hueY+hueH);
-        glColor4f(stops[i][0],stops[i][1],stops[i][2],alpha);     glVertex2f(x0,hueY+hueH);
-      glEnd();
-    }
-    float hCurX = hueX + s_accentHue*hueW;
-    glShadeModel(GL_FLAT); glColor4f(1,1,1,alpha); glLineWidth(1.5f);
-    glBegin(GL_LINE_LOOP);
-    for (int a=0;a<16;++a){ float an=a*6.2831853f/16.0f;
-      glVertex2f(hCurX+cosf(an)*5, hueY+hueH*0.5f+sinf(an)*5); }
-    glEnd(); glLineWidth(1.0f);
-    glEnable(GL_TEXTURE_2D);
-
-    if (isHovered(mx,my,hueX,hueY-4,hueW,hueH+8) && lClick && !s_accentDragSV)
-      s_accentDragHue = true;
-    if (s_accentDragHue) {
-      if (lClick) {
-        s_accentHue = (mx-hueX)/hueW;
-        s_accentHue = s_accentHue<0?0:(s_accentHue>0.9999f?0.9999f:s_accentHue);
-        changed = true;
-      } else s_accentDragHue = false;
-    }
-
-    cy = hueY + hueH + 16.0f;
-
-    uint32_t accCol = hsv32(s_accentHue, s_accentSat, s_accentVal);
-    glDisable(GL_TEXTURE_2D);
-    RenderUtils::drawRoundedRect(cx, cy, 26, 26, 8.0f, accCol, alpha);
-    glEnable(GL_TEXTURE_2D);
-    char accHex[12];
-    snprintf(accHex, sizeof(accHex), "#%02X%02X%02X",
-             (accCol>>16)&0xFF, (accCol>>8)&0xFF, accCol&0xFF);
-    g_guiFont.drawString(cx + 34, cy + 7, accHex, applyAlpha(0xFFFFFFFF, alpha), 0.46f);
-
-    const uint32_t presets[8] = {
-      0xFF3D6EF5, 0xFF19B0FF, 0xFF2EE6B8, 0xFF43E08B,
-      0xFF9B6BF5, 0xFFFA3EC0, 0xFFFF5436, 0xFFFFA319 };
-    float pX = cx + 150.0f, pY = cy - 2.0f;
-    for (int i=0;i<8;++i){
-      bool hP = isHovered(mx,my,pX,pY,30,30);
-      glDisable(GL_TEXTURE_2D);
-      if (accCol == presets[i] || hP)
-        RenderUtils::drawRoundedRect(pX-2,pY-2,34,34,8.0f,0xFFFFFFFF,
-                                     (accCol==presets[i]?0.9f:0.4f)*alpha);
-      RenderUtils::drawRoundedRect(pX,pY,30,30,8.0f,presets[i],alpha);
-      glEnable(GL_TEXTURE_2D);
-      if (clickEvent && hP) {
-        rgbToHsv(presets[i], s_accentHue, s_accentSat, s_accentVal);
-        changed = true;
-      }
-      pX += 38.0f;
-    }
-    cy += 40.0f;
-
-    bool hChroma = isHovered(mx,my,cx,cy,16,16);
-    glDisable(GL_TEXTURE_2D);
-    bool chromaEnabled = Config::isChromaEnabled();
-    drawSwitch(900, cx, cy, chromaEnabled, hChroma, alpha);
-    glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(cx + 54, cy + 7, "Rainbow",
-                         applyAlpha(0xFFFFFFFF, alpha), 0.44f);
-    bool hChromaCard = isHovered(mx,my,cx,cy,52,25);
-    if (clickEvent && hChromaCard) Config::setChromaEnabled(!chromaEnabled);
-    cy += 34.0f;
-    if (Config::isChromaEnabled()) {
-      g_guiFont.drawString(cx, cy + 2, "Speed", applyAlpha(0xFFA0A0A5, alpha), 0.4f);
-      glDisable(GL_TEXTURE_2D);
+    if (rainbow != Config::isChromaEnabled())
+      Config::setChromaEnabled(rainbow);
+    cy += colorPickerHeight(true) + 12.0f;
+    if (rainbow) {
+      g_guiFont.drawString(cx, cy + 2.0f, "Rainbow speed",
+                           applyAlpha(0xFFA0A0A5, alpha), 0.4f);
       float speed = Config::getChromaSpeed();
-      drawSlider(901, cx + 50, cy, 150, 14, speed, 10.0f, 180.0f,
-                 mx, my, lClick, alpha);
-      if (speed != Config::getChromaSpeed()) Config::setChromaSpeed(speed);
-      glEnable(GL_TEXTURE_2D);
-      char spB[16]; snprintf(spB, sizeof(spB), "%.0f/s", speed);
-      g_guiFont.drawString(cx + 210, cy + 2, spB, applyAlpha(0xFFFFFFFF, alpha), 0.4f);
-      cy += 28.0f;
+      bool speedChanged = drawSlider(901, cx + 110.0f, cy, 150.0f, 14.0f,
+                                     speed, 10.0f, 180.0f, mx, my, lClick,
+                                     alpha);
+      speedChanged =
+          drawNumericInput(901, cx + 270.0f, cy - 5.0f, 62.0f, 25.0f,
+                           speed, 10.0f, 180.0f, 0, "/s", mx, my,
+                           clickEvent, alpha) || speedChanged;
+      if (speedChanged)
+        Config::setChromaSpeed(speed);
+      cy += 34.0f;
     }
-
-    if (changed) {
-      Config::setThemeColor(hsv32(s_accentHue, s_accentSat, s_accentVal));
-      Config::save();
-    }
-    cy += 18.0f;
   }
 
+
+  cy += 14.0f;
   drawSectionLabel(cx, cy, "Stat Color Ranges", alpha);
-  cy += 35;
+  cy += 32.0f;
+
+  const float contentW = (std::max)(300.0f, g_w - 230.0f);
 
   const int statCount = (int)StatColors::StatType::COUNT;
-  float btnW = 55.0f;
+  float btnW = 56.0f;
   float btnH = 26.0f;
   float btnX = cx;
   for (int i = 0; i < statCount; ++i) {
     if ((StatColors::StatType)i == StatColors::StatType::Star) {
       if (s_colorSelectedStat == i)
-        s_colorSelectedStat = 1;
+        s_colorSelectedStat = (int)StatColors::StatType::FinalKills;
       continue;
     }
     const char *sName = StatColors::getStatName((StatColors::StatType)i);
@@ -209,48 +87,72 @@ void renderColors(TabCtx &ctx) {
     bool hov = isHovered(mx, my, btnX, cy, btnW, btnH);
     glDisable(GL_TEXTURE_2D);
     drawThemeButton(btnX, cy, btnW, btnH, hov, sel, alpha);
+    if (sel) {
+      RenderUtils::drawRoundedRect(btnX + 6.0f, cy + btnH - 2.5f, btnW - 12.0f, 2.0f, 1.0f,
+                                   ClickGUITheme::accent(), alpha);
+    }
     glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(btnX + 5, cy + 4, sName,
-                         applyAlpha(sel ? 0xFFFFFFFF : 0xFF808085, alpha),
-                         0.4f);
+    float tw = g_guiFont.getStringWidth(sName) * (0.38f / 0.5f);
+    float tx = btnX + (btnW - tw) * 0.5f;
+    float ty = cy + (btnH - 9.0f) * 0.5f;
+    g_guiFont.drawString(tx, ty, sName,
+                         applyAlpha(sel ? 0xFFFFFFFF : (hov ? 0xFFEEEEEE : 0xFF8A8A92), alpha),
+                         0.38f);
     if (clickEvent && hov) {
       s_colorSelectedStat = i;
       s_colorPickerOpen = false;
       s_cpEditRangeIdx = -1;
+      s_cpEditingField = 0;
     }
-    btnX += btnW + 6;
-    if (btnX + btnW > mainX + g_w - 30) {
+    btnX += btnW + 6.0f;
+    if (btnX + btnW > cx + contentW) {
       btnX = cx;
-      cy += btnH + 6;
+      cy += btnH + 6.0f;
     }
   }
-  cy += btnH + 20;
+  cy += btnH + 20.0f;
 
-  auto &cfg =
-      StatColors::getConfig((StatColors::StatType)s_colorSelectedStat);
-  g_guiFont.drawString(cx, cy,
-                       (std::string(cfg.name) + " Color Ranges:").c_str(),
-                       applyAlpha(0xFFA0A0A5, alpha));
-  cy += 25;
+  auto &cfg = StatColors::getConfig((StatColors::StatType)s_colorSelectedStat);
+  const bool isRatio = (s_colorSelectedStat == (int)StatColors::StatType::FKDR ||
+                        s_colorSelectedStat == (int)StatColors::StatType::KDR ||
+                        s_colorSelectedStat == (int)StatColors::StatType::WLR ||
+                        s_colorSelectedStat == (int)StatColors::StatType::BLR);
+
+  {
+    std::string titleStr = std::string(cfg.name) + " Color Ranges";
+    g_guiFont.drawString(cx, cy + 2.0f, titleStr.c_str(), applyAlpha(0xFFFFFFFF, alpha), 0.44f);
+    float titleW = g_guiFont.getStringWidth(titleStr.c_str()) * (0.44f / 0.5f);
+    std::string countStr = std::to_string(cfg.ranges.size()) + " ranges configured";
+    g_guiFont.drawString(cx + titleW + 12.0f, cy + 4.0f, countStr.c_str(),
+                         applyAlpha(0xFF7A7A84, alpha), 0.35f);
+    cy += 28.0f;
+  }
+
+  const float rowH = 36.0f;
+  const float rowW = contentW;
 
   for (int ri = 0; ri < (int)cfg.ranges.size(); ++ri) {
     const auto &r = cfg.ranges[ri];
     float rowY = cy;
-    float rowW = g_w - 230;
+    bool isEditingThis = (s_colorPickerOpen && s_cpEditRangeIdx == ri);
+    bool hRow = isHovered(mx, my, cx, rowY, rowW, rowH);
 
-    bool hRow = isHovered(mx, my, cx, rowY, rowW, 28);
     glDisable(GL_TEXTURE_2D);
-    drawThemeCard(cx, rowY, rowW, 28, hRow, alpha);
-    RenderUtils::drawRoundedRect(cx + 4, rowY + 4, 20, 20, 3.0f, r.color,
-                                 alpha);
+    drawThemeCard(cx, rowY, rowW, rowH, hRow, alpha, isEditingThis);
+    if (isEditingThis) {
+      RenderUtils::drawRoundedOutline(cx, rowY, rowW, rowH, 6.0f, 1.5f,
+                                      ClickGUITheme::accent(), 0.85f * alpha);
+    }
+
+    const float swSize = 22.0f;
+    const float swX = cx + 8.0f;
+    const float swY = rowY + (rowH - swSize) * 0.5f;
+    RenderUtils::drawGlow(swX, swY, swSize, swSize, 5.0f, r.color, 0.25f * alpha);
+    RenderUtils::drawRoundedRect(swX, swY, swSize, swSize, 5.0f, r.color, alpha);
+    RenderUtils::drawRoundedOutline(swX, swY, swSize, swSize, 5.0f, 1.0f, 0x30FFFFFF, 0.5f * alpha);
     glEnable(GL_TEXTURE_2D);
 
     char rangeBuf[64];
-    bool isRatio = (s_colorSelectedStat == (int)StatColors::StatType::FKDR ||
-                    s_colorSelectedStat == (int)StatColors::StatType::KDR ||
-                    s_colorSelectedStat == (int)StatColors::StatType::WLR ||
-                    s_colorSelectedStat == (int)StatColors::StatType::BLR);
-
     if (r.maxVal >= 1e300) {
       if (isRatio)
         snprintf(rangeBuf, sizeof(rangeBuf), "%.2f - INF", r.minVal);
@@ -258,91 +160,58 @@ void renderColors(TabCtx &ctx) {
         snprintf(rangeBuf, sizeof(rangeBuf), "%.0f - INF", r.minVal);
     } else {
       if (isRatio)
-        snprintf(rangeBuf, sizeof(rangeBuf), "%.2f - %.2f", r.minVal,
-                 r.maxVal);
+        snprintf(rangeBuf, sizeof(rangeBuf), "%.2f - %.2f", r.minVal, r.maxVal);
       else
-        snprintf(rangeBuf, sizeof(rangeBuf), "%.0f - %.0f", r.minVal,
-                 r.maxVal);
+        snprintf(rangeBuf, sizeof(rangeBuf), "%.0f - %.0f", r.minVal, r.maxVal);
     }
-    g_guiFont.drawString(cx + 30, rowY + 5, rangeBuf,
-                         applyAlpha(0xFFFFFFFF, alpha), 0.4f);
 
-    char hexBuf[12];
-    snprintf(hexBuf, sizeof(hexBuf), "#%02X%02X%02X", (r.color >> 16) & 0xFF,
-             (r.color >> 8) & 0xFF, r.color & 0xFF);
-    g_guiFont.drawString(cx + 160, rowY + 5, hexBuf,
-                         applyAlpha(0xFFA0A0A5, alpha), 0.38f);
+    float rangeStrW = g_guiFont.getStringWidth(rangeBuf) * (0.38f / 0.5f);
+    float badgeW = rangeStrW + 18.0f;
+    float badgeH = 22.0f;
+    float badgeX = swX + swSize + 10.0f;
+    float badgeY = rowY + (rowH - badgeH) * 0.5f;
+
+    glDisable(GL_TEXTURE_2D);
+    DWORD badgeBg = ClickGUITheme::inset();
+    RenderUtils::drawRoundedRect(badgeX, badgeY, badgeW, badgeH, 4.0f, badgeBg, 0.85f * alpha);
+    RenderUtils::drawRoundedOutline(badgeX, badgeY, badgeW, badgeH, 4.0f, 1.0f,
+                                    ClickGUITheme::hairline(), 0.5f * alpha);
+    glEnable(GL_TEXTURE_2D);
+
+    float rtx = badgeX + (badgeW - rangeStrW) * 0.5f;
+    float rty = badgeY + (badgeH - 9.0f) * 0.5f;
+    g_guiFont.drawString(rtx, rty, rangeBuf, applyAlpha(0xFFFFFFFF, alpha), 0.38f);
+
+    char hexBuf[16];
+    snprintf(hexBuf, sizeof(hexBuf), "#%06X", r.color & 0xFFFFFF);
+    float hexX = badgeX + badgeW + 18.0f;
+    float hexY = rowY + (rowH - 9.0f) * 0.5f;
+    g_guiFont.drawString(hexX, hexY, hexBuf, applyAlpha(0xFFA5A5B0, alpha), 0.36f);
 
     const char *mcName = StatColors::rgbToMcColor(r.color);
-    g_guiFont.drawString(cx + 240, rowY + 5, mcName,
-                         applyAlpha(0xFF808085, alpha), 0.35f);
-
-    float editX = cx + rowW - 65;
-    bool hEdit = isHovered(mx, my, editX, rowY + 2, 32, 24);
+    float mcX = hexX + 75.0f;
+    float mcY = rowY + (rowH - 9.0f) * 0.5f;
     glDisable(GL_TEXTURE_2D);
-    drawThemeButton(editX, rowY + 2, 32, 24, hEdit, s_cpEditRangeIdx == ri, alpha);
+    RenderUtils::drawCircle(mcX + 4.0f, rowY + rowH * 0.5f, 3.5f, r.color, alpha);
     glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(editX + 4, rowY + 3, "Edit",
-                         applyAlpha(0xFFFFFFFF, alpha), 0.35f);
-    if (clickEvent && hEdit) {
-      s_cpEditRangeIdx = ri;
-      s_colorPickerOpen = true;
-      bool isRatio2 =
-          (s_colorSelectedStat == (int)StatColors::StatType::FKDR ||
-           s_colorSelectedStat == (int)StatColors::StatType::KDR ||
-           s_colorSelectedStat == (int)StatColors::StatType::WLR ||
-           s_colorSelectedStat == (int)StatColors::StatType::BLR);
+    g_guiFont.drawString(mcX + 13.0f, mcY, mcName, applyAlpha(0xFF888892, alpha), 0.35f);
 
-      if (isRatio2)
-        snprintf(s_cpMinBuf, sizeof(s_cpMinBuf), "%.2f", r.minVal);
-      else
-        snprintf(s_cpMinBuf, sizeof(s_cpMinBuf), "%.0f", r.minVal);
+    float delW = 28.0f;
+    float delH = 26.0f;
+    float delX = cx + rowW - delW - 8.0f;
+    float delY = rowY + (rowH - delH) * 0.5f;
+    bool hDel = isHovered(mx, my, delX, delY, delW, delH);
 
-      s_cpMinLen = (int)strlen(s_cpMinBuf);
-      if (r.maxVal >= 1e300) {
-        s_cpMaxBuf[0] = 0;
-        s_cpMaxLen = 0;
-      } else {
-        if (isRatio2)
-          snprintf(s_cpMaxBuf, sizeof(s_cpMaxBuf), "%.2f", r.maxVal);
-        else
-          snprintf(s_cpMaxBuf, sizeof(s_cpMaxBuf), "%.0f", r.maxVal);
-        s_cpMaxLen = (int)strlen(s_cpMaxBuf);
-      }
-      uint8_t mr = (r.color >> 16) & 0xFF;
-      uint8_t mg = (r.color >> 8) & 0xFF;
-      uint8_t mb = r.color & 0xFF;
-      float rf = mr / 255.0f, gf = mg / 255.0f, bf = mb / 255.0f;
-      float cmax = (rf > gf) ? ((rf > bf) ? rf : bf) : ((gf > bf) ? gf : bf);
-      float cmin = (rf < gf) ? ((rf < bf) ? rf : bf) : ((gf < bf) ? gf : bf);
-      float delta = cmax - cmin;
-      s_cpVal = cmax;
-      s_cpSat = (cmax > 0) ? delta / cmax : 0;
-      if (delta < 0.001f)
-        s_cpHue = 0;
-      else if (cmax == rf)
-        s_cpHue = fmodf((gf - bf) / delta, 6.0f) / 6.0f;
-      else if (cmax == gf)
-        s_cpHue = ((bf - rf) / delta + 2.0f) / 6.0f;
-      else
-        s_cpHue = ((rf - gf) / delta + 4.0f) / 6.0f;
-      if (s_cpHue < 0)
-        s_cpHue += 1.0f;
-    }
-
-    float delX = cx + rowW - 28;
-    bool hDel = isHovered(mx, my, delX, rowY + 2, 24, 24);
     glDisable(GL_TEXTURE_2D);
-    if (ClickGUITheme::style() == ClickGUITheme::Style::LiquidGlass) {
-      RenderUtils::drawRoundedRect(delX, rowY + 2, 24, 24, 3.0f, 0xFF0A0A12, 0.55f * alpha);
-      Render::LiquidGlass::drawRect(delX, rowY + 2, 24, 24, 3.0f, alpha, hDel ? 0xFF991111 : 0xFF505055);
-    } else {
-      RenderUtils::drawRoundedRect(delX, rowY + 2, 24, 24, 3.0f, hDel ? 0xFF991111 : 0xFF505055, alpha);
-    }
+    DWORD delBg = hDel ? 0xDD8B1A1A : 0x28381216;
+    DWORD delBorder = hDel ? 0xFFFF3838 : 0x55FF4444;
+    RenderUtils::drawRoundedRect(delX, delY, delW, delH, 5.0f, delBg, alpha);
+    RenderUtils::drawRoundedOutline(delX, delY, delW, delH, 5.0f, 1.0f, delBorder, alpha);
     glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(delX + 7, rowY + 3, "X",
-                         applyAlpha(hDel ? 0xFFFFFFFF : 0xFFFF5555, alpha),
-                         0.4f);
+    float dw = g_guiFont.getStringWidth("X") * (0.36f / 0.5f);
+    g_guiFont.drawString(delX + (delW - dw) * 0.5f, delY + (delH - 9.0f) * 0.5f, "X",
+                         applyAlpha(hDel ? 0xFFFF2222 : 0xFFFF5555, alpha), 0.36f);
+
     if (clickEvent && hDel) {
       StatColors::removeRange((StatColors::StatType)s_colorSelectedStat, ri);
       Config::save();
@@ -351,347 +220,281 @@ void renderColors(TabCtx &ctx) {
       if (s_cpEditRangeIdx == ri) {
         s_cpEditRangeIdx = -1;
         s_colorPickerOpen = false;
+        s_cpEditingField = 0;
+      } else if (s_cpEditRangeIdx > ri) {
+        s_cpEditRangeIdx--;
       }
       break;
     }
 
-    cy += 32;
+    float editW = 50.0f;
+    float editH = 26.0f;
+    float editX = delX - editW - 8.0f;
+    float editY = rowY + (rowH - editH) * 0.5f;
+    bool hEdit = isHovered(mx, my, editX, editY, editW, editH);
+
+    glDisable(GL_TEXTURE_2D);
+    drawThemeButton(editX, editY, editW, editH, hEdit, isEditingThis, alpha);
+    glEnable(GL_TEXTURE_2D);
+    float ew = g_guiFont.getStringWidth("Edit") * (0.36f / 0.5f);
+    g_guiFont.drawString(editX + (editW - ew) * 0.5f, editY + (editH - 9.0f) * 0.5f, "Edit",
+                         applyAlpha(isEditingThis ? 0xFFFFFFFF : (hEdit ? 0xFFFFFFFF : 0xFFCCCCCC), alpha),
+                         0.36f);
+
+    if (clickEvent && hEdit) {
+      ClickGUIHelpers::cancelInlineEditors();
+      s_cpEditRangeIdx = ri;
+      s_colorPickerOpen = true;
+      statPickerColor = r.color;
+      s_cpEditingField = 0;
+
+      if (isRatio)
+        snprintf(s_cpMinBuf, sizeof(s_cpMinBuf), "%.2f", r.minVal);
+      else
+        snprintf(s_cpMinBuf, sizeof(s_cpMinBuf), "%.0f", r.minVal);
+      s_cpMinLen = (int)strlen(s_cpMinBuf);
+
+      if (r.maxVal >= 1e300) {
+        s_cpMaxBuf[0] = 0;
+        s_cpMaxLen = 0;
+      } else {
+        if (isRatio)
+          snprintf(s_cpMaxBuf, sizeof(s_cpMaxBuf), "%.2f", r.maxVal);
+        else
+          snprintf(s_cpMaxBuf, sizeof(s_cpMaxBuf), "%.0f", r.maxVal);
+        s_cpMaxLen = (int)strlen(s_cpMaxBuf);
+      }
+    }
+
+    cy += rowH + 6.0f;
   }
 
-  cy += 15;
+  cy += 14.0f;
 
-  float addBtnW = 160.0f;
-  bool hAdd = isHovered(mx, my, cx, cy, addBtnW, 30);
+  const float actBtnH = 32.0f;
+  const float addBtnW = 140.0f;
+  const bool isAddingNew = (s_colorPickerOpen && s_cpEditRangeIdx < 0);
+  bool hAdd = isHovered(mx, my, cx, cy, addBtnW, actBtnH);
+
   glDisable(GL_TEXTURE_2D);
-  drawThemeButton(cx, cy, addBtnW, 30, hAdd, s_colorPickerOpen, alpha);
+  drawThemeButton(cx, cy, addBtnW, actBtnH, hAdd, isAddingNew, alpha);
   glEnable(GL_TEXTURE_2D);
-  g_guiFont.drawString(cx + 10, cy + 6,
-                       s_colorPickerOpen ? "- Close Picker" : "+ Add Range",
-                       applyAlpha(0xFFFFFFFF, alpha), 0.42f);
+
+  const char *addLabel = isAddingNew ? "- Close Picker" : "+ Add Range";
+  float alw = g_guiFont.getStringWidth(addLabel) * (0.40f / 0.5f);
+  g_guiFont.drawString(cx + (addBtnW - alw) * 0.5f, cy + (actBtnH - 9.0f) * 0.5f, addLabel,
+                       applyAlpha(0xFFFFFFFF, alpha), 0.40f);
+
   if (clickEvent && hAdd) {
-    s_colorPickerOpen = !s_colorPickerOpen;
-    s_cpEditingField = 0;
-    if (!s_colorPickerOpen)
+    ClickGUIHelpers::cancelInlineEditors();
+    if (s_colorPickerOpen && s_cpEditRangeIdx < 0) {
+      s_colorPickerOpen = false;
+      s_cpEditingField = 0;
+    } else {
+      s_colorPickerOpen = true;
       s_cpEditRangeIdx = -1;
+      s_cpEditingField = 0;
+      statPickerColor = Config::getThemeColor();
+      double nextMin = 0.0;
+      if (!cfg.ranges.empty()) {
+        for (const auto &rg : cfg.ranges) {
+          if (rg.maxVal < 1e300 && rg.maxVal > nextMin)
+            nextMin = rg.maxVal;
+        }
+      }
+      if (isRatio) {
+        std::snprintf(s_cpMinBuf, sizeof(s_cpMinBuf), "%.2f", nextMin);
+        std::snprintf(s_cpMaxBuf, sizeof(s_cpMaxBuf), "%.2f", nextMin + 1.0);
+      } else {
+        std::snprintf(s_cpMinBuf, sizeof(s_cpMinBuf), "%.0f", nextMin);
+        std::snprintf(s_cpMaxBuf, sizeof(s_cpMaxBuf), "%.0f", nextMin + (nextMin == 0.0 ? 1000.0 : nextMin));
+      }
+      s_cpMinLen = (int)strlen(s_cpMinBuf);
+      s_cpMaxLen = (int)strlen(s_cpMaxBuf);
+    }
   }
 
-  float rstX = cx + addBtnW + 15;
-  float rstW = 140.0f;
-  bool hRst = isHovered(mx, my, rstX, cy, rstW, 30);
+  const float rstBtnW = 140.0f;
+  const float rstX = cx + addBtnW + 12.0f;
+  bool hRst = isHovered(mx, my, rstX, cy, rstBtnW, actBtnH);
+
   glDisable(GL_TEXTURE_2D);
-  DWORD rstCol = hRst ? 0xFF991111 : THEME_CARD;
+  DWORD rstCol = hRst ? 0xFF991111 : ClickGUITheme::cardBg();
   float rstAlpha = (((rstCol >> 24) & 0xFF) / 255.0f) * alpha;
   if (ClickGUITheme::style() == ClickGUITheme::Style::LiquidGlass) {
-    RenderUtils::drawRoundedRect(rstX, cy, rstW, 30, 5.0f, 0xFF0A0A12, 0.55f * alpha);
-    Render::LiquidGlass::drawRect(rstX, cy, rstW, 30, 5.0f, alpha, rstCol);
+    RenderUtils::drawRoundedRect(rstX, cy, rstBtnW, actBtnH, 5.0f, 0xFF0A0A12, 0.55f * alpha);
+    Render::LiquidGlass::drawRect(rstX, cy, rstBtnW, actBtnH, 5.0f, alpha, rstCol);
   } else {
-    RenderUtils::drawRoundedRect(rstX, cy, rstW, 30, 5.0f, rstCol, rstAlpha);
+    RenderUtils::drawRoundedRect(rstX, cy, rstBtnW, actBtnH, 5.0f, rstCol, rstAlpha);
+    RenderUtils::drawRoundedOutline(rstX, cy, rstBtnW, actBtnH, 5.0f, 1.0f,
+                                    hRst ? 0xFFFF4444 : ClickGUITheme::hairline(), alpha);
   }
   glEnable(GL_TEXTURE_2D);
-  g_guiFont.drawString(rstX + 8, cy + 6, "Reset Defaults",
-                       applyAlpha(0xFFFFFFFF, alpha), 0.42f);
+
+  float rw = g_guiFont.getStringWidth("Reset Defaults") * (0.40f / 0.5f);
+  g_guiFont.drawString(rstX + (rstBtnW - rw) * 0.5f, cy + (actBtnH - 9.0f) * 0.5f, "Reset Defaults",
+                       applyAlpha(hRst ? 0xFFFF8888 : 0xFFCCCCCC, alpha), 0.40f);
+
   if (clickEvent && hRst) {
     StatColors::resetToDefaults((StatColors::StatType)s_colorSelectedStat);
     Config::save();
     NotificationManager::getInstance()->add("Colors", "Reset to defaults",
                                             NotificationType::Success);
   }
-  cy += 40;
+
+  cy += actBtnH + 16.0f;
 
   if (s_colorPickerOpen) {
-    float popX = mainX + 185;
-    float popY = cy;
-    float popW = g_w - 205;
-    float popH = 230;
+    const float popX = cx;
+    const float popW = contentW;
+    const float popY = cy;
+    const float popH = 300.0f;
 
     glDisable(GL_TEXTURE_2D);
     drawThemeCard(popX, popY, popW, popH, false, alpha);
+    RenderUtils::drawRoundedOutline(popX, popY, popW, popH, 8.0f, 1.0f,
+                                    ClickGUITheme::hairlineStrong(), 0.6f * alpha);
 
-    float svX = popX + 12;
-    float svY = popY + 12;
-    float svSize = 140.0f;
+    const char *cardTitle = (s_cpEditRangeIdx >= 0) ? "EDIT COLOR RANGE" : "ADD NEW COLOR RANGE";
+    glEnable(GL_TEXTURE_2D);
+    g_guiFont.drawString(popX + 16.0f, popY + 12.0f, cardTitle, applyAlpha(0xFFFFFFFF, alpha), 0.40f);
+
+
+
+    float closeX = popX + popW - 32.0f;
+    float closeY = popY + 9.0f;
+    bool hClose = isHovered(mx, my, closeX, closeY, 22.0f, 22.0f);
+    glDisable(GL_TEXTURE_2D);
+    DWORD closeBg = hClose ? 0xDD8B1A1A : 0x28381216;
+    DWORD closeBorder = hClose ? 0xFFFF3838 : 0x55FF4444;
+    RenderUtils::drawRoundedRect(closeX, closeY, 22.0f, 22.0f, 4.0f, closeBg, alpha);
+    RenderUtils::drawRoundedOutline(closeX, closeY, 22.0f, 22.0f, 4.0f, 1.0f, closeBorder, alpha);
+    glEnable(GL_TEXTURE_2D);
+    float cw = g_guiFont.getStringWidth("X") * (0.36f / 0.5f);
+    g_guiFont.drawString(closeX + (22.0f - cw) * 0.5f, closeY + 3.0f, "X",
+                         applyAlpha(hClose ? 0xFFFF2222 : 0xFFFF5555, alpha), 0.36f);
+    if (clickEvent && hClose) {
+      s_colorPickerOpen = false;
+      s_cpEditRangeIdx = -1;
+      s_cpEditingField = 0;
+    }
 
     glDisable(GL_TEXTURE_2D);
-    glDisable(GL_LIGHTING);
-    glDisable(GL_CULL_FACE);
-    glDisable(GL_ALPHA_TEST);
-    glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glShadeModel(GL_SMOOTH);
-
-    {
-      float hr = 1, hg = 1, hb = 1;
-      float h6 = s_cpHue * 6.0f;
-      int hi = (int)h6 % 6;
-      float f = h6 - (int)h6;
-      switch (hi) {
-      case 0: hr = 1;     hg = f;     hb = 0;     break;
-      case 1: hr = 1 - f; hg = 1;     hb = 0;     break;
-      case 2: hr = 0;     hg = 1;     hb = f;     break;
-      case 3: hr = 0;     hg = 1 - f; hb = 1;     break;
-      case 4: hr = f;     hg = 0;     hb = 1;     break;
-      case 5: hr = 1;     hg = 0;     hb = 1 - f; break;
-      }
-
-      glBegin(GL_QUADS);
-      glColor4f(1.0f, 1.0f, 1.0f, alpha); glVertex2f(svX, svY);
-      glColor4f(hr, hg, hb, alpha);       glVertex2f(svX + svSize, svY);
-      glColor4f(hr, hg, hb, alpha);       glVertex2f(svX + svSize, svY + svSize);
-      glColor4f(1.0f, 1.0f, 1.0f, alpha); glVertex2f(svX, svY + svSize);
-      glEnd();
-    }
-
-    {
-      glBegin(GL_QUADS);
-      glColor4f(0.0f, 0.0f, 0.0f, 0.0f);  glVertex2f(svX, svY);
-      glColor4f(0.0f, 0.0f, 0.0f, 0.0f);  glVertex2f(svX + svSize, svY);
-      glColor4f(0.0f, 0.0f, 0.0f, alpha); glVertex2f(svX + svSize, svY + svSize);
-      glColor4f(0.0f, 0.0f, 0.0f, alpha); glVertex2f(svX, svY + svSize);
-      glEnd();
-    }
-
-    float cursorX = svX + s_cpSat * svSize;
-    float cursorY = svY + (1.0f - s_cpVal) * svSize;
-    glShadeModel(GL_FLAT);
-    glColor4f(1.0f, 1.0f, 1.0f, alpha);
-    glLineWidth(1.5f);
-    glBegin(GL_LINE_LOOP);
-    for (int a = 0; a < 16; ++a) {
-      float angle = a * 6.2831853f / 16.0f;
-      glVertex2f(cursorX + cosf(angle) * 4, cursorY + sinf(angle) * 4);
-    }
-    glEnd();
-    glLineWidth(1.0f);
-    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-
-    if (isHovered(mx, my, svX, svY, svSize, svSize)) {
-      if (lClick) s_cpDraggingSV = true;
-    }
-    if (s_cpDraggingSV) {
-      if (lClick) {
-        s_cpSat = (mx - svX) / svSize;
-        s_cpVal = 1.0f - (my - svY) / svSize;
-        if (s_cpSat < 0) s_cpSat = 0;
-        if (s_cpSat > 1) s_cpSat = 1;
-        if (s_cpVal < 0) s_cpVal = 0;
-        if (s_cpVal > 1) s_cpVal = 1;
-      } else {
-        s_cpDraggingSV = false;
-      }
-    }
-
-    float hueX = svX + svSize + 15;
-    float hueY = svY;
-    float hueW = 20.0f;
-    float hueH = svSize;
-    int hueSteps = 24;
-    float stepH = hueH / hueSteps;
-    for (int i = 0; i < hueSteps; ++i) {
-      float h1 = (float)i / hueSteps;
-      float h2 = (float)(i + 1) / hueSteps;
-      float r1, g1, b1, r2, g2, b2;
-      auto hsvRgb = [](float h, float &r, float &g, float &b) {
-        float h6 = h * 6.0f;
-        int hi = (int)h6 % 6;
-        float f = h6 - (int)h6;
-        switch (hi) {
-        case 0: r = 1;     g = f;     b = 0;     break;
-        case 1: r = 1 - f; g = 1;     b = 0;     break;
-        case 2: r = 0;     g = 1;     b = f;     break;
-        case 3: r = 0;     g = 1 - f; b = 1;     break;
-        case 4: r = f;     g = 0;     b = 1;     break;
-        case 5: r = 1;     g = 0;     b = 1 - f; break;
-        }
-      };
-      hsvRgb(h1, r1, g1, b1);
-      hsvRgb(h2, r2, g2, b2);
-      glBegin(GL_QUADS);
-      glColor4f(r1, g1, b1, alpha); glVertex2f(hueX, hueY + i * stepH);
-      glColor4f(r1, g1, b1, alpha); glVertex2f(hueX + hueW, hueY + i * stepH);
-      glColor4f(r2, g2, b2, alpha); glVertex2f(hueX + hueW, hueY + (i + 1) * stepH);
-      glColor4f(r2, g2, b2, alpha); glVertex2f(hueX, hueY + (i + 1) * stepH);
-      glEnd();
-    }
-
-    float hueCurY = hueY + s_cpHue * hueH;
-    glColor4f(1, 1, 1, alpha);
-    glBegin(GL_LINES);
-    glVertex2f(hueX - 2, hueCurY);
-    glVertex2f(hueX + hueW + 2, hueCurY);
-    glEnd();
-
-    if (isHovered(mx, my, hueX - 4, hueY, hueW + 8, hueH) &&
-        !s_cpDraggingSV) {
-      if (lClick) s_cpDraggingHue = true;
-    }
-    if (s_cpDraggingHue) {
-      if (lClick) {
-        s_cpHue = (my - hueY) / hueH;
-        if (s_cpHue < 0)     s_cpHue = 0;
-        if (s_cpHue > 0.999f) s_cpHue = 0.999f;
-      } else {
-        s_cpDraggingHue = false;
-      }
-    }
-
+    RenderUtils::drawRect(popX + 12.0f, popY + 36.0f, popW - 24.0f, 1.0f,
+                          ClickGUITheme::hairline(), 0.5f * alpha);
     glEnable(GL_TEXTURE_2D);
 
-    float rpX = hueX + hueW + 20;
-    float rpY = popY + 12;
-    auto hsvToRgb32 = [](float h, float s, float v) -> uint32_t {
-      float h6 = h * 6.0f;
-      int hi = (int)h6 % 6;
-      float f = h6 - (int)h6;
-      float p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
-      float r, g, b;
-      switch (hi) {
-      case 0:  r = v; g = t; b = p; break;
-      case 1:  r = q; g = v; b = p; break;
-      case 2:  r = p; g = v; b = t; break;
-      case 3:  r = p; g = q; b = v; break;
-      case 4:  r = t; g = p; b = v; break;
-      default: r = v; g = p; b = q; break;
-      }
-      return 0xFF000000 | ((uint8_t)(r * 255) << 16) |
-             ((uint8_t)(g * 255) << 8) | (uint8_t)(b * 255);
-    };
+    float pickerX = popX + 16.0f;
+    float pickerY = popY + 44.0f;
+    float pickerW = popW - 32.0f;
+    drawColorPicker(9100 + s_colorSelectedStat, pickerX, pickerY, pickerW,
+                    statPickerColor, mx, my, lClick, clickEvent, alpha);
 
-    uint32_t previewColor = hsvToRgb32(s_cpHue, s_cpSat, s_cpVal);
+    float barY = popY + 258.0f;
+    float curX = popX + 16.0f;
+
+    g_guiFont.drawString(curX, barY + 7.0f, "Min:", applyAlpha(0xFFA0A0AA, alpha), 0.38f);
+    curX += 30.0f;
+    float boxW = 60.0f;
+    float boxH = 26.0f;
+    bool hMin = isHovered(mx, my, curX, barY + 2.0f, boxW, boxH);
     glDisable(GL_TEXTURE_2D);
-    RenderUtils::drawRoundedRect(rpX, rpY, 60, 30, 4.0f, previewColor, alpha);
+    drawTextInput(curX, barY + 2.0f, boxW, boxH, s_cpEditingField == 1, hMin, alpha);
     glEnable(GL_TEXTURE_2D);
-    char rgbBuf[32];
-    snprintf(rgbBuf, sizeof(rgbBuf), "R:%d G:%d B:%d",
-             (previewColor >> 16) & 0xFF, (previewColor >> 8) & 0xFF,
-             previewColor & 0xFF);
-    g_guiFont.drawString(rpX, rpY + 38, rgbBuf, applyAlpha(0xFFA0A0A5, alpha),
-                         0.38f);
-    char hexBuf2[12];
-    snprintf(hexBuf2, sizeof(hexBuf2), "#%02X%02X%02X",
-             (previewColor >> 16) & 0xFF, (previewColor >> 8) & 0xFF,
-             previewColor & 0xFF);
-    g_guiFont.drawString(rpX + 70, rpY + 8, hexBuf2,
-                         applyAlpha(0xFFFFFFFF, alpha), 0.42f);
-    rpY += 58;
-    g_guiFont.drawString(rpX, rpY,
-                         "MC Colors:", applyAlpha(0xFF808085, alpha), 0.38f);
-    rpY += 18;
-    struct McPreset {
-      const char *name;
-      uint32_t color;
-    };
-    McPreset mcPresets[] = {
-        {"0", 0xFF000000}, {"1", 0xFF0000AA}, {"2", 0xFF00AA00},
-        {"3", 0xFF00AAAA}, {"4", 0xFFAA0000}, {"5", 0xFFAA00AA},
-        {"6", 0xFFFFAA00}, {"7", 0xFFAAAAAA}, {"8", 0xFF555555},
-        {"9", 0xFF5555FF}, {"a", 0xFF55FF55}, {"b", 0xFF55FFFF},
-        {"c", 0xFFFF5555}, {"d", 0xFFFF55FF}, {"e", 0xFFFFFF55},
-        {"f", 0xFFFFFFFF},
-    };
-    float mcX = rpX;
-    for (int i = 0; i < 16; ++i) {
-      bool hMc = isHovered(mx, my, mcX, rpY, 14, 14);
-      glDisable(GL_TEXTURE_2D);
-      RenderUtils::drawRoundedRect(mcX, rpY, 14, 14, 2.0f, mcPresets[i].color,
-                                   alpha);
-      if (hMc)
-        RenderUtils::drawRoundedRect(mcX - 1, rpY - 1, 16, 16, 2.0f,
-                                     0xFFFFFFFF, 0.5f * alpha);
-      glEnable(GL_TEXTURE_2D);
-      if (clickEvent && hMc) {
-        uint8_t mr = (mcPresets[i].color >> 16) & 0xFF;
-        uint8_t mg = (mcPresets[i].color >> 8) & 0xFF;
-        uint8_t mb = mcPresets[i].color & 0xFF;
-        float rf = mr / 255.0f, gf = mg / 255.0f, bf = mb / 255.0f;
-        float cmax =
-            (rf > gf) ? ((rf > bf) ? rf : bf) : ((gf > bf) ? gf : bf);
-        float cmin =
-            (rf < gf) ? ((rf < bf) ? rf : bf) : ((gf < bf) ? gf : bf);
-        float delta = cmax - cmin;
-        s_cpVal = cmax;
-        s_cpSat = (cmax > 0) ? delta / cmax : 0;
-        if (delta < 0.001f)
-          s_cpHue = 0;
-        else if (cmax == rf)
-          s_cpHue = fmodf((gf - bf) / delta, 6.0f) / 6.0f;
-        else if (cmax == gf)
-          s_cpHue = ((bf - rf) / delta + 2.0f) / 6.0f;
-        else
-          s_cpHue = ((rf - gf) / delta + 4.0f) / 6.0f;
-        if (s_cpHue < 0)
-          s_cpHue += 1.0f;
-      }
-      mcX += 17;
-      if (i == 7) {
-        mcX = rpX;
-        rpY += 17;
-      }
-    }
 
-    rpY += 22;
+    const char *minDisp = (s_cpMinLen > 0) ? s_cpMinBuf : "0";
+    DWORD minTextColor = (s_cpMinLen > 0) ? 0xFFFFFFFF : 0xFF707078;
+    g_guiFont.drawString(curX + 8.0f, barY + 6.0f, minDisp, applyAlpha(minTextColor, alpha), 0.38f);
 
     bool showCursor = (GetTickCount64() / 500) % 2 == 0;
-
-    g_guiFont.drawString(rpX, rpY, "Min:", applyAlpha(0xFFA0A0A5, alpha),
-                         0.38f);
-    float minBoxX = rpX + 30;
-    bool hMinBox = isHovered(mx, my, minBoxX, rpY - 3, 55, 20);
-    glDisable(GL_TEXTURE_2D);
-    drawThemeCard(minBoxX, rpY - 3, 55, 20, s_cpEditingField == 1, alpha);
-    glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(minBoxX + 4, rpY - 1, s_cpMinBuf,
-                         applyAlpha(0xFFFFFFFF, alpha), 0.38f);
     if (s_cpEditingField == 1 && showCursor) {
-      float tw = (g_guiFont.getStringWidth(s_cpMinBuf) / 0.5f) * 0.38f;
+      float mtw = g_guiFont.getStringWidth(s_cpMinBuf) * (0.38f / 0.5f);
       glDisable(GL_TEXTURE_2D);
       glColor4f(1, 1, 1, alpha);
       glBegin(GL_LINES);
-      glVertex2f(minBoxX + 4 + tw, rpY - 1);
-      glVertex2f(minBoxX + 4 + tw, rpY + 13);
+      glVertex2f(curX + 8.0f + mtw, barY + 5.0f);
+      glVertex2f(curX + 8.0f + mtw, barY + 21.0f);
       glEnd();
       glEnable(GL_TEXTURE_2D);
     }
-    if (clickEvent && hMinBox)
-      s_cpEditingField = 1;
+    if (clickEvent && hMin) s_cpEditingField = 1;
+    curX += boxW + 12.0f;
 
-    g_guiFont.drawString(rpX + 95, rpY, "Max:", applyAlpha(0xFFA0A0A5, alpha),
-                         0.38f);
-    float maxBoxX = rpX + 125;
-    bool hMaxBox = isHovered(mx, my, maxBoxX, rpY - 3, 55, 20);
+    g_guiFont.drawString(curX, barY + 7.0f, "->", applyAlpha(0xFF707078, alpha), 0.40f);
+    curX += 20.0f;
+
+    g_guiFont.drawString(curX, barY + 7.0f, "Max:", applyAlpha(0xFFA0A0AA, alpha), 0.38f);
+    curX += 34.0f;
+    bool hMax = isHovered(mx, my, curX, barY + 2.0f, boxW, boxH);
     glDisable(GL_TEXTURE_2D);
-    drawThemeCard(maxBoxX, rpY - 3, 55, 20, s_cpEditingField == 2, alpha);
+    drawTextInput(curX, barY + 2.0f, boxW, boxH, s_cpEditingField == 2, hMax, alpha);
     glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(maxBoxX + 4, rpY - 1, s_cpMaxBuf,
-                         applyAlpha(0xFFFFFFFF, alpha), 0.38f);
+
+    const char *maxDisp = (s_cpMaxLen > 0) ? s_cpMaxBuf : "INF";
+    DWORD maxTextColor = (s_cpMaxLen > 0) ? 0xFFFFFFFF : 0xFF707078;
+    g_guiFont.drawString(curX + 8.0f, barY + 6.0f, maxDisp, applyAlpha(maxTextColor, alpha), 0.38f);
+
     if (s_cpEditingField == 2 && showCursor) {
-      float tw = (g_guiFont.getStringWidth(s_cpMaxBuf) / 0.5f) * 0.38f;
+      float xtw = g_guiFont.getStringWidth(s_cpMaxBuf) * (0.38f / 0.5f);
       glDisable(GL_TEXTURE_2D);
       glColor4f(1, 1, 1, alpha);
       glBegin(GL_LINES);
-      glVertex2f(maxBoxX + 4 + tw, rpY - 1);
-      glVertex2f(maxBoxX + 4 + tw, rpY + 13);
+      glVertex2f(curX + 8.0f + xtw, barY + 5.0f);
+      glVertex2f(curX + 8.0f + xtw, barY + 21.0f);
       glEnd();
       glEnable(GL_TEXTURE_2D);
     }
-    if (clickEvent && hMaxBox)
-      s_cpEditingField = 2;
+    if (clickEvent && hMax) s_cpEditingField = 2;
+    curX += boxW + 20.0f;
 
-    if (clickEvent && !hMinBox && !hMaxBox)
+    if (clickEvent && !hMin && !hMax) {
       s_cpEditingField = 0;
+    }
 
-    rpY += 28;
-
-    float addW2 = 120.0f;
-    bool hAdd2 = isHovered(mx, my, rpX, rpY, addW2, 26);
+    g_guiFont.drawString(curX, barY + 7.0f, "Preview:", applyAlpha(0xFFA0A0AA, alpha), 0.36f);
+    curX += 54.0f;
+    float prevW = 32.0f;
+    float prevH = 24.0f;
+    float prevY = barY + 3.0f;
     glDisable(GL_TEXTURE_2D);
-    drawThemeButton(rpX, rpY, addW2, 26, hAdd2, false, alpha);
+    RenderUtils::drawGlow(curX, prevY, prevW, prevH, 4.0f, statPickerColor, 0.25f * alpha);
+    RenderUtils::drawRoundedRect(curX, prevY, prevW, prevH, 4.0f, statPickerColor, alpha);
+    RenderUtils::drawRoundedOutline(curX, prevY, prevW, prevH, 4.0f, 1.0f, 0x40FFFFFF, 0.6f * alpha);
     glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(rpX + 12, rpY + 4,
-                         s_cpEditRangeIdx >= 0 ? "Save Changes" : "Add Range",
-                         applyAlpha(0xFFFFFFFF, alpha), 0.4f);
 
-    if (clickEvent && hAdd2) {
+    float saveBtnW = (s_cpEditRangeIdx >= 0) ? 100.0f : 90.0f;
+    float saveBtnH = 26.0f;
+    float saveBtnX = popX + popW - saveBtnW - 16.0f;
+    float saveBtnY = barY + 2.0f;
+
+    float cancelBtnW = 60.0f;
+    float cancelBtnH = 26.0f;
+    float cancelBtnX = saveBtnX - cancelBtnW - 8.0f;
+    float cancelBtnY = barY + 2.0f;
+
+    bool hCancel = isHovered(mx, my, cancelBtnX, cancelBtnY, cancelBtnW, cancelBtnH);
+    glDisable(GL_TEXTURE_2D);
+    drawThemeButton(cancelBtnX, cancelBtnY, cancelBtnW, cancelBtnH, hCancel, false, alpha);
+    glEnable(GL_TEXTURE_2D);
+    float cwCancel = g_guiFont.getStringWidth("Cancel") * (0.36f / 0.5f);
+    g_guiFont.drawString(cancelBtnX + (cancelBtnW - cwCancel) * 0.5f, cancelBtnY + 5.0f, "Cancel",
+                         applyAlpha(hCancel ? 0xFFFFFFFF : 0xFFCCCCCC, alpha), 0.36f);
+    if (clickEvent && hCancel) {
+      s_colorPickerOpen = false;
+      s_cpEditRangeIdx = -1;
+      s_cpEditingField = 0;
+    }
+
+    const char *saveLabel = (s_cpEditRangeIdx >= 0) ? "Save Range" : "Add Range";
+    bool hSave = isHovered(mx, my, saveBtnX, saveBtnY, saveBtnW, saveBtnH);
+    glDisable(GL_TEXTURE_2D);
+    drawThemeButton(saveBtnX, saveBtnY, saveBtnW, saveBtnH, hSave, true, alpha);
+    glEnable(GL_TEXTURE_2D);
+    float swSave = g_guiFont.getStringWidth(saveLabel) * (0.38f / 0.5f);
+    g_guiFont.drawString(saveBtnX + (saveBtnW - swSave) * 0.5f, saveBtnY + 5.0f, saveLabel,
+                         applyAlpha(0xFFFFFFFF, alpha), 0.38f);
+
+    if (clickEvent && hSave) {
       double minV = atof(s_cpMinBuf);
       double maxV = atof(s_cpMaxBuf);
       if (maxV <= 0 || strlen(s_cpMaxBuf) == 0)
@@ -701,22 +504,23 @@ void renderColors(TabCtx &ctx) {
       if (s_cpEditRangeIdx >= 0) {
         success = StatColors::updateRange(
             (StatColors::StatType)s_colorSelectedStat, s_cpEditRangeIdx, minV,
-            maxV, previewColor);
+            maxV, statPickerColor);
       } else {
         success =
             StatColors::addRange((StatColors::StatType)s_colorSelectedStat,
-                                 minV, maxV, previewColor);
+                                 minV, maxV, statPickerColor);
       }
 
       if (success) {
+        const bool wasEditing = s_cpEditRangeIdx >= 0;
         Config::save();
         NotificationManager::getInstance()->add(
             "Colors",
-            s_cpEditRangeIdx >= 0 ? "Range updated!" : "Range added!",
+            wasEditing ? "Range updated!" : "Range added!",
             NotificationType::Success);
         s_cpEditRangeIdx = -1;
-        if (s_cpEditRangeIdx >= 0)
-          s_colorPickerOpen = false;
+        s_colorPickerOpen = false;
+        s_cpEditingField = 0;
       } else {
         NotificationManager::getInstance()->add(
             "Colors", "Overlap! Check existing ranges.",
@@ -724,10 +528,10 @@ void renderColors(TabCtx &ctx) {
       }
     }
 
-    cy += popH + 10;
+    cy += popH + 16.0f;
   }
 
-  cy += 30;
+  cy += 30.0f;
 }
 
 } // namespace Tabs

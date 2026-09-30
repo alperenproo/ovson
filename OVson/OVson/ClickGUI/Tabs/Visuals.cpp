@@ -21,6 +21,11 @@ namespace Tabs {
 
 void renderVisuals(TabCtx &ctx) {
   using namespace ClickGUIState;
+  static float s_sortColumnBtnY = 0.0f;
+  static float s_sortOrderBtnY = 0.0f;
+  static float s_tabDisplayBtnY = 0.0f;
+  static float s_dropdownBtnX = 0.0f;
+  static float s_dropdownBtnW = 0.0f;
   const float mainX = ctx.mainX;
   const float cx    = ctx.cx;
   float      &cy    = ctx.cy;
@@ -30,10 +35,13 @@ void renderVisuals(TabCtx &ctx) {
   const bool  clickEvent = ctx.clickEvent;
   const float alpha = ctx.alpha;
 
-  drawSectionLabel(cx, cy, "Overlays", alpha);
-  cy += 40;
+  if (s_moduleSearch.empty()) {
+    drawSectionLabel(cx, cy, "Overlays", alpha);
+    cy += 40;
+  }
   auto drawSettingsCard = [&](const char *title, const char *desc, bool &val,
                               int id, float &cy_ref) {
+    if (!shouldShowInSearch(title, desc)) return;
     bool hover = isHovered(mx, my, mainX + 190, cy_ref - 10, g_w - 210, 62);
 
     glDisable(GL_TEXTURE_2D);
@@ -56,7 +64,7 @@ void renderVisuals(TabCtx &ctx) {
   bool ovEnabled = StatsOverlay::isEnabled();
   bool oldOv = ovEnabled;
   drawSettingsCard("Stats Overlay",
-                   "Display player skill metrics in a clean table", ovEnabled,
+                   "Display player skill metrics in a table", ovEnabled,
                    1, cy);
   if (ovEnabled != oldOv)
     StatsOverlay::setEnabled(ovEnabled);
@@ -64,7 +72,7 @@ void renderVisuals(TabCtx &ctx) {
   bool notifEnabled = Config::isNotificationsEnabled();
   bool oldNotif = notifEnabled;
   drawSettingsCard("Refined Notifications",
-                   "Enable silky smooth toast alerts", notifEnabled, 2, cy);
+                   "Enable toast alerts", notifEnabled, 2, cy);
   if (notifEnabled != oldNotif) {
     Config::setNotificationsEnabled(notifEnabled);
   }
@@ -77,8 +85,17 @@ void renderVisuals(TabCtx &ctx) {
     Config::setTechEnabled(techEnabled);
   }
 
+  bool tcbEnabled = Config::isTeamColoredHitboxesEnabled();
+  bool oldTcb = tcbEnabled;
+  drawSettingsCard("Team Hitboxes",
+                   "Colours F3+B hitboxes depending on player's team",
+                   tcbEnabled, 10, cy);
+  if (tcbEnabled != oldTcb) {
+    Config::setTeamColoredHitboxesEnabled(tcbEnabled);
+  }
+
   bool blurEnabled = Config::isMotionBlurEnabled();
-  {
+  if (shouldShowInSearch("Motion Blur", "Adds motion blur")) {
     const float panelX = mainX + 190;
     const float panelW = g_w - 210;
     const float cardY = cy - 10;
@@ -93,7 +110,7 @@ void renderVisuals(TabCtx &ctx) {
 
     g_guiFont.drawString(cx, cy, "Motion Blur", applyAlpha(0xFFFFFFFF, alpha));
     g_guiFont.drawString(cx, cy + 18,
-                         "Adds a cinematic trail to camera movement",
+                         "Adds motion blur",
                          applyAlpha(0xFFA0A0A5, alpha), 0.45f);
 
     float swX = mainX + g_w - 65;
@@ -118,17 +135,19 @@ void renderVisuals(TabCtx &ctx) {
       bool ch = drawSlider(80, cx + 110, rowY + 6, panelW - 240, 6.0f, val, 0.0f,
                            1.0f, mx, my, lClick, alpha);
       glEnable(GL_TEXTURE_2D);
+      float percentage = val * 100.0f;
+      ch = drawNumericInput(80, panelX + panelW - 58.0f, rowY - 6.0f,
+                            54.0f, 25.0f, percentage, 0.0f, 100.0f, 0, "%",
+                            mx, my, clickEvent, alpha) || ch;
+      if (percentage != val * 100.0f)
+        val = percentage / 100.0f;
       if (ch) Config::setMotionBlurAmount(val);
-      char vb[16];
-      snprintf(vb, sizeof(vb), "%d%%", (int)(val * 100.0f + 0.5f));
-      g_guiFont.drawString(panelX + panelW - 44, rowY, vb,
-                           applyAlpha(0xFFFFFFFF, alpha), 0.42f);
     }
     cy += cardH + 10.0f;
   }
 
   bool nameTagsEnabled = Config::isNameTagsEnabled();
-  {
+  if (shouldShowInSearch("NameTags", "Draws customizable player name tags in 3D world")) {
     const float panelX = mainX + 190;
     const float panelW = g_w - 210;
     const float cardY = cy - 10;
@@ -203,17 +222,16 @@ void renderVisuals(TabCtx &ctx) {
       float h = Config::getNameTagHeight();
       g_guiFont.drawString(lx, heightRowY + heightRowH * 0.5f - 6.0f,
                            "Label height", applyAlpha(0xFFFFFFFF, alpha), 0.45f);
-      char hbuf[24];
-      snprintf(hbuf, sizeof(hbuf), "%.1f m", h);
-      float hw = g_guiFont.getStringWidth(hbuf) * (0.42f / 0.5f);
-      g_guiFont.drawString(rx - hw, heightRowY + heightRowH * 0.5f - 6.0f, hbuf,
-                           applyAlpha(0xFFFFFFFF, alpha), 0.42f);
       float hv = h;
       glDisable(GL_TEXTURE_2D);
       bool ch = drawSlider(2500, lx + 92.0f, heightRowY + heightRowH * 0.5f,
                            (rx - 52.0f) - (lx + 92.0f), 6.0f, hv, 0.5f, 4.0f, mx,
                            my, lClick, alpha);
       glEnable(GL_TEXTURE_2D);
+      ch = drawNumericInput(2500, rx - 56.0f,
+                            heightRowY + heightRowH * 0.5f - 13.0f, 56.0f,
+                            25.0f, hv, 0.5f, 4.0f, 1, "m", mx, my,
+                            clickEvent, alpha) || ch;
       if (ch) Config::setNameTagHeight(hv);
 
       drawSectionLabel(lx, statsLabelY, "Stats", alpha);
@@ -312,14 +330,12 @@ void renderVisuals(TabCtx &ctx) {
     cy += cardH + 10.0f;
   }
 
-  cy += 20;
-  drawSectionLabel(cx, cy, "Table Customization", alpha);
-  cy += 30;
+  if (shouldShowInSearch("Table Customization", "Columns and sorting for stats table")) {
+    cy += 20;
+    drawSectionLabel(cx, cy, "Table Customization", alpha);
+    cy += 30;
 
-  static float s_dropdownPaneY = 0.0f;
-  s_dropdownPaneY = cy;
-
-  {
+    {
     float totalW = g_w - 240.0f;
     float leftW  = 195.0f;
     float pGap   = 16.0f;
@@ -411,6 +427,9 @@ void renderVisuals(TabCtx &ctx) {
       g_guiFont.drawString(leftX + cPad, cY + 8, "SORT COLUMN",
                            applyAlpha(0xFF9AA0B0, alpha), 0.35f);
       float dX = leftX + cPad, dY = cY + 28, dW = leftW - 2 * cPad;
+      s_sortColumnBtnY = dY;
+      s_dropdownBtnX = dX;
+      s_dropdownBtnW = dW;
       bool hD = isHovered(mx, my, dX, dY, dW, idH);
       drawThemeCard(dX, dY, dW, idH, hD, alpha);
       std::string curSort = Config::getSortMode();
@@ -432,6 +451,7 @@ void renderVisuals(TabCtx &ctx) {
       g_guiFont.drawString(leftX + cPad, cY + 8, "SORT ORDER",
                            applyAlpha(0xFF9AA0B0, alpha), 0.35f);
       float dX = leftX + cPad, dY = cY + 28, dW = leftW - 2 * cPad;
+      s_sortOrderBtnY = dY;
       bool hD = isHovered(mx, my, dX, dY, dW, idH);
       drawThemeCard(dX, dY, dW, idH, hD, alpha);
       bool isDesc = Config::isTabSortDescending();
@@ -454,6 +474,7 @@ void renderVisuals(TabCtx &ctx) {
       g_guiFont.drawString(leftX + cPad, cY + 8, "TAB DISPLAY",
                            applyAlpha(0xFF9AA0B0, alpha), 0.35f);
       float dX = leftX + cPad, dY = cY + 28, dW = leftW - 2 * cPad;
+      s_tabDisplayBtnY = dY;
       bool hD = isHovered(mx, my, dX, dY, dW, idH);
       drawThemeCard(dX, dY, dW, idH, hD, alpha);
       std::string curDisp = Config::getTabDisplayMode();
@@ -540,12 +561,15 @@ void renderVisuals(TabCtx &ctx) {
 
     cy = paneY + maxH + 20;
   }
+  }
 
-  g_guiFont.drawString(cx, cy, "Tab List & Chat Features",
-                       applyAlpha(0xFFFFFFFF, alpha));
-  cy += 35;
+  if (s_moduleSearch.empty()) {
+    g_guiFont.drawString(cx, cy, "Tab List & Chat Features",
+                         applyAlpha(0xFFFFFFFF, alpha));
+    cy += 35;
+  }
 
-  {
+  if (shouldShowInSearch("Tab List Overlay", "Show stats next to names in player TAB list BetterTab")) {
     bool hTab = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 85);
     glDisable(GL_TEXTURE_2D);
     drawThemeCard(mainX + 190, cy - 10, g_w - 210, 85, hTab, alpha);
@@ -573,30 +597,33 @@ void renderVisuals(TabCtx &ctx) {
     drawSwitch(33, tabSwX, cy + 42, proEnabled, hPro && tabEnabled, proAlpha);
     glEnable(GL_TEXTURE_2D);
 
-    bool resizeClicked = false;
+    bool customizeClicked = false;
     if (tabEnabled && proEnabled) {
-        float btnW = 70.0f;
-        float btnH = 22.0f;
-        float btnX = tabSwX - btnW - 8.0f;
-        float btnY = cy + 38.0f;
+        float btnW = 92.0f;
+        float btnH = 26.0f;
+        float btnX = tabSwX - btnW - 10.0f;
+        float btnY = cy + 36.0f;
         
-        bool hResizeBtn = isHovered(mx, my, btnX, btnY, btnW, btnH);
+        bool hCustomizeBtn = isHovered(mx, my, btnX, btnY, btnW, btnH);
         glDisable(GL_TEXTURE_2D);
-        uint32_t btnBg = hResizeBtn ? ClickGUITheme::accent() : 0xFF2A2A35;
-        float btnAlpha = alpha * (hResizeBtn ? 0.9f : 0.7f);
+        uint32_t btnBg = hCustomizeBtn ? ClickGUITheme::accent() : 0xFF2A2A35;
+        float btnAlpha = alpha * (hCustomizeBtn ? 0.95f : 0.75f);
         RenderUtils::drawRoundedRect(btnX, btnY, btnW, btnH, 6.0f, btnBg, btnAlpha);
         glEnable(GL_TEXTURE_2D);
-        g_guiFont.drawString(btnX + 12, btnY + 4, "\xE2\x87\xB1 Resize",
-                             applyAlpha(0xFFFFFFFF, alpha), 0.40f);
+        float tw = g_guiFont.getStringWidth("Customize") * (0.45f / 0.5f);
+        float tx = btnX + (btnW - tw) * 0.5f;
+        float ty = btnY + (btnH - 10.0f) * 0.5f;
+        g_guiFont.drawString(tx, ty, "Customize",
+                             applyAlpha(0xFFFFFFFF, alpha), 0.45f);
         
-        if (clickEvent && hResizeBtn) {
+        if (clickEvent && hCustomizeBtn) {
             BetterTab::setResizeMode(true);
             ClickGUI::setOpen(false);
-            resizeClicked = true;
+            customizeClicked = true;
         }
     }
 
-    if (clickEvent && hTab && !resizeClicked) {
+    if (clickEvent && hTab && !customizeClicked) {
       if (my < cy + 30) {
         Config::setTabEnabled(!tabEnabled);
         NotificationManager::getInstance()->add(
@@ -614,237 +641,237 @@ void renderVisuals(TabCtx &ctx) {
     }
     
     cy += 95;
-
-    bool hChatStats = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 62);
-    glDisable(GL_TEXTURE_2D);
-    drawThemeCard(mainX + 190, cy - 10, g_w - 210, 62, hChatStats, alpha);
-    glEnable(GL_TEXTURE_2D);
-
-    glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(cx, cy, "Pre-Game Chat Stats",
-                         applyAlpha(0xFFFFFFFF, alpha * s_contentAlpha));
-    g_guiFont.drawString(
-        cx, cy + 18, "Auto-fetch stats when players speak in pre-game lobby",
-        applyAlpha(0xFFA0A0A5, alpha * s_contentAlpha), 0.45f);
-
-    bool chatStatsEnabled = Config::isPreGameChatStatsEnabled();
-    glDisable(GL_TEXTURE_2D);
-    float csSwX = mainX + g_w - 65;
-    drawSwitch(31, csSwX, cy + 5, chatStatsEnabled, hChatStats, alpha);
-    glEnable(GL_TEXTURE_2D);
-
-    if (clickEvent && hChatStats) {
-      Config::setPreGameChatStatsEnabled(!chatStatsEnabled);
-      NotificationManager::getInstance()->add(
-          "Chat",
-          !chatStatsEnabled ? "Pre-Game Stats Enabled"
-                            : "Pre-Game Stats Disabled",
-          !chatStatsEnabled ? NotificationType::Success
-                            : NotificationType::Warning);
-    }
-    cy += 72;
-
-    bool hLobbyMention = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 62);
-    glDisable(GL_TEXTURE_2D);
-    drawThemeCard(mainX + 190, cy - 10, g_w - 210, 62, hLobbyMention, alpha);
-    glEnable(GL_TEXTURE_2D);
-
-    glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(cx, cy, "Lobby Mention Stats",
-                         applyAlpha(0xFFFFFFFF, alpha * s_contentAlpha));
-    g_guiFont.drawString(
-        cx, cy + 18, "Auto-fetch stats when your name is mentioned in lobby",
-        applyAlpha(0xFFA0A0A5, alpha * s_contentAlpha), 0.45f);
-
-    bool lobbyMentionEnabled = Config::isLobbyMentionStatsEnabled();
-    glDisable(GL_TEXTURE_2D);
-    float lmSwX = mainX + g_w - 65;
-    drawSwitch(101, lmSwX, cy + 5, lobbyMentionEnabled, hLobbyMention, alpha);
-    glEnable(GL_TEXTURE_2D);
-
-    if (clickEvent && hLobbyMention) {
-      Config::setLobbyMentionStatsEnabled(!lobbyMentionEnabled);
-      NotificationManager::getInstance()->add(
-          "Chat",
-          !lobbyMentionEnabled ? "Lobby Mention Stats Enabled"
-                               : "Lobby Mention Stats Disabled",
-          !lobbyMentionEnabled ? NotificationType::Success
-                               : NotificationType::Warning);
-    }
-    cy += 72;
-
-    bool hovAnyStyle = false;
-    float tempStyleX = cx + 50;
-    for (int i = 0; i < 2; ++i) {
-      if (isHovered(mx, my, tempStyleX, cy + 67, 90, 25))
-        hovAnyStyle = true;
-      tempStyleX += 95;
-    }
-
-    bool hInGameChat = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 112);
-    bool hovAnyStat = false;
-    float tempStatX = cx + 50;
-    for (int i = 0; i < 5; ++i) {
-      if (isHovered(mx, my, tempStatX, cy + 37, 50, 25))
-        hovAnyStat = true;
-      tempStatX += 55;
-    }
-
-    glDisable(GL_TEXTURE_2D);
-    drawThemeCard(mainX + 190, cy - 10, g_w - 210, 112, hInGameChat, alpha);
-    glEnable(GL_TEXTURE_2D);
-
-    glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(cx, cy, "In-Game Chat Stats",
-                         applyAlpha(0xFFFFFFFF, alpha * s_contentAlpha));
-    g_guiFont.drawString(
-        cx, cy + 18, "Inject player stats into chat messages instantly",
-        applyAlpha(0xFFA0A0A5, alpha * s_contentAlpha), 0.45f);
-
-    bool inGameChatStatsEnabled = Config::isChatStatsEnabled();
-    glDisable(GL_TEXTURE_2D);
-    float igSwX = mainX + g_w - 65;
-    drawSwitch(38, igSwX, cy + 5, inGameChatStatsEnabled, hInGameChat && !hovAnyStat && !hovAnyStyle,
-               alpha);
-    glEnable(GL_TEXTURE_2D);
-
-    if (clickEvent && hInGameChat && !hovAnyStat && !hovAnyStyle) {
-      Config::setChatStatsEnabled(!inGameChatStatsEnabled);
-      NotificationManager::getInstance()->add(
-          "Chat",
-          !inGameChatStatsEnabled ? "In-Game Stats Enabled" : "In-Game Stats Disabled",
-          !inGameChatStatsEnabled ? NotificationType::Success
-                            : NotificationType::Warning);
-    }
-
-    glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(
-        cx, cy + 42,
-        "Stat:", applyAlpha(0xFFA0A0A5, alpha * s_contentAlpha), 0.45f);
-
-    const char *statKeys[] = {"fkdr", "wlr", "fk", "wins", "blr"};
-    const char *statLabels[] = {"FKDR", "WLR", "Finals", "Wins", "BBLR"};
-    std::string curStatFmt = Config::getChatStatsFormat();
-    float stX = cx + 50;
-    for (int i = 0; i < 5; ++i) {
-      bool hov = isHovered(mx, my, stX, cy + 37, 50, 25);
-      bool sel = (curStatFmt == statKeys[i]);
-      glDisable(GL_TEXTURE_2D);
-      drawThemeButton(stX, cy + 37, 50, 25, hov, sel, alpha * s_contentAlpha);
-      glEnable(GL_TEXTURE_2D);
-      g_guiFont.drawString(
-          stX + 6, cy + 44, statLabels[i],
-          applyAlpha(sel ? 0xFFFFFFFF : 0xFF808085, alpha * s_contentAlpha),
-          0.38f);
-      if (clickEvent && hov) {
-        Config::setChatStatsFormat(statKeys[i]);
-      }
-      stX += 55;
-    }
-
-    g_guiFont.drawString(
-        cx, cy + 72,
-        "Style:", applyAlpha(0xFFA0A0A5, alpha * s_contentAlpha), 0.45f);
-
-    const char *styleKeys[] = {"Parentheses", "Colon"};
-    const char *styleLabels[] = {"(1k Finals)", ": 1k Finals"};
-    std::string curStyleFmt = Config::getChatStatsStyle();
-    float stStyleX = cx + 50;
-    for (int i = 0; i < 2; ++i) {
-      bool hov = isHovered(mx, my, stStyleX, cy + 67, 90, 25);
-      bool sel = (curStyleFmt == styleKeys[i]);
-      glDisable(GL_TEXTURE_2D);
-      drawThemeButton(stStyleX, cy + 67, 90, 25, hov, sel, alpha * s_contentAlpha);
-      glEnable(GL_TEXTURE_2D);
-      g_guiFont.drawString(
-          stStyleX + 6, cy + 74, styleLabels[i],
-          applyAlpha(sel ? 0xFFFFFFFF : 0xFF808085, alpha * s_contentAlpha),
-          0.38f);
-      if (clickEvent && hov) {
-        Config::setChatStatsStyle(styleKeys[i]);
-      }
-      stStyleX += 95;
-    }
-
-    cy += 122;
   }
 
-  {
-    bool hReport = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 82);
-
-    bool hovAnyChannel = false;
-    float tempChX = cx + 80;
-    for (int i = 0; i < 3; ++i) {
-      if (isHovered(mx, my, tempChX, cy + 37, 55, 25))
-        hovAnyChannel = true;
-      tempChX += 62;
-    }
-
-    glDisable(GL_TEXTURE_2D);
-    drawThemeCard(mainX + 190, cy - 10, g_w - 210, 82, hReport, alpha);
-    glEnable(GL_TEXTURE_2D);
-
-    glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(cx, cy, "Team Stats Report",
-                         applyAlpha(0xFFFFFFFF, alpha * s_contentAlpha));
-    g_guiFont.drawString(
-        cx, cy + 18, "Auto-report team averages to chat (.teamreport)",
-        applyAlpha(0xFFA0A0A5, alpha * s_contentAlpha), 0.45f);
-
-    bool reportEnabled = Config::isTeamReportEnabled();
-    glDisable(GL_TEXTURE_2D);
-    float repSwX = mainX + g_w - 65;
-    drawSwitch(32, repSwX, cy + 5, reportEnabled, hReport && !hovAnyChannel,
-               alpha);
-    glEnable(GL_TEXTURE_2D);
-
-    if (clickEvent && hReport && !hovAnyChannel) {
-      Config::setTeamReportEnabled(!reportEnabled);
-      NotificationManager::getInstance()->add(
-          "Team Report",
-          !reportEnabled ? "Team Report Enabled" : "Team Report Disabled",
-          !reportEnabled ? NotificationType::Success
-                         : NotificationType::Warning);
-    }
-
-    glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(
-        cx, cy + 42,
-        "Channel:", applyAlpha(0xFFA0A0A5, alpha * s_contentAlpha), 0.45f);
-
-    const char *channels[] = {"/pc", "/ac", "/shout"};
-    std::string curChannel = Config::getTeamReportChannel();
-    float chX = cx + 80;
-    for (int i = 0; i < 3; ++i) {
-      bool hov = isHovered(mx, my, chX, cy + 37, 55, 25);
-      bool sel = (curChannel == channels[i]);
+    if (shouldShowInSearch("Pre-Game Chat Stats", "Auto-fetch stats when players speak in pre-game lobby")) {
+      bool hChatStats = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 62);
       glDisable(GL_TEXTURE_2D);
-      drawThemeButton(chX, cy + 37, 55, 25, hov, sel, alpha * s_contentAlpha);
+      drawThemeCard(mainX + 190, cy - 10, g_w - 210, 62, hChatStats, alpha);
       glEnable(GL_TEXTURE_2D);
+
+      glEnable(GL_TEXTURE_2D);
+      g_guiFont.drawString(cx, cy, "Pre-Game Chat Stats",
+                           applyAlpha(0xFFFFFFFF, alpha * s_contentAlpha));
       g_guiFont.drawString(
-          chX + 8, cy + 44, channels[i],
-          applyAlpha(sel ? 0xFFFFFFFF : 0xFF808085, alpha * s_contentAlpha),
-          0.4f);
-      if (clickEvent && hov) {
-        Config::setTeamReportChannel(channels[i]);
+          cx, cy + 18, "Auto-fetch stats when players speak in pre-game lobby",
+          applyAlpha(0xFFA0A0A5, alpha * s_contentAlpha), 0.45f);
+
+      bool chatStatsEnabled = Config::isPreGameChatStatsEnabled();
+      glDisable(GL_TEXTURE_2D);
+      float csSwX = mainX + g_w - 65;
+      drawSwitch(31, csSwX, cy + 5, chatStatsEnabled, hChatStats, alpha);
+      glEnable(GL_TEXTURE_2D);
+
+      if (clickEvent && hChatStats) {
+        Config::setPreGameChatStatsEnabled(!chatStatsEnabled);
         NotificationManager::getInstance()->add(
-            "Team Report", std::string("Channel set to ") + channels[i],
-            NotificationType::Info);
+            "Chat",
+            !chatStatsEnabled ? "Pre-Game Stats Enabled"
+                              : "Pre-Game Stats Disabled",
+            !chatStatsEnabled ? NotificationType::Success
+                              : NotificationType::Warning);
       }
-      chX += 62;
+      cy += 72;
     }
-    cy += 92;
-  }
+
+    if (shouldShowInSearch("Lobby Mention Stats", "Auto-fetch stats when your name is mentioned in lobby")) {
+      bool hLobbyMention = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 62);
+      glDisable(GL_TEXTURE_2D);
+      drawThemeCard(mainX + 190, cy - 10, g_w - 210, 62, hLobbyMention, alpha);
+      glEnable(GL_TEXTURE_2D);
+
+      glEnable(GL_TEXTURE_2D);
+      g_guiFont.drawString(cx, cy, "Lobby Mention Stats",
+                           applyAlpha(0xFFFFFFFF, alpha * s_contentAlpha));
+      g_guiFont.drawString(
+          cx, cy + 18, "Auto-fetch stats when your name is mentioned in lobby",
+          applyAlpha(0xFFA0A0A5, alpha * s_contentAlpha), 0.45f);
+
+      bool lobbyMentionEnabled = Config::isLobbyMentionStatsEnabled();
+      glDisable(GL_TEXTURE_2D);
+      float lmSwX = mainX + g_w - 65;
+      drawSwitch(101, lmSwX, cy + 5, lobbyMentionEnabled, hLobbyMention, alpha);
+      glEnable(GL_TEXTURE_2D);
+
+      if (clickEvent && hLobbyMention) {
+        Config::setLobbyMentionStatsEnabled(!lobbyMentionEnabled);
+        NotificationManager::getInstance()->add(
+            "Chat",
+            !lobbyMentionEnabled ? "Lobby Mention Stats Enabled"
+                                 : "Lobby Mention Stats Disabled",
+            !lobbyMentionEnabled ? NotificationType::Success
+                                 : NotificationType::Warning);
+      }
+      cy += 72;
+    }
+
+    if (shouldShowInSearch("In-Game Chat Stats", "Inject player stats into chat messages")) {
+      bool hovAnyStyle = false;
+      float tempStyleX = cx + 80;
+      for (int i = 0; i < 2; ++i) {
+        if (isHovered(mx, my, tempStyleX, cy + 67, 85, 25))
+          hovAnyStyle = true;
+        tempStyleX += 90;
+      }
+
+      bool hInGameChat = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 112);
+      bool hovAnyStat = false;
+      float tempStatX = cx + 80;
+      for (int i = 0; i < 5; ++i) {
+        if (isHovered(mx, my, tempStatX, cy + 37, 50, 25))
+          hovAnyStat = true;
+        tempStatX += 55;
+      }
+
+      glDisable(GL_TEXTURE_2D);
+      drawThemeCard(mainX + 190, cy - 10, g_w - 210, 112, hInGameChat, alpha);
+      glEnable(GL_TEXTURE_2D);
+
+      g_guiFont.drawString(cx, cy, "In-Game Chat Stats",
+                           applyAlpha(0xFFFFFFFF, alpha * s_contentAlpha));
+      g_guiFont.drawString(
+          cx, cy + 18, "Inject player stats into chat messages",
+          applyAlpha(0xFFA0A0A5, alpha * s_contentAlpha), 0.45f);
+
+      bool inGameChatStatsEnabled = Config::isChatStatsEnabled();
+      glDisable(GL_TEXTURE_2D);
+      float igSwX = mainX + g_w - 65;
+      drawSwitch(38, igSwX, cy + 5, inGameChatStatsEnabled,
+                 hInGameChat && !hovAnyStat && !hovAnyStyle, alpha);
+      glEnable(GL_TEXTURE_2D);
+
+      if (clickEvent && hInGameChat && !hovAnyStat && !hovAnyStyle) {
+        Config::setChatStatsEnabled(!inGameChatStatsEnabled);
+        NotificationManager::getInstance()->add(
+            "Chat",
+            !inGameChatStatsEnabled ? "In-Game Stats Enabled" : "In-Game Stats Disabled",
+            !inGameChatStatsEnabled ? NotificationType::Success
+                           : NotificationType::Warning);
+      }
+
+      g_guiFont.drawString(cx, cy + 43, "Stat Type:",
+                           applyAlpha(0xFFA0A0A5, alpha * s_contentAlpha), 0.38f);
+
+      float stStatX = cx + 80;
+      const char *statLabels[] = {"FKDR", "WLR", "Finals", "Wins", "BBLR"};
+      const char *statKeys[] = {"fkdr", "wlr", "fk", "wins", "blr"};
+      std::string curStatFmt = Config::getChatStatsFormat();
+
+      for (int i = 0; i < 5; ++i) {
+        bool hov = isHovered(mx, my, stStatX, cy + 37, 50, 25);
+        bool sel = (curStatFmt == statKeys[i]);
+        glDisable(GL_TEXTURE_2D);
+        drawThemeButton(stStatX, cy + 37, 50, 25, hov, sel, alpha * s_contentAlpha);
+        glEnable(GL_TEXTURE_2D);
+        g_guiFont.drawString(
+            stStatX + 6, cy + 44, statLabels[i],
+            applyAlpha(sel ? 0xFFFFFFFF : 0xFF808085, alpha * s_contentAlpha),
+            0.38f);
+        if (clickEvent && hov) {
+          Config::setChatStatsFormat(statKeys[i]);
+        }
+        stStatX += 55;
+      }
+
+      g_guiFont.drawString(cx, cy + 73, "Format:",
+                           applyAlpha(0xFFA0A0A5, alpha * s_contentAlpha), 0.38f);
+
+      float stStyleX = cx + 80;
+      const char *styleLabels[] = {"Compact", "Detailed"};
+      const char *styleKeys[] = {"compact", "detailed"};
+      std::string curStyleFmt = Config::getChatStatsStyle();
+
+      for (int i = 0; i < 2; ++i) {
+        bool hov = isHovered(mx, my, stStyleX, cy + 67, 85, 25);
+        bool sel = (curStyleFmt == styleKeys[i]);
+        glDisable(GL_TEXTURE_2D);
+        drawThemeButton(stStyleX, cy + 67, 85, 25, hov, sel, alpha * s_contentAlpha);
+        glEnable(GL_TEXTURE_2D);
+        g_guiFont.drawString(
+            stStyleX + 10, cy + 74, styleLabels[i],
+            applyAlpha(sel ? 0xFFFFFFFF : 0xFF808085, alpha * s_contentAlpha),
+            0.38f);
+        if (clickEvent && hov) {
+          Config::setChatStatsStyle(styleKeys[i]);
+        }
+        stStyleX += 90;
+      }
+
+      cy += 122;
+    }
+
+    if (shouldShowInSearch("Team Stats Report", "Auto-report team averages to chat")) {
+      bool hReport = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 82);
+
+      bool hovAnyChannel = false;
+      float tempChX = cx + 80;
+      for (int i = 0; i < 3; ++i) {
+        if (isHovered(mx, my, tempChX, cy + 37, 55, 25))
+          hovAnyChannel = true;
+        tempChX += 62;
+      }
+
+      glDisable(GL_TEXTURE_2D);
+      drawThemeCard(mainX + 190, cy - 10, g_w - 210, 82, hReport, alpha);
+      glEnable(GL_TEXTURE_2D);
+
+      glEnable(GL_TEXTURE_2D);
+      g_guiFont.drawString(cx, cy, "Team Stats Report",
+                           applyAlpha(0xFFFFFFFF, alpha * s_contentAlpha));
+      g_guiFont.drawString(
+          cx, cy + 18, "Auto-report team averages to chat",
+          applyAlpha(0xFFA0A0A5, alpha * s_contentAlpha), 0.45f);
+
+      bool reportEnabled = Config::isTeamReportEnabled();
+      glDisable(GL_TEXTURE_2D);
+      float repSwX = mainX + g_w - 65;
+      drawSwitch(32, repSwX, cy + 5, reportEnabled, hReport && !hovAnyChannel,
+                 alpha);
+      glEnable(GL_TEXTURE_2D);
+
+      if (clickEvent && hReport && !hovAnyChannel) {
+        Config::setTeamReportEnabled(!reportEnabled);
+        NotificationManager::getInstance()->add(
+            "Team Report",
+            !reportEnabled ? "Team Report Enabled" : "Team Report Disabled",
+            !reportEnabled ? NotificationType::Success
+                           : NotificationType::Warning);
+      }
+
+      glEnable(GL_TEXTURE_2D);
+      g_guiFont.drawString(
+          cx, cy + 42,
+          "Channel:", applyAlpha(0xFFA0A0A5, alpha * s_contentAlpha), 0.45f);
+
+      const char *channels[] = {"/pc", "/ac", "/shout"};
+      std::string curChannel = Config::getTeamReportChannel();
+      float chX = cx + 80;
+      for (int i = 0; i < 3; ++i) {
+        bool hov = isHovered(mx, my, chX, cy + 37, 55, 25);
+        bool sel = (curChannel == channels[i]);
+        glDisable(GL_TEXTURE_2D);
+        drawThemeButton(chX, cy + 37, 55, 25, hov, sel, alpha * s_contentAlpha);
+        glEnable(GL_TEXTURE_2D);
+        g_guiFont.drawString(
+            chX + 8, cy + 44, channels[i],
+            applyAlpha(sel ? 0xFFFFFFFF : 0xFF808085, alpha * s_contentAlpha),
+            0.4f);
+        if (clickEvent && hov) {
+          Config::setTeamReportChannel(channels[i]);
+          NotificationManager::getInstance()->add(
+              "Team Report", std::string("Channel set to ") + channels[i],
+              NotificationType::Info);
+        }
+        chX += 62;
+      }
+      cy += 92;
+    }
   cy += 20;
 
   {
-    float leftX = cx;
-    float leftW = 195.0f;
-    float cPad = 12.0f;
     float idH = 28.0f;
-    float cardH = 62.0f;
-    float cGap = 10.0f;
-    float paneY = s_dropdownPaneY;
+    float mX = (s_dropdownBtnX > 0.0f) ? s_dropdownBtnX : (cx + 12.0f);
+    float mW = (s_dropdownBtnW > 0.0f) ? s_dropdownBtnW : (195.0f - 24.0f);
 
     s_sortColumnDropdownAnim +=
         (s_isSortColumnDropdownOpen ? 1.0f - s_sortColumnDropdownAnim
@@ -854,8 +881,7 @@ void renderVisuals(TabCtx &ctx) {
       const char *sM[] = {"Team", "Star", "FK", "FKDR",
                           "Wins", "WLR",  "WS"};
       std::string cs = Config::getSortMode();
-      float mX = leftX + cPad, mW = leftW - 2 * cPad;
-      float mY = paneY + 28 + idH + 2;
+      float mY = s_sortColumnBtnY + idH + 2;
       float mA = alpha * s_sortColumnDropdownAnim;
       for (int i = 0; i < 7; ++i) {
         float iY = mY + i * idH;
@@ -895,8 +921,7 @@ void renderVisuals(TabCtx &ctx) {
     if (s_sortOrderDropdownAnim > 0.01f) {
       const char *oM[] = {"Ascending", "Descending"};
       bool isD = Config::isTabSortDescending();
-      float mX = leftX + cPad, mW = leftW - 2 * cPad;
-      float mY = paneY + (cardH + cGap) + 28 + idH + 2;
+      float mY = s_sortOrderBtnY + idH + 2;
       float mA = alpha * s_sortOrderDropdownAnim;
       for (int i = 0; i < 2; ++i) {
         float iY = mY + i * idH;
@@ -936,8 +961,7 @@ void renderVisuals(TabCtx &ctx) {
     if (s_tabDisplayDropdownAnim > 0.01f) {
       const char *dM[] = {"fk", "fkdr", "wins", "wlr", "ws"};
       std::string cd = Config::getTabDisplayMode();
-      float mX = leftX + cPad, mW = leftW - 2 * cPad;
-      float mY = paneY + 2 * (cardH + cGap) + 28 + idH + 2;
+      float mY = s_tabDisplayBtnY + idH + 2;
       float mA = alpha * s_tabDisplayDropdownAnim;
       for (int i = 0; i < 5; ++i) {
         float iY = mY + i * idH;
@@ -969,6 +993,10 @@ void renderVisuals(TabCtx &ctx) {
         }
       }
     }
+  }
+
+  if (s_moduleSearch.empty()) {
+    renderCustomScripts(ctx, "Visuals");
   }
 }
 

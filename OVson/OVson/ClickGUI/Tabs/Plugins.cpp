@@ -20,6 +20,7 @@ namespace Tabs {
 
 void renderPlugins(TabCtx &ctx) {
   using namespace ClickGUIState;
+  using namespace ClickGUIHelpers;
   const float mainX = ctx.mainX;
   const float cx    = ctx.cx;
   float      &cy    = ctx.cy;
@@ -28,78 +29,54 @@ void renderPlugins(TabCtx &ctx) {
   const bool  clickEvent = ctx.clickEvent;
   const float alpha = ctx.alpha;
 
-  g_guiFont.drawString(cx, cy, "Plugins", applyAlpha(0xFFFFFFFF, alpha));
-  cy += 28;
+  const bool isSearching = !s_moduleSearch.empty();
 
-  {
-    float btnW = 160.0f, btnH = 36.0f;
-    float btnX = mainX + 200, btnY = cy;
-    bool hBtn = isHovered(mx, my, btnX, btnY, btnW, btnH);
-    glDisable(GL_TEXTURE_2D);
-    drawThemeButton(btnX, btnY, btnW, btnH, hBtn, false, alpha);
-    glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(btnX + 12, btnY + 8, "+ Add Plugin",
-                         applyAlpha(hBtn ? 0xFFFFFFFF : 0xFFC0C0C5, alpha),
-                         0.44f);
-    if (clickEvent && hBtn) {
-      wchar_t* localAppData;
-      if (SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, NULL, &localAppData) == S_OK) {
-        std::wstring dir = std::wstring(localAppData) + L"\\OVson\\plugins";
-        CoTaskMemFree(localAppData);
-        if (!std::filesystem::exists(dir))
-          std::filesystem::create_directories(dir);
-        ShellExecuteW(NULL, L"open", L"explorer.exe", dir.c_str(), NULL, SW_SHOWDEFAULT);
+  if (!isSearching) {
+    g_guiFont.drawString(cx, cy, "Plugins", applyAlpha(0xFFFFFFFF, alpha));
+    cy += 28;
+
+    {
+      float btnW = 160.0f, btnH = 36.0f;
+      float btnX = mainX + 200, btnY = cy;
+      bool hBtn = isHovered(mx, my, btnX, btnY, btnW, btnH);
+      glDisable(GL_TEXTURE_2D);
+      drawThemeButton(btnX, btnY, btnW, btnH, hBtn, false, alpha);
+      glEnable(GL_TEXTURE_2D);
+      g_guiFont.drawString(btnX + 12, btnY + 8, "+ Add Plugin",
+                           applyAlpha(hBtn ? 0xFFFFFFFF : 0xFFC0C0C5, alpha),
+                           0.44f);
+      if (clickEvent && hBtn) {
+        wchar_t* localAppData;
+        if (SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, NULL, &localAppData) == S_OK) {
+          std::wstring dir = std::wstring(localAppData) + L"\\OVson\\plugins";
+          CoTaskMemFree(localAppData);
+          if (!std::filesystem::exists(dir))
+            std::filesystem::create_directories(dir);
+          ShellExecuteW(NULL, L"open", L"explorer.exe", dir.c_str(), NULL, SW_SHOWDEFAULT);
+        }
       }
     }
-  }
 
-  {
-    float btnW = 100.0f, btnH = 36.0f;
-    float btnX = mainX + 370, btnY = cy;
-    bool hBtn = isHovered(mx, my, btnX, btnY, btnW, btnH);
-    glDisable(GL_TEXTURE_2D);
-    drawThemeButton(btnX, btnY, btnW, btnH, hBtn, false, alpha);
-    glEnable(GL_TEXTURE_2D);
-    g_guiFont.drawString(btnX + 12, btnY + 8, "Reload",
-                         applyAlpha(hBtn ? 0xFFFFFFFF : 0xFFC0C0C5, alpha),
-                         0.44f);
-    if (clickEvent && hBtn) {
-      JavaHook::shutdown();
-      PluginLoader::shutdown();
-      ClickGUIBridge::clearCache();
-      Render::ClickGUI::resetLayoutB();
-      PluginLoader::initialize();
-      JavaHook::initialize();
-      NotificationManager::getInstance()->add(
-          "Plugins", "Plugins reloaded.", NotificationType::Success);
-          
-      JNIEnv* e = lc ? lc->getEnv() : nullptr;
-      if (e) {
-          jclass pmClass = PluginLoader::getPluginManagerClass(e);
-          Logger::info("[Plugins Tab Reload] getPluginManagerClass returned: %p", pmClass);
-          if (pmClass) {
-              jmethodID getP = e->GetStaticMethodID(pmClass, "getPlugins", "()Ljava/util/List;");
-              Logger::info("[Plugins Tab Reload] getPlugins method: %p", getP);
-              if (getP) {
-                  jobject listObj = e->CallStaticObjectMethod(pmClass, getP);
-                  Logger::info("[Plugins Tab Reload] list object: %p", listObj);
-                  if (listObj) {
-                      jclass lCls = e->GetObjectClass(listObj);
-                      jmethodID sM = e->GetMethodID(lCls, "size", "()I");
-                      int cnt = e->CallIntMethod(listObj, sM);
-                      Logger::info("[Plugins Tab Reload] Plugin Count: %d", cnt);
-                      e->DeleteLocalRef(lCls);
-                  }
-                  if (listObj) e->DeleteLocalRef(listObj);
-              }
-              e->DeleteLocalRef(pmClass);
-          }
-          if (e->ExceptionCheck()) e->ExceptionClear();
+    {
+      float btnW = 100.0f, btnH = 36.0f;
+      float btnX = mainX + 370, btnY = cy;
+      bool hBtn = isHovered(mx, my, btnX, btnY, btnW, btnH);
+      glDisable(GL_TEXTURE_2D);
+      drawThemeButton(btnX, btnY, btnW, btnH, hBtn, false, alpha);
+      glEnable(GL_TEXTURE_2D);
+      g_guiFont.drawString(btnX + 12, btnY + 8, "Reload",
+                           applyAlpha(hBtn ? 0xFFFFFFFF : 0xFFC0C0C5, alpha),
+                           0.44f);
+      if (clickEvent && hBtn) {
+        PluginLoader::reloadPlugins();
+        ClickGUIBridge::requestLayoutRefresh();
+        NotificationManager::getInstance()->add(
+            "Plugins", "Plugins reloaded.", NotificationType::Success);
       }
     }
-  }
 
-  cy += 50;
+    cy += 50;
+  }
 
   JNIEnv* env = lc ? lc->getEnv() : nullptr;
   int pluginCount = 0;
@@ -206,16 +183,35 @@ void renderPlugins(TabCtx &ctx) {
     s_debugLogged = true;
   }
 
+  if (isSearching) {
+    bool anyMatch = false;
+    for (const auto& p : plugins) {
+      if (shouldShowInSearch(p.name.c_str(), p.author.c_str())) {
+        anyMatch = true;
+        break;
+      }
+    }
+    if (!anyMatch) return;
+
+    g_guiFont.drawString(cx, cy, "Plugins", applyAlpha(0xFFFFFFFF, alpha));
+    cy += 28;
+  }
+
   if (plugins.empty()) {
-    g_guiFont.drawString(cx, cy + 10, "No plugins loaded.",
-                         applyAlpha(0xFFA0A0A5, alpha), 0.45f);
-    g_guiFont.drawString(cx, cy + 30,
-                         "Drop .jar files into the plugins folder and click Reload.",
-                         applyAlpha(0xFF707075, alpha), 0.38f);
-    cy += 60;
+    if (!isSearching) {
+      g_guiFont.drawString(cx, cy + 10, "No plugins loaded.",
+                           applyAlpha(0xFFA0A0A5, alpha), 0.45f);
+      g_guiFont.drawString(cx, cy + 30,
+                           "Drop .jar files into the plugins folder and click Reload.",
+                           applyAlpha(0xFF707075, alpha), 0.38f);
+      cy += 60;
+    }
   } else {
     for (size_t i = 0; i < plugins.size(); i++) {
-      const auto& p = plugins[i];
+      auto& p = plugins[i];
+      if (isSearching && !shouldShowInSearch(p.name.c_str(), p.author.c_str())) {
+        continue;
+      }
       float cardH = 80.0f;
       float cardX = mainX + 190;
       float cardW = g_w - 210;
@@ -254,7 +250,9 @@ void renderPlugins(TabCtx &ctx) {
       drawSwitch(200 + (int)i, swX, cy + 18, p.enabled, hCard, alpha);
       glEnable(GL_TEXTURE_2D);
 
-      if (clickEvent && hCard) {
+      if (clickEvent && isHovered(mx, my, swX - 5, cy + 18 - 5, 55, 30)) {
+        bool newEn = !p.enabled;
+        p.enabled = newEn;
         if (env) {
           jclass pmCls = PluginLoader::getPluginManagerClass(env);
           if (pmCls) {
@@ -268,7 +266,7 @@ void renderPlugins(TabCtx &ctx) {
                 jclass pCls = env->GetObjectClass(pluginObj);
                 jmethodID setEn = env->GetMethodID(pCls, "setEnabled", "(Z)V");
                 if (setEn) {
-                  env->CallVoidMethod(pluginObj, setEn, p.enabled ? JNI_FALSE : JNI_TRUE);
+                  env->CallVoidMethod(pluginObj, setEn, newEn ? JNI_TRUE : JNI_FALSE);
                 }
                 env->DeleteLocalRef(pCls);
                 env->DeleteLocalRef(pluginObj);
@@ -282,8 +280,8 @@ void renderPlugins(TabCtx &ctx) {
         }
         NotificationManager::getInstance()->add(
             "Plugin",
-            p.enabled ? (p.name + " disabled") : (p.name + " enabled"),
-            p.enabled ? NotificationType::Warning : NotificationType::Success);
+            newEn ? (p.name + " enabled") : (p.name + " disabled"),
+            newEn ? NotificationType::Success : NotificationType::Warning);
       }
 
       cy += cardH + 10;
@@ -296,6 +294,9 @@ void renderPlugins(TabCtx &ctx) {
   g_guiFont.drawString(cx, cy + 16, "%LOCALAPPDATA%\\OVson\\plugins",
                        applyAlpha(0xFF707075, alpha), 0.34f);
   cy += 50;
+  if (s_moduleSearch.empty()) {
+    renderCustomScripts(ctx, "Plugins");
+  }
 }
 
 } // namespace Tabs

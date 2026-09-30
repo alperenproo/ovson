@@ -27,6 +27,9 @@ void renderColors  (TabCtx &ctx);  // tab 4
 void renderDebug   (TabCtx &ctx);  // tab 5
 void renderUtils   (TabCtx &ctx);  // tab 6
 void renderPlugins (TabCtx &ctx);  // tab 7
+void renderBedwars (TabCtx &ctx);  // tab 8
+
+void renderCustomScripts(TabCtx &ctx, const char* targetCategory = nullptr);
 
 } // namespace Tabs
 } // namespace Render

@@ -51,6 +51,7 @@ namespace ClickGUIBridge {
     float getSliderValue(jobject settingObj);
     std::string getChoiceValue(jobject settingObj);
     std::string getInputValue(jobject settingObj);
+    void clickButton(jobject settingObj);
 
     void requestLayoutRefresh();
 }

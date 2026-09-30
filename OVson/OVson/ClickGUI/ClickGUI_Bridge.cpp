@@ -354,6 +354,19 @@ std::string getInputValue(jobject settingObj) {
     return ret;
 }
 
+void clickButton(jobject settingObj) {
+    JNIEnv* env = lc ? lc->getEnv() : nullptr;
+    if (!env || !settingObj) return;
+
+    jclass cls = env->GetObjectClass(settingObj);
+    jmethodID clickM = env->GetMethodID(cls, "click", "()V");
+    if (clickM) {
+        env->CallVoidMethod(settingObj, clickM);
+    }
+    env->DeleteLocalRef(cls);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+}
+
 void requestLayoutRefresh() {
     clearCache();
     Render::ClickGUI::resetLayoutB();

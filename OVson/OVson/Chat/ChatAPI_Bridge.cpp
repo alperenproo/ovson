@@ -97,6 +97,30 @@ JNIEXPORT jobject JNICALL Java_net_ovson_api_chat_ChatAPI_getSentHistory
     return list;
 }
 
+JNIEXPORT jstring JNICALL Java_net_ovson_api_chat_ChatAPI_getLatestChatMessage
+  (JNIEnv *env, jclass cls)
+{
+    std::string latest = ChatSDK::getLatestChatMessage();
+    return env->NewStringUTF(latest.c_str());
+}
+
+JNIEXPORT jobject JNICALL Java_net_ovson_api_chat_ChatAPI_getNewMessages
+  (JNIEnv *env, jclass cls)
+{
+    auto newMsgs = ChatSDK::getNewMessages();
+    jclass listCls = env->FindClass("java/util/ArrayList");
+    jmethodID listCtor = env->GetMethodID(listCls, "<init>", "()V");
+    jmethodID addMethod = env->GetMethodID(listCls, "add", "(Ljava/lang/Object;)Z");
+    jobject list = env->NewObject(listCls, listCtor);
+    for (auto& s : newMsgs) {
+        jstring js = env->NewStringUTF(s.c_str());
+        env->CallBooleanMethod(list, addMethod, js);
+        env->DeleteLocalRef(js);
+    }
+    env->DeleteLocalRef(listCls);
+    return list;
+}
+
 namespace ChatAPIBridge {
     void registerNatives(JNIEnv* env, jclass cls) {
         if (!cls) {
@@ -112,7 +136,9 @@ namespace ChatAPIBridge {
             {(char*)"showTitle", (char*)"(Ljava/lang/String;Ljava/lang/String;III)V", (void*)&Java_net_ovson_api_chat_ChatAPI_showTitle},
             {(char*)"clearChat", (char*)"()V", (void*)&Java_net_ovson_api_chat_ChatAPI_clearChat},
             {(char*)"getChatHistory", (char*)"(I)Ljava/util/List;", (void*)&Java_net_ovson_api_chat_ChatAPI_getChatHistory},
-            {(char*)"getSentHistory", (char*)"(I)Ljava/util/List;", (void*)&Java_net_ovson_api_chat_ChatAPI_getSentHistory}
+            {(char*)"getSentHistory", (char*)"(I)Ljava/util/List;", (void*)&Java_net_ovson_api_chat_ChatAPI_getSentHistory},
+            {(char*)"getLatestChatMessage", (char*)"()Ljava/lang/String;", (void*)&Java_net_ovson_api_chat_ChatAPI_getLatestChatMessage},
+            {(char*)"getNewMessages", (char*)"()Ljava/util/List;", (void*)&Java_net_ovson_api_chat_ChatAPI_getNewMessages}
         };
 
         jint res = env->RegisterNatives(cls, methods, sizeof(methods) / sizeof(methods[0]));

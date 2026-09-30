@@ -29,76 +29,92 @@ void renderTags(TabCtx &ctx) {
   const bool  clickEvent = ctx.clickEvent;
   const float alpha = ctx.alpha;
 
-  g_guiFont.drawString(cx, cy, "Tagging Services",
-                       applyAlpha(0xFFFFFFFF, alpha));
-  cy += 40;
+  const float cardX = mainX + 190.0f;
+  const float cardW = g_w - 210.0f;
+  const float swX   = mainX + g_w - 65.0f;
+
+  if (s_moduleSearch.empty()) {
+    drawSectionLabel(cx, cy, "Tagging Services", alpha);
+    cy += 30.0f;
+  }
+
+  if (shouldShowInSearch("Enable Tags", "Master switch for all tagging services")) {
+    float cardH = 64.0f;
+    bool tagsEnabled = Config::isTagsEnabled();
+    bool hCard = isHovered(mx, my, cardX, cy, cardW, cardH);
+
+    glDisable(GL_TEXTURE_2D);
+    drawThemeCard(cardX, cy, cardW, cardH, hCard, alpha);
+    drawSwitch(10, swX, cy + 19.0f, tagsEnabled, hCard, alpha);
+    glEnable(GL_TEXTURE_2D);
+
+    g_guiFont.drawString(cx, cy + 12.0f, "Enable Tags", applyAlpha(0xFFFFFFFF, alpha), 0.46f);
+    g_guiFont.drawString(cx, cy + 30.0f, "Master switch for all tagging services", applyAlpha(0xFFA0A0A5, alpha), 0.38f);
+
+    if (clickEvent && hCard) {
+      Config::setTagsEnabled(!tagsEnabled);
+      NotificationManager::getInstance()->add(
+          "Tags", tagsEnabled ? "Tags Disabled" : "Tags Enabled",
+          !tagsEnabled ? NotificationType::Success : NotificationType::Warning);
+    }
+
+    cy += cardH + 12.0f;
+  }
 
   bool tagsEnabled = Config::isTagsEnabled();
-  bool hMasterCard = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 60);
-  glDisable(GL_TEXTURE_2D);
-  drawThemeCard(mainX + 190, cy - 10, g_w - 210, 60, hMasterCard, alpha);
-  glEnable(GL_TEXTURE_2D);
-  g_guiFont.drawString(cx, cy, "Enable Tags", applyAlpha(0xFFFFFFFF, alpha));
-  g_guiFont.drawString(cx, cy + 18, "Master switch for all tagging services",
-                       applyAlpha(0xFFA0A0A5, alpha));
-  glDisable(GL_TEXTURE_2D);
-  drawSwitch(10, mainX + g_w - 65, cy, tagsEnabled, hMasterCard, alpha);
-  glEnable(GL_TEXTURE_2D);
 
-  if (clickEvent && hMasterCard) {
-    Config::setTagsEnabled(!tagsEnabled);
-    NotificationManager::getInstance()->add(
-        "Tags", tagsEnabled ? "Tags Disabled" : "Tags Enabled",
-        !tagsEnabled ? NotificationType::Success : NotificationType::Warning);
-  }
-  cy += 80;
-
-  if (tagsEnabled) {
-    g_guiFont.drawString(cx, cy, "Active Service",
-                         applyAlpha(0xFFFFFFFF, alpha));
-    cy += 30;
-
+  if (tagsEnabled && shouldShowInSearch("Active Service", "Urchin Seraph Both Khadow tag service selector")) {
     std::string currentService = Config::getActiveTagService();
     const char *services[] = {"Urchin", "Seraph", "Both", "Khadow"};
-    constexpr int kServiceCount =
-        (int)(sizeof(services) / sizeof(services[0]));
+    constexpr int kServiceCount = (int)(sizeof(services) / sizeof(services[0]));
 
-    float dropW = 220.0f;
-    float dropH = 35.0f;
-    bool hovDrop = isHovered(mx, my, cx, cy, dropW, dropH);
+    float dropW = 180.0f;
+    float dropH = 32.0f;
+    float dropX = cardX + cardW - dropW - 16.0f;
 
     s_tagsDropdownAnim += (s_isTagsDropdownOpen ? 1.0f - s_tagsDropdownAnim
                                                 : 0.0f - s_tagsDropdownAnim) *
                           0.15f;
 
+    float dropdownContentH = 0.0f;
+    if (s_tagsDropdownAnim > 0.01f)
+      dropdownContentH = (kServiceCount * (dropH + 2.0f) + 8.0f) * s_tagsDropdownAnim;
+
+    float cardH = 64.0f + dropdownContentH;
+    float dropY = cy + 16.0f;
+    bool hovDrop = isHovered(mx, my, dropX, dropY, dropW, dropH);
+    bool hCard = isHovered(mx, my, cardX, cy, cardW, cardH);
+
     glDisable(GL_TEXTURE_2D);
-    drawThemeCard(cx, cy, dropW, dropH, hovDrop, alpha);
+    drawThemeCard(cardX, cy, cardW, cardH, hCard, alpha);
+    drawThemeCard(dropX, dropY, dropW, dropH, hovDrop, 0.9f * alpha);
     glEnable(GL_TEXTURE_2D);
 
-    g_guiFont.drawString(cx + 10, cy + 6, currentService,
-                         applyAlpha(0xFFFFFFFF, alpha));
-    drawChevron(cx + dropW - 16, cy + dropH * 0.5f, 4.0f,
+    g_guiFont.drawString(cx, cy + 12.0f, "Active Service", applyAlpha(0xFFFFFFFF, alpha), 0.46f);
+    g_guiFont.drawString(cx, cy + 30.0f, "Tag lookup provider to use for player scanning", applyAlpha(0xFFA0A0A5, alpha), 0.38f);
+
+    g_guiFont.drawString(dropX + 12.0f, dropY + 7.0f, currentService,
+                         applyAlpha(0xFFFFFFFF, alpha), 0.40f);
+    drawChevron(dropX + dropW - 16.0f, dropY + dropH * 0.5f, 4.0f,
                 s_isTagsDropdownOpen, 0xFFA0A0A5, alpha);
 
-    if (clickEvent && hovDrop) {
+    if (clickEvent && hovDrop)
       s_isTagsDropdownOpen = !s_isTagsDropdownOpen;
-    }
 
     if (s_tagsDropdownAnim > 0.01f) {
-      float listY = cy + dropH + 2;
+      float listY = dropY + dropH + 4.0f;
       for (int i = 0; i < kServiceCount; ++i) {
-        float itemY = listY + (i * dropH);
-        bool hItem = isHovered(mx, my, cx, itemY, dropW, dropH);
+        float itemY = listY + (i * (dropH + 2.0f));
+        bool hItem = isHovered(mx, my, dropX, itemY, dropW, dropH);
 
         glDisable(GL_TEXTURE_2D);
-        drawThemeCard(cx, itemY, dropW, dropH, hItem, alpha * s_tagsDropdownAnim);
+        drawThemeCard(dropX, itemY, dropW, dropH, hItem, 0.95f * alpha * s_tagsDropdownAnim);
         glEnable(GL_TEXTURE_2D);
 
-        g_guiFont.drawString(cx + 15, itemY + 8, services[i],
-                             applyAlpha(currentService == services[i]
-                                            ? 0xFFFFFFFF
-                                            : 0xFFA0A0A5,
-                                        alpha * s_tagsDropdownAnim));
+        g_guiFont.drawString(
+            dropX + 14.0f, itemY + 7.0f, services[i],
+            applyAlpha(currentService == services[i] ? 0xFFFFFFFF : 0xFFA0A0A5,
+                       alpha * s_tagsDropdownAnim), 0.40f);
 
         if (clickEvent && hItem && (s_tagsDropdownAnim > 0.8f)) {
           Config::setActiveTagService(services[i]);
@@ -108,173 +124,163 @@ void renderTags(TabCtx &ctx) {
               NotificationType::Info);
         }
       }
-      cy += (kServiceCount * dropH) * s_tagsDropdownAnim;
     }
-    cy += 50;
 
-    g_guiFont.drawString(cx, cy, "Urchin API Key",
-                         applyAlpha(0xFFA0A0A5, alpha));
-    cy += 20;
-    glDisable(GL_TEXTURE_2D);
-    drawTextInput(cx, cy, 350, 35, s_typingUrchinKey,
-                  isHovered(mx, my, cx, cy, 350, 35), alpha);
-    glEnable(GL_TEXTURE_2D);
-
-    std::string dispUrchinKey =
-        s_typingUrchinKey
-            ? s_urchinKeyInput
-            : (Config::getUrchinApiKey().empty() ? "None (Rate-limited)"
-                                                 : "********************");
-    if (s_typingUrchinKey && (GetTickCount64() / 500) % 2 == 0)
-      dispUrchinKey += "|";
-    g_guiFont.drawString(cx + 10, cy + 8, dispUrchinKey,
-                         applyAlpha(0xFFFFFFFF, alpha));
-    if (clickEvent && isHovered(mx, my, cx, cy, 350, 35)) {
-      s_typingUrchinKey = true;
-      s_typingSeraphKey = s_typingSearch = s_typingApiKey = s_typingAutoGG =
-          false;
-      s_urchinKeyInput = Config::getUrchinApiKey();
-    } else if (clickEvent && s_typingUrchinKey) {
-      Config::setUrchinApiKey(s_urchinKeyInput);
-      s_typingUrchinKey = false;
-    }
-    cy += 55;
-
-    g_guiFont.drawString(cx, cy, "Seraph API Key",
-                         applyAlpha(0xFFA0A0A5, alpha));
-    cy += 20;
-    glDisable(GL_TEXTURE_2D);
-    drawTextInput(cx, cy, 350, 35, s_typingSeraphKey,
-                  isHovered(mx, my, cx, cy, 350, 35), alpha);
-    glEnable(GL_TEXTURE_2D);
-
-    std::string dispSeraphKey =
-        s_typingSeraphKey
-            ? s_seraphKeyInput
-            : (Config::getSeraphApiKey().empty() ? "None"
-                                                 : "********************");
-    if (s_typingSeraphKey && (GetTickCount64() / 500) % 2 == 0)
-      dispSeraphKey += "|";
-    g_guiFont.drawString(cx + 10, cy + 8, dispSeraphKey,
-                         applyAlpha(0xFFFFFFFF, alpha));
-    if (clickEvent && isHovered(mx, my, cx, cy, 350, 35)) {
-      s_typingSeraphKey = true;
-      s_typingUrchinKey = s_typingSearch = s_typingApiKey = s_typingAutoGG =
-          false;
-      NotificationManager::getInstance()->add("Input", "Seraph Key focused",
-                                              NotificationType::Info);
-    } else if (clickEvent) {
-      if (s_typingSeraphKey) {
-        Config::setSeraphApiKey(s_seraphKeyInput);
-        NotificationManager::getInstance()->add("Seraph", "API Key Saved",
-                                                NotificationType::Success);
-      }
-    }
-    cy += 45;
-
-  g_guiFont.drawString(cx, cy, "Muted Tag Chat Alerts", applyAlpha(0xFFFFFFFF, alpha));
-  cy += 35;
-
-  bool hMuteCard = isHovered(mx, my, mainX + 190, cy - 10, g_w - 210, 85);
-  glDisable(GL_TEXTURE_2D);
-  drawThemeCard(mainX + 190, cy - 10, g_w - 210, 85, hMuteCard, alpha);
-  glEnable(GL_TEXTURE_2D);
-
-  bool muteEnabled = Config::isMuteTagAlertsEnabled();
-  g_guiFont.drawString(cx, cy, "Mute Tag Warnings", applyAlpha(0xFFFFFFFF, alpha));
-  g_guiFont.drawString(cx, cy + 18, "Disable chat warnings/notifications for specified players",
-                       applyAlpha(0xFFA0A0A5, alpha), 0.45f);
-
-  glDisable(GL_TEXTURE_2D);
-  drawSwitch(13, mainX + g_w - 65, cy, muteEnabled, hMuteCard && (my < cy + 30), alpha);
-  glEnable(GL_TEXTURE_2D);
-
-  if (clickEvent && hMuteCard && (my < cy + 30)) {
-    Config::setMuteTagAlertsEnabled(!muteEnabled);
+    cy += cardH + 12.0f;
   }
 
-  bool muteSelfEnabled = Config::isMuteSelfTagAlertsEnabled();
-  float muteSelfAlpha = alpha * (muteEnabled ? 1.0f : 0.4f);
-
-  g_guiFont.drawString(cx + 10, cy + 45, "Mute Self Warnings", applyAlpha(0xFFFFFFFF, muteSelfAlpha), 0.42f);
-
-  glDisable(GL_TEXTURE_2D);
-  drawSwitch(144, mainX + g_w - 65, cy + 42, muteSelfEnabled, hMuteCard && (my >= cy + 30) && muteEnabled, muteSelfAlpha);
-  glEnable(GL_TEXTURE_2D);
-
-  if (clickEvent && hMuteCard && (my >= cy + 30) && muteEnabled) {
-    Config::setMuteSelfTagAlertsEnabled(!muteSelfEnabled);
-  }
-  cy += 90;
-
-  float activeMuteAlpha = alpha * (muteEnabled ? 1.0f : 0.4f);
-  g_guiFont.drawString(cx, cy, "Add Player to Mute List", applyAlpha(0xFFFFFFFF, activeMuteAlpha));
-  cy += 20;
-
-  glDisable(GL_TEXTURE_2D);
-  drawTextInput(cx, cy, 250, 35, s_typingMuteTagPlayer,
-                muteEnabled && isHovered(mx, my, cx, cy, 250, 35), activeMuteAlpha);
-  glEnable(GL_TEXTURE_2D);
-
-  std::string dispMuteInput = s_typingMuteTagPlayer ? s_muteTagPlayerInput : "Enter player name...";
-  if (s_typingMuteTagPlayer && (GetTickCount64() / 500) % 2 == 0)
-    dispMuteInput += "|";
-  g_guiFont.drawString(cx + 10, cy + 8, dispMuteInput,
-                       applyAlpha(s_typingMuteTagPlayer ? 0xFFFFFFFF : 0xFF808085, activeMuteAlpha));
-
-  if (clickEvent && muteEnabled && isHovered(mx, my, cx, cy, 250, 35)) {
-    s_typingMuteTagPlayer = true;
-    s_typingSeraphKey = s_typingUrchinKey = s_typingSearch = s_typingApiKey = s_typingAutoGG = false;
-    s_muteTagPlayerInput = "";
-  } else if (clickEvent && s_typingMuteTagPlayer) {
-    if (!s_muteTagPlayerInput.empty()) {
-      Config::addMutedTagPlayer(s_muteTagPlayerInput);
-      NotificationManager::getInstance()->add("Tags", "Player added to mute list: " + s_muteTagPlayerInput,
-                                              NotificationType::Success);
-      s_muteTagPlayerInput.clear();
+  if (tagsEnabled) {
+    if (s_moduleSearch.empty()) {
+      cy += 6.0f;
+      drawSectionLabel(cx, cy, "Muted Tag Alerts", alpha);
+      cy += 30.0f;
     }
-    s_typingMuteTagPlayer = false;
-  }
-  cy += 50;
 
-  const auto &mutedPlayers = Config::getMutedTagPlayers();
-  if (!mutedPlayers.empty()) {
-    g_guiFont.drawString(cx, cy, "Muted Players:", applyAlpha(0xFFA0A0A5, activeMuteAlpha));
-    cy += 20;
-    for (const auto &p : mutedPlayers) {
-      bool hDel = muteEnabled && isHovered(mx, my, cx + 180, cy - 2, 20, 20);
-      g_guiFont.drawString(cx, cy, p, applyAlpha(0xFFFFFFFF, activeMuteAlpha));
-      
-      float rx = cx + 180;
-      float ry = cy - 2;
-      float rw = 18.0f;
-      float rh = 18.0f;
+    if (shouldShowInSearch("Mute Tag Warnings", "Disable chat warnings notifications mute self teammate")) {
+      bool muteEnabled = Config::isMuteTagAlertsEnabled();
+      bool muteSelfEnabled = Config::isMuteSelfTagAlertsEnabled();
+      bool muteTeamEnabled = Config::isMuteTeamTagAlertsEnabled();
+      float cardH = muteEnabled ? 150.0f : 64.0f;
+      bool hCard = isHovered(mx, my, cardX, cy, cardW, cardH);
+      bool hTopRow = isHovered(mx, my, cardX, cy, cardW, 50.0f);
+
       glDisable(GL_TEXTURE_2D);
-      RenderUtils::drawRoundedRect(rx, ry, rw, rh, 4.0f, hDel ? 0xFFD32F2F : 0xFF2A2A2D, activeMuteAlpha);
-      glDisable(GL_TEXTURE_2D);
-      
-      glColor4f(1.0f, 1.0f, 1.0f, activeMuteAlpha);
-      glLineWidth(1.5f);
-      glBegin(GL_LINES);
-      glVertex2f(rx + 6.0f, ry + 6.0f);
-      glVertex2f(rx + rw - 6.0f, ry + rh - 6.0f);
-      glVertex2f(rx + rw - 6.0f, ry + 6.0f);
-      glVertex2f(rx + 6.0f, ry + rh - 6.0f);
-      glEnd();
+      drawThemeCard(cardX, cy, cardW, cardH, hCard, alpha);
+      drawSwitch(13, swX, cy + 19.0f, muteEnabled, hTopRow, alpha);
       glEnable(GL_TEXTURE_2D);
 
-      if (clickEvent && hDel) {
-        Config::removeMutedTagPlayer(p);
-        NotificationManager::getInstance()->add("Tags", "Removed " + p + " from mute list",
-                                                NotificationType::Warning);
-        break; // break loop because vector modified
+      g_guiFont.drawString(cx, cy + 12.0f, "Mute Tag Warnings", applyAlpha(0xFFFFFFFF, alpha), 0.46f);
+      g_guiFont.drawString(cx, cy + 30.0f, "Disable chat warnings/notifications for specified players", applyAlpha(0xFFA0A0A5, alpha), 0.38f);
+
+      if (muteEnabled) {
+        float muteChildAlpha = alpha;
+
+        float selfY = cy + 58.0f;
+        bool hSelfRow = isHovered(mx, my, cardX + 16.0f, selfY, cardW - 32.0f, 36.0f);
+        g_guiFont.drawString(cx + 10.0f, selfY + 2.0f, "Mute Self Warnings",
+                             applyAlpha(0xFFFFFFFF, muteChildAlpha), 0.42f);
+        g_guiFont.drawString(cx + 10.0f, selfY + 18.0f, "Never warn about your own tags",
+                             applyAlpha(0xFFA0A0A5, muteChildAlpha), 0.36f);
+        glDisable(GL_TEXTURE_2D);
+        drawSwitch(144, swX, selfY + 5.0f, muteSelfEnabled, hSelfRow, muteChildAlpha);
+        glEnable(GL_TEXTURE_2D);
+
+        if (clickEvent && hSelfRow) {
+          Config::setMuteSelfTagAlertsEnabled(!muteSelfEnabled);
+        }
+
+        float teamY = cy + 100.0f;
+        bool hTeamRow = isHovered(mx, my, cardX + 16.0f, teamY, cardW - 32.0f, 36.0f);
+        g_guiFont.drawString(cx + 10.0f, teamY + 2.0f, "Mute Teammate Warnings",
+                             applyAlpha(0xFFFFFFFF, muteChildAlpha), 0.42f);
+        g_guiFont.drawString(cx + 10.0f, teamY + 18.0f, "Never warn about anyone on your own team",
+                             applyAlpha(0xFFA0A0A5, muteChildAlpha), 0.36f);
+        glDisable(GL_TEXTURE_2D);
+        drawSwitch(145, swX, teamY + 5.0f, muteTeamEnabled, hTeamRow, muteChildAlpha);
+        glEnable(GL_TEXTURE_2D);
+
+        if (clickEvent && hTeamRow) {
+          Config::setMuteTeamTagAlertsEnabled(!muteTeamEnabled);
+        }
       }
-      cy += 25;
+
+      if (clickEvent && hTopRow && !(muteEnabled && (isHovered(mx, my, cardX + 16.0f, cy + 58.0f, cardW - 32.0f, 36.0f) ||
+                                                      isHovered(mx, my, cardX + 16.0f, cy + 100.0f, cardW - 32.0f, 36.0f)))) {
+        Config::setMuteTagAlertsEnabled(!muteEnabled);
+      }
+
+      cy += cardH + 12.0f;
     }
-    cy += 15;
-  } else {
-    cy += 10;
+
+    if (shouldShowInSearch("Mute Player", "Add player to mute list muted players remove")) {
+      bool muteEnabled = Config::isMuteTagAlertsEnabled();
+      float activeMuteAlpha = alpha * (muteEnabled ? 1.0f : 0.4f);
+
+      float boxX = cardX + 16.0f;
+      float boxW = 250.0f;
+      float boxH = 32.0f;
+
+      const auto &mutedPlayers = Config::getMutedTagPlayers();
+      float listH = mutedPlayers.empty() ? 0.0f : (mutedPlayers.size() * 28.0f + 16.0f);
+      float cardH = 80.0f + listH;
+      bool hCard = isHovered(mx, my, cardX, cy, cardW, cardH);
+      float boxY = cy + 36.0f;
+      bool hBox = muteEnabled && isHovered(mx, my, boxX, boxY, boxW, boxH);
+
+      glDisable(GL_TEXTURE_2D);
+      drawThemeCard(cardX, cy, cardW, cardH, hCard, activeMuteAlpha);
+      drawTextInput(boxX, boxY, boxW, boxH, s_typingMuteTagPlayer, hBox, activeMuteAlpha);
+      glEnable(GL_TEXTURE_2D);
+
+      g_guiFont.drawString(cx, cy + 12.0f, "Add Player to Mute List", applyAlpha(0xFFFFFFFF, activeMuteAlpha), 0.46f);
+
+      std::string dispMuteInput = s_typingMuteTagPlayer ? s_muteTagPlayerInput : "Enter player name...";
+      if (s_typingMuteTagPlayer && (GetTickCount64() / 500) % 2 == 0)
+        dispMuteInput += "|";
+      g_guiFont.drawString(boxX + 12.0f, boxY + 8.0f, dispMuteInput,
+                           applyAlpha(s_typingMuteTagPlayer ? 0xFFFFFFFF : 0xFF6C6C78, activeMuteAlpha), 0.42f);
+
+      if (clickEvent && muteEnabled && hBox) {
+        s_typingMuteTagPlayer = true;
+        s_typingSeraphKey = s_typingUrchinKey = s_typingSearch = s_typingApiKey = s_typingAutoGG = false;
+        s_muteTagPlayerInput = "";
+      } else if (clickEvent && s_typingMuteTagPlayer) {
+        if (!s_muteTagPlayerInput.empty()) {
+          Config::addMutedTagPlayer(s_muteTagPlayerInput);
+          NotificationManager::getInstance()->add("Tags", "Player added to mute list: " + s_muteTagPlayerInput,
+                                                  NotificationType::Success);
+          s_muteTagPlayerInput.clear();
+        }
+        s_typingMuteTagPlayer = false;
+      }
+
+      if (!mutedPlayers.empty()) {
+        float listStartY = boxY + boxH + 12.0f;
+        for (size_t pi = 0; pi < mutedPlayers.size(); ++pi) {
+          float iy = listStartY + pi * 28.0f;
+          const std::string &p = mutedPlayers[pi];
+
+          g_guiFont.drawString(boxX, iy + 2.0f, p, applyAlpha(0xFFFFFFFF, activeMuteAlpha), 0.42f);
+
+          float rx = boxX + 220.0f;
+          float ry = iy;
+          float rw = 22.0f;
+          float rh = 22.0f;
+          bool hDel = muteEnabled && isHovered(mx, my, rx, ry, rw, rh);
+
+          glDisable(GL_TEXTURE_2D);
+          RenderUtils::drawRoundedRect(rx, ry, rw, rh, 4.0f, hDel ? 0xFFD32F2F : 0xFF2A2A2D, activeMuteAlpha);
+          glDisable(GL_TEXTURE_2D);
+
+          glColor4f(1.0f, 1.0f, 1.0f, activeMuteAlpha);
+          glLineWidth(1.5f);
+          glBegin(GL_LINES);
+          glVertex2f(rx + 6.0f, ry + 6.0f);
+          glVertex2f(rx + rw - 6.0f, ry + rh - 6.0f);
+          glVertex2f(rx + rw - 6.0f, ry + 6.0f);
+          glVertex2f(rx + 6.0f, ry + rh - 6.0f);
+          glEnd();
+          glEnable(GL_TEXTURE_2D);
+
+          if (clickEvent && hDel) {
+            Config::removeMutedTagPlayer(p);
+            NotificationManager::getInstance()->add("Tags", "Removed " + p + " from mute list",
+                                                    NotificationType::Warning);
+            break;
+          }
+        }
+      }
+
+      cy += cardH + 12.0f;
+    }
   }
+
+  // gotta respect the legacy code
+  /*
+  if (s_moduleSearch.empty()) {
+    cy += 6.0f;
+    drawSectionLabel(cx, cy, "Live Tag Results", alpha);
+    cy += 30.0f;
   }
 
   struct RenderTagCache {
@@ -285,22 +291,30 @@ void renderTags(TabCtx &ctx) {
   static ULONGLONG s_lastRefreshTick = 0;
 
   ULONGLONG nowTick = GetTickCount64();
-  bool shouldRefresh = (nowTick - s_lastRefreshTick) > 2000; // refresh every 2s
+  bool shouldRefresh = (nowTick - s_lastRefreshTick) > 2000;
 
-  std::lock_guard<std::mutex> stLock(OVson::g_statsMutex);
+  std::lock_guard<std::recursive_mutex> stLock(OVson::g_statsMutex);
   if (OVson::g_playerStatsMap.empty()) {
-    g_guiFont.drawString(cx, cy, "No players detected in this session.",
-                         applyAlpha(0xFF808085, alpha));
-    cy += 30;
+    float emptyH = 50.0f;
+    bool hEmpty = isHovered(mx, my, cardX, cy, cardW, emptyH);
+    glDisable(GL_TEXTURE_2D);
+    drawThemeCard(cardX, cy, cardW, emptyH, false, alpha * 0.6f);
+    glEnable(GL_TEXTURE_2D);
+    g_guiFont.drawString(cx, cy + 16.0f, "No players detected in this session.",
+                         applyAlpha(0xFF808085, alpha), 0.42f);
+    cy += emptyH + 12.0f;
   } else {
-    g_guiFont.drawString(cx, cy, "Player", applyAlpha(0xFFA0A0A5, alpha));
-    g_guiFont.drawString(cx + 140, cy, "FK", applyAlpha(0xFFA0A0A5, alpha));
-    g_guiFont.drawString(cx + 200, cy, "FKDR", applyAlpha(0xFFA0A0A5, alpha));
-    g_guiFont.drawString(cx + 280, cy, "Urchin",
-                         applyAlpha(0xFFA0A0A5, alpha));
-    g_guiFont.drawString(cx + 420, cy, "Seraph",
-                         applyAlpha(0xFFA0A0A5, alpha));
-    cy += 25;
+    // Table header
+    float headerH = 32.0f;
+    glDisable(GL_TEXTURE_2D);
+    drawThemeCard(cardX, cy, cardW, headerH, false, alpha * 0.5f);
+    glEnable(GL_TEXTURE_2D);
+    g_guiFont.drawString(cx, cy + 8.0f, "Player", applyAlpha(0xFFA0A0A5, alpha), 0.38f);
+    g_guiFont.drawString(cx + 140.0f, cy + 8.0f, "FK", applyAlpha(0xFFA0A0A5, alpha), 0.38f);
+    g_guiFont.drawString(cx + 200.0f, cy + 8.0f, "FKDR", applyAlpha(0xFFA0A0A5, alpha), 0.38f);
+    g_guiFont.drawString(cx + 280.0f, cy + 8.0f, "Urchin", applyAlpha(0xFFA0A0A5, alpha), 0.38f);
+    g_guiFont.drawString(cx + 420.0f, cy + 8.0f, "Seraph", applyAlpha(0xFFA0A0A5, alpha), 0.38f);
+    cy += headerH + 4.0f;
 
     if (shouldRefresh && Config::isTagsEnabled()) {
       s_lastRefreshTick = nowTick;
@@ -318,6 +332,12 @@ void renderTags(TabCtx &ctx) {
       const std::string &name = pair.first;
       const auto &stats = pair.second;
 
+      float rowH = 36.0f;
+      bool hRow = isHovered(mx, my, cardX, cy, cardW, rowH);
+      glDisable(GL_TEXTURE_2D);
+      drawThemeCard(cardX, cy, cardW, rowH, hRow, alpha * 0.7f);
+      glEnable(GL_TEXTURE_2D);
+
       uint32_t nameCol = 0xFFFFFFFF;
       auto itT = OVson::g_playerTeamColor.find(name);
       if (itT != OVson::g_playerTeamColor.end()) {
@@ -328,18 +348,18 @@ void renderTags(TabCtx &ctx) {
         else if (itT->second == "Pink")   nameCol = 0xFFFF55FF;
         else if (itT->second == "Aqua")   nameCol = 0xFF55FFFF;
       }
-      g_guiFont.drawString(cx, cy, name, applyAlpha(nameCol, alpha));
+      g_guiFont.drawString(cx, cy + 9.0f, name, applyAlpha(nameCol, alpha), 0.42f);
 
-      g_guiFont.drawString(cx + 140, cy,
+      g_guiFont.drawString(cx + 140.0f, cy + 9.0f,
                            std::to_string(stats.bedwarsFinalKills),
-                           applyAlpha(0xFFCCCCCC, alpha));
+                           applyAlpha(0xFFCCCCCC, alpha), 0.42f);
       double fkdr =
           (stats.bedwarsFinalDeaths == 0)
               ? stats.bedwarsFinalKills
               : (double)stats.bedwarsFinalKills / stats.bedwarsFinalDeaths;
       char fBuf[16];
       sprintf_s(fBuf, "%.2f", fkdr);
-      g_guiFont.drawString(cx + 200, cy, fBuf, applyAlpha(0xFFCCCCCC, alpha));
+      g_guiFont.drawString(cx + 200.0f, cy + 9.0f, fBuf, applyAlpha(0xFFCCCCCC, alpha), 0.42f);
 
       if (Config::isTagsEnabled()) {
         std::string activeS = Config::getActiveTagService();
@@ -354,14 +374,14 @@ void renderTags(TabCtx &ctx) {
               tS += t.type;
             }
             if (tS.length() > 25) tS = tS.substr(0, 22) + "...";
-            g_guiFont.drawString(cx + 280, cy, tS,
-                                 applyAlpha(0xFFE0E0E0, alpha));
+            g_guiFont.drawString(cx + 280.0f, cy + 9.0f, tS,
+                                 applyAlpha(0xFFE0E0E0, alpha), 0.42f);
           } else
-            g_guiFont.drawString(cx + 280, cy, "-",
-                                 applyAlpha(0xFF505055, alpha));
+            g_guiFont.drawString(cx + 280.0f, cy + 9.0f, "-",
+                                 applyAlpha(0xFF505055, alpha), 0.42f);
         } else
-          g_guiFont.drawString(cx + 280, cy, "Disabled",
-                               applyAlpha(0xFF505055, alpha));
+          g_guiFont.drawString(cx + 280.0f, cy + 9.0f, "Disabled",
+                               applyAlpha(0xFF505055, alpha), 0.42f);
 
         if (activeS == "Seraph" || activeS == "Both") {
           bool hasData = rcIt != s_renderCache.end() && rcIt->second.seraph && !rcIt->second.seraph->tags.empty();
@@ -375,20 +395,21 @@ void renderTags(TabCtx &ctx) {
             uint32_t sCol = 0xFFFF5555;
             if (tS.find("Confirmed") != std::string::npos)
               sCol = 0xFFFF55FF;
-            g_guiFont.drawString(cx + 420, cy, tS, applyAlpha(sCol, alpha));
+            g_guiFont.drawString(cx + 420.0f, cy + 9.0f, tS, applyAlpha(sCol, alpha), 0.42f);
           } else
-            g_guiFont.drawString(cx + 420, cy, "-",
-                                 applyAlpha(0xFF505055, alpha));
+            g_guiFont.drawString(cx + 420.0f, cy + 9.0f, "-",
+                                 applyAlpha(0xFF505055, alpha), 0.42f);
         } else
-          g_guiFont.drawString(cx + 420, cy, "Disabled",
-                               applyAlpha(0xFF505055, alpha));
+          g_guiFont.drawString(cx + 420.0f, cy + 9.0f, "Disabled",
+                               applyAlpha(0xFF505055, alpha), 0.42f);
       } else {
-        g_guiFont.drawString(cx + 280, cy, "Disabled",
-                             applyAlpha(0xFF505055, alpha));
+        g_guiFont.drawString(cx + 280.0f, cy + 9.0f, "Disabled",
+                             applyAlpha(0xFF505055, alpha), 0.42f);
       }
-      cy += 35;
+      cy += rowH + 4.0f;
     }
   }
+  */
 }
 
 } // namespace Tabs

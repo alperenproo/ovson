@@ -1,5 +1,6 @@
 #include "Commands.h"
 #include "../Config/Config.h"
+#include "../Config/StatColors.h"
 #include "../Java.h"
 #include "../Logic/BedDefense/BedDefenseManager.h"
 #include "../Logic/StatsTracker.h"
@@ -18,6 +19,7 @@
 #include "../Utils/SafeGuard.h"
 #include "ChatSDK.h"
 #include "../Render/RenderHook.h"
+#include "../Services/IrcService.h"
 #include <algorithm>
 #include <iomanip>
 #include <jni.h>
@@ -280,6 +282,17 @@ void cmd_localname(const std::string &args) {
     }
 }
 
+void cmd_nickcheck(const std::string &args) {
+    (void)args;
+    std::string realName = OVson::getRealLocalUsername();
+    if (OVson::g_isNicked) {
+        std::string nick = OVson::g_activeNick.empty() ? OVson::g_localName : OVson::g_activeNick;
+        ChatSDK::showPrefixed("§a[NickCheck] §eNicked: §aYES §7| §eNick: §b" + nick + " §7| §eRealName: §f" + (realName.empty() ? OVson::g_localName : realName));
+    } else {
+        ChatSDK::showPrefixed("§a[NickCheck] §eNicked: §cNO §7| §eUsername: §f" + (realName.empty() ? OVson::g_localName : realName));
+    }
+}
+
 void cmd_stats(const std::string &args) {
   std::string playerName = args;
   while (!playerName.empty() && playerName.front() == ' ')
@@ -325,13 +338,24 @@ void cmd_stats(const std::string &args) {
       }
 
       std::optional<Hypixel::PlayerStats> statsOpt;
-      if (keyless) {
-        statsOpt = AbyssService::getPlayerStats(uuidOpt.value());
+      bool hasValidKey = (!apiKey.empty() && apiKey != "None");
+
+      if (!keyless && hasValidKey) {
+        statsOpt = Hypixel::getPlayerStats(apiKey, uuidOpt.value());
+        if (!statsOpt) {
+          statsOpt = AbyssService::getPlayerStats(uuidOpt.value());
+        }
         if (!statsOpt) {
           statsOpt = PrismService::getPlayerStats(uuidOpt.value());
         }
       } else {
-        statsOpt = Hypixel::getPlayerStats(apiKey, uuidOpt.value());
+        statsOpt = AbyssService::getPlayerStats(uuidOpt.value());
+        if (!statsOpt) {
+          statsOpt = PrismService::getPlayerStats(uuidOpt.value());
+        }
+        if (!statsOpt && hasValidKey) {
+          statsOpt = Hypixel::getPlayerStats(apiKey, uuidOpt.value());
+        }
       }
 
       if (!statsOpt.has_value()) {
@@ -414,7 +438,7 @@ void cmd_stats(const std::string &args) {
       wlrSs << std::fixed << std::setprecision(2) << wlr;
 
       std::string msg = ChatSDK::formatPrefix();
-      msg += BedwarsStars::GetFormattedLevel(stats.bedwarsStar) + " ";
+      msg += BedwarsStars::GetFormattedLevel(stats) + " ";
 
       auto getRankColor = [](const std::string &col) -> std::string {
         if (col == "RED")
@@ -481,7 +505,7 @@ void cmd_stats(const std::string &args) {
         rankDisplay = "§a[VIP] ";
       }
 
-      msg += rankDisplay + realName + " §7- ";
+      msg += rankDisplay + realName + " ";
 
       msg += "§7[§fFKDR§7] " + colorFkdr(fkdr) + fkdrSs.str() + " ";
       msg += "§7[§fFK§7] " + colorKills(stats.bedwarsFinalKills) +
@@ -523,7 +547,7 @@ void cmd_stats(const std::string &args) {
 
       std::string tagsStr = "";
       {
-        std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
+        std::lock_guard<std::recursive_mutex> lock(OVson::g_statsMutex);
         auto it = OVson::g_playerStatsMap.find(realName);
         if (it == OVson::g_playerStatsMap.end()) {
           it = OVson::g_playerStatsMap.find(playerName);
@@ -1102,20 +1126,6 @@ void cmd_lookat(const std::string &args) {
           int by = env->CallIntMethod(bpos, m_getY);
           int bz = env->CallIntMethod(bpos, m_getZ);
 
-          std::string name = "unknown";
-          try {
-            name = BedDefense::BedDefenseManager::getInstance()->getBlockName(
-                bx, by, bz);
-          } catch (...) {
-          }
-          int meta = 0;
-          try {
-            meta =
-                BedDefense::BedDefenseManager::getInstance()->getBlockMetadata(
-                    bx, by, bz);
-          } catch (...) {
-          }
-
           std::string debugInfo = "§7ID: §f?";
           try {
             jclass worldCls = lc->GetClass("net.minecraft.world.World");
@@ -1183,7 +1193,28 @@ void cmd_lookat(const std::string &args) {
                     std::string cName = clsUtf ? clsUtf : "unknown";
                     env->ReleaseStringUTFChars(clsNameStr, clsUtf);
 
+                    int meta = -1;
+                    {
+                      Lunar::DiagnosticReporter savedReporter = Lunar::reporter;
+                      Lunar::reporter = nullptr;
+                      jmethodID m_getMeta = lc->GetMethodID(
+                          blockCls, "getMetaFromState",
+                          "(Lnet/minecraft/block/state/IBlockState;)I",
+                          "func_176201_c", "c", "(Lalz;)I");
+                      Lunar::reporter = savedReporter;
+                      if (m_getMeta) {
+                        meta = env->CallIntMethod(block, m_getMeta, state);
+                        if (env->ExceptionCheck()) {
+                          env->ExceptionClear();
+                          meta = -1;
+                        }
+                      }
+                    }
+
                     debugInfo = "§7ID: §f" + std::to_string(id) +
+                                " §7Meta: §f" +
+                                (meta >= 0 ? std::to_string(meta)
+                                           : std::string("?")) +
                                 " §7Name: §f" + uName + " §7Class: §f" + cName;
 
                     env->DeleteLocalRef(objCls);
@@ -1200,8 +1231,6 @@ void cmd_lookat(const std::string &args) {
           } catch (...) {
           }
 
-          ChatSDK::showPrefixed("§7LookAt: §f" + name + " §7(Meta: §f" +
-                                std::to_string(meta) + "§7)");
           ChatSDK::showPrefixed(debugInfo + " §7at §f" + std::to_string(bx) +
                                 "," + std::to_string(by) + "," +
                                 std::to_string(bz));
@@ -1245,6 +1274,80 @@ void cmd_urchin(const std::string &args) {
       } else {
         RenderHook::enqueueTask([playerName]() { ChatSDK::showPrefixed("§a[Urchin] §f" + playerName + " is clean."); });
       }
+    });
+  }).detach();
+}
+
+void cmd_mfkdr(const std::string &args) {
+  std::string urchinKey = Config::getUrchinApiKey();
+  if (urchinKey.empty()) {
+    ChatSDK::showPrefixed("§c[Urchin] Urchin API key bulunamadı! Lütfen ayarlardan Urchin API key koyun.");
+    return;
+  }
+
+  std::string playerName = args;
+  while (!playerName.empty() && playerName.front() == ' ') playerName.erase(playerName.begin());
+  while (!playerName.empty() && playerName.back() == ' ') playerName.pop_back();
+
+  if (playerName.empty()) {
+    playerName = OVson::getRealLocalUsername(true);
+    if (playerName.empty()) playerName = OVson::g_localName;
+  }
+
+  if (playerName.empty()) {
+    ChatSDK::showPrefixed("§cusage: §f" + Config::getCommandPrefix() + "mfkdr [player]");
+    return;
+  }
+
+  ChatSDK::showPrefixed("§7[Urchin] Fetching monthly Bedwars FKDR for §f" + playerName + "§7...");
+
+  std::thread([playerName]() {
+    SafeGuard::installSehTranslator();
+    SafeGuard::run("Commands::mfkdrLookup", [&]() {
+      auto mOpt = Urchin::getMonthlyStats(playerName, true);
+      if (!mOpt.has_value() || !mOpt->hasData) {
+        RenderHook::enqueueTask([playerName]() {
+          ChatSDK::showPrefixed("§c[Urchin] No monthly Bedwars stats found for §f" + playerName);
+        });
+        return;
+      }
+
+      const auto &m = *mOpt;
+      std::string realName = m.displayName.empty() ? playerName : m.displayName;
+      double fkdr = m.fkdr;
+      int fk = m.finalKills;
+      int fd = m.finalDeaths;
+      int wins = m.wins;
+      int losses = m.losses;
+
+      char fkdrBuf[32];
+      snprintf(fkdrBuf, sizeof(fkdrBuf), "%.2f", fkdr);
+      std::string fkdrCol = StatColors::getMcColor(StatColors::StatType::FKDR, fkdr);
+
+      std::string res = "§b[Urchin] §f" + realName + "§7's Monthly Bedwars Stats:";
+      res += "\n §7- Monthly FKDR: " + fkdrCol + fkdrBuf;
+      res += " §7(§a+" + std::to_string(fk) + " Final Kills§7, §c+" + std::to_string(fd) + " Final Deaths§7)";
+
+      if (wins != 0 || losses != 0) {
+        double wlr = m.wlr;
+        char wlrBuf[32];
+        snprintf(wlrBuf, sizeof(wlrBuf), "%.2f", wlr);
+        std::string wlrCol = StatColors::getMcColor(StatColors::StatType::WLR, wlr);
+        res += "\n §7- Monthly WLR: " + wlrCol + wlrBuf;
+        res += " §7(§a+" + std::to_string(wins) + " Wins§7, §c+" + std::to_string(losses) + " Losses§7)";
+      }
+
+      if (m.bedsBroken != 0 || m.bedsLost != 0) {
+        res += "\n §7- Monthly Beds: §a+" + std::to_string(m.bedsBroken) + " Broken§7, §c+" + std::to_string(m.bedsLost) + " Lost";
+      }
+
+      if (!m.fromReadable.empty()) {
+        res += "\n §7- Period Since: §e" + m.fromReadable;
+      }
+
+      RenderHook::enqueueTask([res]() {
+        ChatSDK::showPrefixed(res);
+      });
     });
   }).detach();
 }
@@ -1353,6 +1456,120 @@ void checkLobbyPatterns(const std::string &chatLine) {
   (void)chatLine;
 }
 
+void cmd_irc(const std::string &args) {
+  try {
+    std::string a = args;
+    while (!a.empty() && a.front() == ' ') a.erase(a.begin());
+    while (!a.empty() && a.back() == ' ') a.pop_back();
+
+    if (a == "list") {
+      IrcService::requestUserList();
+      return;
+    }
+    if (a == "toggle") {
+      IrcService::toggleMuted();
+      return;
+    }
+    if (a == "reconnect") {
+      IrcService::reconnect();
+      ChatSDK::showClientMessage("§b[IRC] §aReconnecting...");
+      return;
+    }
+    if (a == "refresh") {
+      IrcService::checkPlayerNameRefresh(true);
+      ChatSDK::showClientMessage("§b[IRC] §aRefreshing local player name...");
+      return;
+    }
+    if (a.rfind("server ", 0) == 0) {
+      std::string newUrl = a.substr(7);
+      while (!newUrl.empty() && newUrl.front() == ' ') newUrl.erase(newUrl.begin());
+      Config::setIrcServerUrl(newUrl);
+      IrcService::shutdown();
+      IrcService::initialize();
+      ChatSDK::showClientMessage("§b[IRC] §aServer URL updated: §f" + newUrl);
+      return;
+    }
+    if (a.rfind("secret ", 0) == 0) {
+      std::string newSecret = a.substr(7);
+      while (!newSecret.empty() && newSecret.front() == ' ') newSecret.erase(newSecret.begin());
+      Config::setIrcSecretKey(newSecret);
+      IrcService::shutdown();
+      IrcService::initialize();
+      ChatSDK::showClientMessage("§b[IRC] §aHMAC secret updated.");
+      return;
+    }
+    if (a == "sync" || a == "syncranks") {
+      IrcService::syncCustomRanks();
+      ChatSDK::showClientMessage("§b[IRC] §aSynchronizing custom ranks from GitHub...");
+      return;
+    }
+    if (a == "status") {
+      bool off = IrcService::isAppearOffline();
+      ChatSDK::showClientMessage(std::string("§b[IRC] §7Current Status: ") + (off ? "§cAppear Offline" : "§aOnline"));
+      ChatSDK::showClientMessage("§8[IRC] §7Usage: §e.irc status <online|offline>");
+      return;
+    }
+    if (a.rfind("status ", 0) == 0) {
+      std::string sub = a.substr(7);
+      while (!sub.empty() && sub.front() == ' ') sub.erase(sub.begin());
+      while (!sub.empty() && sub.back() == ' ') sub.pop_back();
+      for (char &c : sub) c = (char)tolower((unsigned char)c);
+      if (sub == "online") {
+        IrcService::setAppearOffline(false);
+        ChatSDK::showClientMessage("§b[IRC] §7Status set to §aOnline §7(Visible to everyone).");
+        return;
+      } else if (sub == "offline") {
+        IrcService::setAppearOffline(true);
+        ChatSDK::showClientMessage("§b[IRC] §7Status set to §cAppear Offline §7(Hidden from user list).");
+        return;
+      } else {
+        ChatSDK::showClientMessage("§c[IRC] Invalid status. Usage: §e.irc status <online|offline>");
+        return;
+      }
+    }
+    if (a.rfind("ranks ", 0) == 0) {
+      std::string newUrl = a.substr(6);
+      while (!newUrl.empty() && newUrl.front() == ' ') newUrl.erase(newUrl.begin());
+      Config::setIrcRanksUrl(newUrl);
+      IrcService::syncCustomRanks();
+      ChatSDK::showClientMessage("§b[IRC] §aCustom ranks URL updated and syncing: §f" + newUrl);
+      return;
+    }
+
+    std::string currentIrcUser = IrcService::getCurrentUsername();
+    if (currentIrcUser.empty()) currentIrcUser = "Not connected";
+    ChatSDK::showClientMessage("§b[IRC] §f--- IRC Commands §7(User: §e" + currentIrcUser + "§7) ---");
+    ChatSDK::showClientMessage("§8[IRC] §e@<message> §7- Send message to global IRC chat.");
+    ChatSDK::showClientMessage("§8[IRC] §e.irc help §7- Show this help menu.");
+    ChatSDK::showClientMessage("§8[IRC] §e.irc list §7- List online users.");
+    ChatSDK::showClientMessage("§8[IRC] §e.irc status [online|offline] §7- Check or toggle appear offline.");
+    ChatSDK::showClientMessage("§8[IRC] §e.irc refresh §7- Refresh local player name.");
+    ChatSDK::showClientMessage("§8[IRC] §e.irc reconnect §7- Reconnect to IRC server.");
+    ChatSDK::showClientMessage("§8[IRC] §e.irc toggle §7- Mute/unmute IRC notifications.");
+    ChatSDK::showClientMessage("§8[IRC] §e.irc sync §7- Sync custom ranks from GitHub.");
+    ChatSDK::showClientMessage("§8[IRC] §e.irc ranks <url> §7- Set GitHub raw JSON URL for ranks.");
+    ChatSDK::showClientMessage("§8[IRC] §e.irc server <url> §7- Set WebSocket server URL.");
+    ChatSDK::showClientMessage("§8[IRC] §e.msg <user> <message> §7- Send private message (DM).");
+  } catch (...) {}
+}
+
+void cmd_msg(const std::string &args) {
+  try {
+    std::istringstream iss(args);
+    std::string target;
+    iss >> target;
+    std::string text;
+    std::getline(iss, text);
+    while (!text.empty() && text.front() == ' ') text.erase(text.begin());
+
+    if (target.empty() || text.empty()) {
+      ChatSDK::showClientMessage("§8[IRC] §cUsage: " + Config::getCommandPrefix() + "msg <user> <message>");
+      return;
+    }
+    IrcService::sendDirectMessage(target, text);
+  } catch (...) {}
+}
+
 void RegisterDefaultCommands() {
   CommandRegistry::instance().registerCommand("echo", cmd_echo);
   CommandRegistry::instance().registerCommand("help", cmd_help);
@@ -1363,6 +1580,7 @@ void RegisterDefaultCommands() {
   CommandRegistry::instance().registerCommand("tab", cmd_tab);
   CommandRegistry::instance().registerCommand("debugging", cmd_debugging);
   CommandRegistry::instance().registerCommand("localname", cmd_localname);
+  CommandRegistry::instance().registerCommand("nickcheck", cmd_nickcheck);
   CommandRegistry::instance().registerCommand("stats", cmd_stats);
   CommandRegistry::instance().registerCommand("clickgui", cmd_clickgui);
   CommandRegistry::instance().registerCommand("bedplates", cmd_bedplates);
@@ -1382,5 +1600,12 @@ void RegisterDefaultCommands() {
   CommandRegistry::instance().registerCommand("4s", cmd_play_four_four);
   CommandRegistry::instance().registerCommand("4v4", cmd_play_four_four_rush);
   CommandRegistry::instance().registerCommand("urchin", cmd_urchin);
+  CommandRegistry::instance().registerCommand("mfkdr", cmd_mfkdr);
+  CommandRegistry::instance().registerCommand("monthlyfkdr", cmd_mfkdr);
   CommandRegistry::instance().registerCommand("seraph", cmd_seraph);
+
+  CommandRegistry::instance().registerCommand("irc", cmd_irc);
+  CommandRegistry::instance().registerCommand("msg", cmd_msg);
+  CommandRegistry::instance().registerCommand("w", cmd_msg);
+  CommandRegistry::instance().registerCommand("tell", cmd_msg);
 }

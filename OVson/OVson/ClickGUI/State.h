@@ -31,6 +31,7 @@ extern bool s_lastInsert;
 extern bool s_lastBackspace;
 
 extern std::string s_playerSearch;
+extern std::string s_moduleSearch;
 extern std::string s_apiKeyInput;
 extern std::string s_autoGGInput;
 extern std::string s_urchinKeyInput;
@@ -38,8 +39,10 @@ extern std::string s_seraphKeyInput;
 extern std::string s_auroraApiKeyInput;
 extern std::string s_prefixInput;
 extern std::string s_muteTagPlayerInput;
+extern std::string s_nickRollTargetInput;
 
 extern bool s_typingSearch;
+extern bool s_typingModuleSearch;
 extern bool s_typingApiKey;
 extern bool s_typingAutoGG;
 extern bool s_typingUrchinKey;
@@ -47,6 +50,8 @@ extern bool s_typingSeraphKey;
 extern bool s_typingAuroraApiKey;
 extern bool s_typingPrefix;
 extern bool s_typingMuteTagPlayer;
+extern bool s_typingNickRollTarget;
+extern bool s_waitingForNickRollKey;
 
 extern float s_scrollOffset;
 extern float s_targetScroll;
@@ -76,11 +81,6 @@ extern bool  s_accentInit;
 
 extern int   s_colorSelectedStat;
 extern bool  s_colorPickerOpen;
-extern float s_cpHue;
-extern float s_cpSat;
-extern float s_cpVal;
-extern bool  s_cpDraggingSV;
-extern bool  s_cpDraggingHue;
 extern char  s_cpMinBuf[16];
 extern char  s_cpMaxBuf[16];
 extern int   s_cpMinLen;
@@ -95,14 +95,29 @@ extern bool                                   s_searching;
 extern std::string                            s_lookupName;
 extern std::optional<Urchin::PlayerTags>      s_lookupUrchinTags;
 extern std::optional<Seraph::PlayerTags>      s_lookupSeraphTags;
+extern std::optional<Urchin::MonthlyStats>    s_lookupUrchinMonthly;
 extern std::atomic<bool>                      s_tagsFetched;
 extern GLuint                                 s_lookupSkinTexId;
+extern int                                    s_lookupSkinTexW;
+extern int                                    s_lookupSkinTexH;
+extern float                                  s_skinYaw;
+extern float                                  s_skinPitch;
+extern bool                                   s_skinDragging;
+extern float                                  s_lastDragX;
+extern float                                  s_lastDragY;
+extern bool                                   s_skinIsSlim;
 extern std::string                            s_lookupSkinUuid;
 extern std::atomic<bool>                      s_skinLoading;
 extern std::vector<uint8_t>                   s_skinPendingData;
 extern int                                    s_skinPendingW;
 extern int                                    s_skinPendingH;
 extern std::atomic<bool>                      s_skinPendingReady;
+extern GLuint                                 s_lookupHeadTexId;
+extern std::vector<uint8_t>                   s_headPendingData;
+extern int                                    s_headPendingW;
+extern int                                    s_headPendingH;
+extern std::atomic<bool>                      s_headPendingReady;
+void triggerPlayerSearch(const std::string &searchName);
 
 extern float g_x;
 extern float g_y;
@@ -122,3 +137,4 @@ extern SwitchAnim s_switches[50];
 
 } // namespace ClickGUIState
 } // namespace Render
+

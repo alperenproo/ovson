@@ -15,6 +15,8 @@ namespace ChatSDK {
 	bool clearChat();
 	std::vector<std::string> getChatHistory(int maxCount);
 	std::vector<std::string> getSentHistory(int maxCount);
+	std::string getLatestChatMessage();
+	std::vector<std::string> getNewMessages();
 
 	std::string formatPrefix();
 	bool showPrefixed(const std::string& message);

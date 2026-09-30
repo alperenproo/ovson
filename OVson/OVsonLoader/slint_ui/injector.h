@@ -15,5 +15,7 @@ std::vector<uint8_t> activeDllBytes();
 using ProgressFn = std::function<void(int pct, const std::wstring &stage)>;
 bool injectPid(DWORD pid, const ProgressFn &cb);
 bool uninjectPid(DWORD pid, DWORD *lastError = nullptr);
+void requestInjectorShutdown();
+void shutdownInjector();
 
 void loaderLog(const char* fmt, ...);

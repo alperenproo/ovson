@@ -32,5 +32,6 @@ int downloadPct();
 const std::string &lastError();
 void startDownload();
 bool installAndRelaunch();
+void shutdown();
 
 } // namespace Updater

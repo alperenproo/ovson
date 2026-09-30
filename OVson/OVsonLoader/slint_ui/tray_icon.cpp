@@ -19,6 +19,7 @@ constexpr UINT  TRAY_UID   = 1;
 
 HWND                    g_owner    = nullptr;
 bool                    g_installed = false;
+bool                    g_iconVisible = false;
 std::function<void()>   g_onShow;
 std::function<void()>   g_onQuit;
 NOTIFYICONDATAW         g_nid{};
@@ -38,7 +39,7 @@ void buildNid() {
       GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
       LR_DEFAULTCOLOR);
   if (!g_nid.hIcon) {
-    g_nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    g_nid.hIcon = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));
   }
   g_nid.hBalloonIcon = (HICON)LoadImageW(
       GetModuleHandleW(nullptr), MAKEINTRESOURCEW(101), IMAGE_ICON,
@@ -63,8 +64,15 @@ void showContextMenu() {
                               | TPM_NONOTIFY,
                             pt.x, pt.y, 0, g_owner, nullptr);
   DestroyMenu(menu);
-  if (cmd == ID_SHOW && g_onShow) g_onShow();
-  else if (cmd == ID_QUIT && g_onQuit) g_onQuit();
+  if (cmd == ID_SHOW && g_onShow) {
+    auto callback = g_onShow;
+    callback();
+  } else if (cmd == ID_QUIT && g_onQuit) {
+    // The callback may begin tray teardown, so retain a local owner while it
+    // executes instead of destroying the active std::function in place.
+    auto callback = g_onQuit;
+    callback();
+  }
 }
 
 LRESULT CALLBACK trayProc(HWND hWnd, UINT uMsg, WPARAM wParam,
@@ -80,7 +88,7 @@ LRESULT CALLBACK trayProc(HWND hWnd, UINT uMsg, WPARAM wParam,
   }
   static const UINT WM_TASKBARCREATED =
       RegisterWindowMessageW(L"TaskbarCreated");
-  if (uMsg == WM_TASKBARCREATED) {
+  if (uMsg == WM_TASKBARCREATED && g_installed && g_iconVisible) {
     Shell_NotifyIconW(NIM_ADD, &g_nid);
     return 0;
   }
@@ -107,11 +115,12 @@ void install(HWND owner,
   buildNid();
   SetWindowSubclass(g_owner, trayProc, 7, 0);
   Shell_NotifyIconW(NIM_ADD, &g_nid);
+  g_iconVisible = true;
   g_installed = true;
 }
 
 void notify(const wchar_t *title, const wchar_t *body) {
-  if (!g_installed) return;
+  if (!g_installed || !g_iconVisible) return;
   NOTIFYICONDATAW n = g_nid;
   n.uFlags      = NIF_INFO | NIF_ICON;
   n.dwInfoFlags = NIIF_USER | NIIF_NOSOUND | NIIF_LARGE_ICON;
@@ -120,9 +129,20 @@ void notify(const wchar_t *title, const wchar_t *body) {
   Shell_NotifyIconW(NIM_MODIFY, &n);
 }
 
+void beginShutdown() {
+  if (!g_installed) return;
+  if (g_iconVisible) {
+    Shell_NotifyIconW(NIM_DELETE, &g_nid);
+    g_iconVisible = false;
+  }
+  g_onShow = {};
+  g_onQuit = {};
+}
+
 void uninstall() {
   if (!g_installed) return;
-  Shell_NotifyIconW(NIM_DELETE, &g_nid);
+  if (g_iconVisible)
+    Shell_NotifyIconW(NIM_DELETE, &g_nid);
   if (g_owner) {
     RemoveWindowSubclass(g_owner, trayProc, 7);
   }
@@ -131,7 +151,10 @@ void uninstall() {
   }
   if (g_nid.hIcon) DestroyIcon(g_nid.hIcon);
   g_installed = false;
+  g_iconVisible = false;
   g_owner = nullptr;
+  g_onShow = {};
+  g_onQuit = {};
 }
 
 } // namespace Tray

@@ -10,6 +10,7 @@ void install(HWND owner,
 
 void notify(const wchar_t *title, const wchar_t *body);
 
+void beginShutdown();
 void uninstall();
 
 } // namespace Tray

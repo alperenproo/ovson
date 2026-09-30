@@ -1,4 +1,8 @@
 #pragma once
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #include <algorithm>
 #include <atomic>
 #include <iostream>
@@ -16,9 +20,160 @@ public:
     return cleaning;
   }
 
+  static jstring createSafeJString(JNIEnv *env, const std::string &str) {
+    if (!env)
+      return nullptr;
+    if (str.empty()) {
+      static const jchar empty[1] = {0};
+      return env->NewString(empty, 0);
+    }
+
+    int wlen = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, str.data(),
+                                   (int)str.size(), nullptr, 0);
+    if (wlen > 0) {
+      std::wstring wstr(wlen, L'\0');
+      MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), &wstr[0],
+                          wlen);
+      return env->NewString(reinterpret_cast<const jchar *>(wstr.data()),
+                            (jsize)wstr.size());
+    }
+
+    wlen = MultiByteToWideChar(CP_ACP, 0, str.data(), (int)str.size(), nullptr, 0);
+    if (wlen > 0) {
+      std::wstring wstr(wlen, L'\0');
+      MultiByteToWideChar(CP_ACP, 0, str.data(), (int)str.size(), &wstr[0],
+                          wlen);
+      return env->NewString(reinterpret_cast<const jchar *>(wstr.data()),
+                            (jsize)wstr.size());
+    }
+
+    std::wstring safeW;
+    safeW.reserve(str.size());
+    for (unsigned char c : str) {
+      safeW.push_back((c < 128) ? (wchar_t)c : L'?');
+    }
+    return env->NewString(reinterpret_cast<const jchar *>(safeW.data()),
+                          (jsize)safeW.size());
+  }
+
   static Lunar *getInstance() {
     static Lunar *instance = new Lunar();
     return instance;
+  }
+
+  static void resetGlStateManagerTexture(JNIEnv *env) {
+    if (!env) return;
+    Lunar *l = getInstance();
+    if (!l) return;
+    static jclass s_glCls = nullptr;
+    static jmethodID s_bindTex = nullptr;
+    if (!s_glCls) {
+      jclass cls = l->GetClass("net.minecraft.client.renderer.GlStateManager");
+      if (!cls) cls = env->FindClass("bfl");
+      if (env->ExceptionCheck()) env->ExceptionClear();
+      if (cls) {
+        s_glCls = (jclass)env->NewGlobalRef(cls);
+        s_bindTex = l->GetStaticMethodID(s_glCls, "bindTexture", "(I)V", "func_179144_i", "p");
+        if (!s_bindTex) {
+          s_bindTex = l->FindMethodBySignature(s_glCls, "(I)V", true);
+          if (env->ExceptionCheck()) env->ExceptionClear();
+        }
+      }
+    }
+    if (s_glCls && s_bindTex) {
+      env->CallStaticVoidMethod(s_glCls, s_bindTex, (jint)0);
+      if (env->ExceptionCheck()) env->ExceptionClear();
+    }
+  }
+
+  static bool isSGAFontRenderer(JNIEnv *env, jobject fr) {
+    if (!env || !fr) return false;
+    jclass frCls = env->GetObjectClass(fr);
+    if (!frCls) return false;
+
+    Lunar *l = getInstance();
+    const char *rlFields[] = {"locationFontTexture", "field_111273_g", "f", "g"};
+    const char *rlSigs[] = {"Lnet/minecraft/util/ResourceLocation;", "Ljy;"};
+    jfieldID f_loc = nullptr;
+    for (const char *fn : rlFields) {
+      for (const char *fs : rlSigs) {
+        f_loc = env->GetFieldID(frCls, fn, fs);
+        if (f_loc) break;
+        if (env->ExceptionCheck()) env->ExceptionClear();
+      }
+      if (f_loc) break;
+    }
+    if (!f_loc && l && l->jvmti) {
+      f_loc = l->FindFieldBySignature(frCls, "Ljy;");
+      if (env->ExceptionCheck()) env->ExceptionClear();
+      if (!f_loc) {
+        f_loc = l->FindFieldBySignature(frCls, "Lnet/minecraft/util/ResourceLocation;");
+        if (env->ExceptionCheck()) env->ExceptionClear();
+      }
+    }
+
+    bool isSga = false;
+    if (f_loc) {
+      jobject loc = env->GetObjectField(fr, f_loc);
+      if (loc) {
+        jclass locCls = env->GetObjectClass(loc);
+        const char *pathFields[] = {"resourcePath", "field_110626_a", "b"};
+        jfieldID f_path = nullptr;
+        for (const char *pn : pathFields) {
+          f_path = env->GetFieldID(locCls, pn, "Ljava/lang/String;");
+          if (f_path) break;
+          if (env->ExceptionCheck()) env->ExceptionClear();
+        }
+        if (!f_path && l) {
+          f_path = l->FindFieldBySignature(locCls, "Ljava/lang/String;");
+          if (env->ExceptionCheck()) env->ExceptionClear();
+        }
+        if (f_path) {
+          jstring jpath = (jstring)env->GetObjectField(loc, f_path);
+          if (jpath) {
+            const char *c = env->GetStringUTFChars(jpath, nullptr);
+            if (c) {
+              std::string p = c;
+              for (char &ch : p) ch = (char)::tolower((unsigned char)ch);
+              if (p.find("sga") != std::string::npos ||
+                  p.find("enchant") != std::string::npos ||
+                  p.find("galactic") != std::string::npos) {
+                isSga = true;
+              }
+              env->ReleaseStringUTFChars(jpath, c);
+            }
+            env->DeleteLocalRef(jpath);
+          }
+        }
+        // Also check toString() as backup
+        if (!isSga && !f_path) {
+          jmethodID m_toString = env->GetMethodID(locCls, "toString", "()Ljava/lang/String;");
+          if (m_toString) {
+            jstring jstr = (jstring)env->CallObjectMethod(loc, m_toString);
+            if (jstr) {
+              const char *c = env->GetStringUTFChars(jstr, nullptr);
+              if (c) {
+                std::string s = c;
+                for (char &ch : s) ch = (char)::tolower((unsigned char)ch);
+                if (s.find("sga") != std::string::npos ||
+                    s.find("enchant") != std::string::npos ||
+                    s.find("galactic") != std::string::npos) {
+                  isSga = true;
+                }
+                env->ReleaseStringUTFChars(jstr, c);
+              }
+              env->DeleteLocalRef(jstr);
+            }
+          }
+          if (env->ExceptionCheck()) env->ExceptionClear();
+        }
+        env->DeleteLocalRef(locCls);
+        env->DeleteLocalRef(loc);
+      }
+    }
+    env->DeleteLocalRef(frCls);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    return isSga;
   }
 
   jfieldID FindFieldBySignature(jclass cls, const char *sig,
@@ -169,6 +324,14 @@ public:
       jvmti->Deallocate((unsigned char *)classesPtr);
     env->DeleteLocalRef(lang);
 
+    const auto& nmap = getNotchMap();
+    for (const auto& pair : nmap) {
+      auto it = classes.find(pair.second);
+      if (it != classes.end() && classes.find(pair.first) == classes.end()) {
+        classes[pair.first] = it->second;
+      }
+    }
+
     GetClass("java.util.Collection");
     GetClass("java.util.Iterator");
     GetClass("net.minecraft.client.Minecraft");
@@ -192,6 +355,120 @@ public:
 
   virtual ~Lunar() { Cleanup(); }
 
+  static const std::unordered_map<std::string, std::string>& getNotchMap() {
+    static const std::unordered_map<std::string, std::string> s_notchMap = {
+        {"net.minecraft.client.Minecraft", "ave"},
+        {"net.minecraft.client.entity.EntityPlayerSP", "bew"},
+        {"net.minecraft.client.entity.EntityOtherPlayerMP", "bex"},
+        {"net.minecraft.client.entity.AbstractClientPlayer", "bet"},
+        {"net.minecraft.entity.player.EntityPlayer", "wn"},
+        {"net.minecraft.entity.EntityLivingBase", "pr"},
+        {"net.minecraft.entity.Entity", "pk"},
+        {"net.minecraft.entity.player.InventoryPlayer", "wm"},
+        {"net.minecraft.entity.projectile.EntityArrow", "wq"},
+        {"net.minecraft.entity.item.EntityItem", "uz"},
+        {"net.minecraft.client.gui.GuiIngame", "avo"},
+        {"net.minecraft.client.gui.GuiNewChat", "avt"},
+        {"net.minecraft.client.gui.GuiChat", "awv"},
+        {"net.minecraft.client.gui.GuiScreen", "axu"},
+        {"net.minecraft.client.gui.GuiTextField", "avw"},
+        {"net.minecraft.client.gui.GuiPlayerTabOverlay", "awh"},
+        {"net.minecraft.client.gui.FontRenderer", "avn"},
+        {"net.minecraft.client.gui.ScaledResolution", "avr"},
+        {"net.minecraft.client.gui.inventory.GuiContainer", "ayl"},
+        {"net.minecraft.inventory.Container", "xi"},
+        {"net.minecraft.inventory.Slot", "yg"},
+        {"net.minecraft.client.multiplayer.WorldClient", "bdb"},
+        {"net.minecraft.world.World", "adm"},
+        {"net.minecraft.world.chunk.Chunk", "amy"},
+        {"net.minecraft.world.chunk.storage.ExtendedBlockStorage", "amz"},
+        {"net.minecraft.client.network.NetHandlerPlayClient", "bcy"},
+        {"net.minecraft.client.network.NetworkPlayerInfo", "bdc"},
+        {"net.minecraft.network.NetworkManager", "ej"},
+        {"net.minecraft.client.multiplayer.ServerData", "bde"},
+        {"net.minecraft.client.multiplayer.PlayerControllerMP", "bda"},
+        {"net.minecraft.scoreboard.Scoreboard", "auo"},
+        {"net.minecraft.scoreboard.ScorePlayerTeam", "aul"},
+        {"net.minecraft.scoreboard.Score", "aum"},
+        {"net.minecraft.scoreboard.ScoreObjective", "auk"},
+        {"net.minecraft.scoreboard.Team", "auq"},
+        {"net.minecraft.scoreboard.GoalColor", "aur"},
+        {"net.minecraft.scoreboard.ScoreDummyCriteria", "aus"},
+        {"net.minecraft.scoreboard.ScoreHealthCriteria", "aut"},
+        {"net.minecraft.scoreboard.IScoreObjectiveCriteria", "auu"},
+        {"net.minecraft.scoreboard.ServerScoreboard", "kk"},
+        {"net.minecraft.client.renderer.entity.RenderManager", "biu"},
+        {"net.minecraft.client.renderer.entity.RendererLivingEntity", "bjl"},
+        {"net.minecraft.client.renderer.RenderGlobal", "bfr"},
+        {"net.minecraft.client.renderer.EntityRenderer", "bfb"},
+        {"net.minecraft.client.renderer.ActiveRenderInfo", "axs"},
+        {"net.minecraft.client.renderer.GlStateManager", "bfl"},
+        {"net.minecraft.client.renderer.Tessellator", "bfx"},
+        {"net.minecraft.client.renderer.WorldRenderer", "bfd"},
+        {"net.minecraft.client.renderer.texture.TextureMap", "bmh"},
+        {"net.minecraft.client.renderer.texture.TextureManager", "bmj"},
+        {"net.minecraft.client.renderer.texture.TextureAtlasSprite", "bmi"},
+        {"net.minecraft.client.renderer.BlockRendererDispatcher", "bgd"},
+        {"net.minecraft.client.renderer.BlockModelShapes", "bgc"},
+        {"net.minecraft.client.settings.GameSettings", "avh"},
+        {"net.minecraft.client.settings.KeyBinding", "avb"},
+        {"net.minecraft.util.Timer", "avl"},
+        {"net.minecraft.util.IChatComponent", "eu"},
+        {"net.minecraft.util.IChatComponent$Serializer", "eu$a"},
+        {"net.minecraft.util.ChatComponentText", "fa"},
+        {"net.minecraft.util.ChatStyle", "ez"},
+        {"net.minecraft.util.MovingObjectPosition", "auh"},
+        {"net.minecraft.util.AxisAlignedBB", "aug"},
+        {"net.minecraft.util.BlockPos", "cj"},
+        {"net.minecraft.util.EnumFacing", "cq"},
+        {"net.minecraft.util.ResourceLocation", "jy"},
+        {"net.minecraft.util.RegistryNamespacedDefaultedByKey", "co"},
+        {"net.minecraft.block.state.IBlockState", "alz"},
+        {"net.minecraft.block.Block", "afh"},
+        {"net.minecraft.block.BlockBed", "afg"},
+        {"net.minecraft.item.ItemStack", "zx"},
+        {"net.minecraft.item.ItemArmor", "yv"},
+        {"net.minecraft.item.Item", "zw"},
+        {"net.minecraft.item.ItemBow", "zp"},
+        {"net.minecraft.event.HoverEvent", "ew"},
+        {"net.minecraft.event.HoverEvent$Action", "ew$a"},
+        {"net.minecraft.network.play.server.S38PacketPlayerListItem", "ja"},
+        {"net.minecraft.network.play.server.S0CPacketSpawnPlayer", "ik"},
+        {"net.minecraft.network.play.server.S1CPacketEntityMetadata", "id"},
+        {"net.minecraft.network.play.server.S3EPacketTeams", "hr"},
+    };
+    return s_notchMap;
+  }
+
+  static std::string translateSigToNotch(const std::string& sig) {
+    if (sig.find("net/minecraft") == std::string::npos) return sig;
+    std::string result;
+    result.reserve(sig.size());
+    const auto& nmap = getNotchMap();
+    size_t i = 0;
+    while (i < sig.size()) {
+      if (sig[i] == 'L') {
+        size_t semi = sig.find(';', i + 1);
+        if (semi != std::string::npos) {
+          std::string className = sig.substr(i + 1, semi - (i + 1));
+          std::string dotClass = className;
+          for (auto& c : dotClass) if (c == '/') c = '.';
+          auto it = nmap.find(dotClass);
+          if (it != nmap.end()) {
+            result += 'L';
+            result += it->second;
+            result += ';';
+            i = semi + 1;
+            continue;
+          }
+        }
+      }
+      result += sig[i];
+      i++;
+    }
+    return result;
+  }
+
   jclass GetClass(const std::string &className) {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     JNIEnv *env = getEnv();
@@ -200,6 +477,17 @@ public:
     auto it = classes.find(className);
     if (it != classes.end())
       return it->second;
+
+    const auto& nmap = getNotchMap();
+
+    auto nit = nmap.find(className);
+    if (nit != nmap.end()) {
+      auto itNotch = classes.find(nit->second);
+      if (itNotch != classes.end()) {
+        classes[className] = itNotch->second;
+        return itNotch->second;
+      }
+    }
 
     std::string internalName = className;
     std::replace(internalName.begin(), internalName.end(), '.', '/');
@@ -216,77 +504,12 @@ public:
     if (env->ExceptionCheck())
       env->ExceptionClear();
 
-    // 3rd
-    static const std::unordered_map<std::string, std::string> notchMap = {
-        {"net.minecraft.client.Minecraft", "ave"},
-        {"net.minecraft.client.entity.EntityPlayerSP", "bew"},
-        {"net.minecraft.client.gui.GuiIngame", "avo"},
-        {"net.minecraft.client.gui.GuiNewChat", "avt"},
-        {"net.minecraft.client.gui.GuiChat", "awv"},
-        {"net.minecraft.client.gui.GuiScreen", "axu"},
-        {"net.minecraft.client.gui.GuiTextField", "avw"},
-        {"net.minecraft.client.gui.GuiPlayerTabOverlay", "awh"},
-        {"net.minecraft.client.multiplayer.WorldClient", "bdb"},
-        {"net.minecraft.client.network.NetHandlerPlayClient", "bcy"},
-        {"net.minecraft.client.network.NetworkPlayerInfo", "bdc"},
-        {"net.minecraft.scoreboard.Scoreboard", "auo"},
-        {"net.minecraft.scoreboard.ScorePlayerTeam", "aul"},
-        {"net.minecraft.scoreboard.Score", "aum"},
-        {"net.minecraft.scoreboard.ScoreObjective", "auk"},
-        {"net.minecraft.client.multiplayer.ServerData", "bde"},
-        {"net.minecraft.client.multiplayer.PlayerControllerMP", "bda"},
-        {"net.minecraft.util.IChatComponent", "eu"},
-        {"net.minecraft.util.ChatComponentText", "fa"},
-        {"net.minecraft.client.gui.inventory.GuiContainer", "ayl"},
-        {"net.minecraft.inventory.Container", "xi"},
-        {"net.minecraft.inventory.Slot", "yg"},
-        {"net.minecraft.item.ItemStack", "zx"},
-        {"net.minecraft.world.World", "adm"},
-        {"net.minecraft.entity.Entity", "pk"},
-        {"net.minecraft.util.MovingObjectPosition", "auh"},
-        {"net.minecraft.util.BlockPos", "cj"},
-        {"net.minecraft.block.state.IBlockState", "alz"},
-        {"net.minecraft.block.Block", "afh"},
-        {"net.minecraft.block.BlockBed", "afg"},
-        {"net.minecraft.client.settings.GameSettings", "avh"},
-        {"net.minecraft.client.settings.KeyBinding", "avb"},
-        {"net.minecraft.util.Timer", "avl"},
-        {"net.minecraft.client.renderer.entity.RenderManager", "biu"},
-        {"net.minecraft.client.renderer.ActiveRenderInfo", "axs"},
-        {"net.minecraft.client.renderer.EntityRenderer", "bfb"},
-        {"net.minecraft.client.renderer.texture.TextureMap", "bmh"},
-        {"net.minecraft.client.renderer.texture.TextureManager", "bmj"},
-        {"net.minecraft.client.renderer.texture.TextureAtlasSprite", "bmi"},
-        {"net.minecraft.world.chunk.Chunk", "amy"},
-        {"net.minecraft.world.chunk.storage.ExtendedBlockStorage", "amz"},
-        {"net.minecraft.util.ResourceLocation", "jy"},
-        {"net.minecraft.util.RegistryNamespacedDefaultedByKey", "co"},
-        {"net.minecraft.client.renderer.BlockRendererDispatcher", "bgd"},
-        {"net.minecraft.client.renderer.BlockModelShapes", "bgc"},
-        {"net.minecraft.client.multiplayer.WorldClient", "bdb"},
-        {"net.minecraft.scoreboard.Scoreboard", "auo"},
-        {"net.minecraft.scoreboard.ScorePlayerTeam", "aul"},
-        {"net.minecraft.scoreboard.ScoreObjective", "auk"},
-        {"net.minecraft.scoreboard.Score", "aum"},
-        {"net.minecraft.network.NetworkManager", "ej"},
-        {"net.minecraft.network.play.server.S38PacketPlayerListItem", "ja"},
-        {"net.minecraft.network.play.server.S0CPacketSpawnPlayer", "ik"},
-        {"net.minecraft.network.play.server.S1CPacketEntityMetadata", "id"},
-        {"net.minecraft.util.ChatStyle", "ez"},
-        {"net.minecraft.event.HoverEvent", "ew"},
-        {"net.minecraft.event.HoverEvent$Action", "ew$a"},
-        {"net.minecraft.util.IChatComponent$Serializer", "eu$a"},
-        {"net.minecraft.entity.player.EntityPlayer", "wn"},
-        {"net.minecraft.entity.player.InventoryPlayer", "wm"},
-        {"net.minecraft.item.ItemArmor", "yv"},
-        {"net.minecraft.item.Item", "zw"},
-    };
-    auto nit = notchMap.find(className);
-    if (nit != notchMap.end()) {
+    if (nit != nmap.end()) {
       localCls = env->FindClass(nit->second.c_str());
       if (localCls) {
         jclass globalCls = (jclass)env->NewGlobalRef(localCls);
         classes[className] = globalCls;
+        classes[nit->second] = globalCls;
         env->DeleteLocalRef(localCls);
         if (env->ExceptionCheck())
           env->ExceptionClear();
@@ -312,10 +535,23 @@ public:
         env->ExceptionClear();
       fid = env->GetFieldID(cls, srgName, sig);
     }
+    std::string autoNotchSig;
+    const char* effectiveNotchSig = notchSig;
+    if (!effectiveNotchSig && sig) {
+      autoNotchSig = translateSigToNotch(sig);
+      if (autoNotchSig != sig) {
+        effectiveNotchSig = autoNotchSig.c_str();
+      }
+    }
+    if (!fid && srgName && effectiveNotchSig) {
+      if (env->ExceptionCheck())
+        env->ExceptionClear();
+      fid = env->GetFieldID(cls, srgName, effectiveNotchSig);
+    }
     if (!fid && notchName) {
       if (env->ExceptionCheck())
         env->ExceptionClear();
-      fid = env->GetFieldID(cls, notchName, notchSig ? notchSig : sig);
+      fid = env->GetFieldID(cls, notchName, effectiveNotchSig ? effectiveNotchSig : sig);
     }
     if (!fid) {
       if (env->ExceptionCheck())
@@ -339,10 +575,23 @@ public:
         env->ExceptionClear();
       fid = env->GetStaticFieldID(cls, srgName, sig);
     }
+    std::string autoNotchSig;
+    const char* effectiveNotchSig = notchSig;
+    if (!effectiveNotchSig && sig) {
+      autoNotchSig = translateSigToNotch(sig);
+      if (autoNotchSig != sig) {
+        effectiveNotchSig = autoNotchSig.c_str();
+      }
+    }
+    if (!fid && srgName && effectiveNotchSig) {
+      if (env->ExceptionCheck())
+        env->ExceptionClear();
+      fid = env->GetStaticFieldID(cls, srgName, effectiveNotchSig);
+    }
     if (!fid && notchName) {
       if (env->ExceptionCheck())
         env->ExceptionClear();
-      fid = env->GetStaticFieldID(cls, notchName, notchSig ? notchSig : sig);
+      fid = env->GetStaticFieldID(cls, notchName, effectiveNotchSig ? effectiveNotchSig : sig);
     }
     if (!fid) {
       if (env->ExceptionCheck())
@@ -366,10 +615,23 @@ public:
         env->ExceptionClear();
       mid = env->GetMethodID(cls, srgName, sig);
     }
+    std::string autoNotchSig;
+    const char* effectiveNotchSig = notchSig;
+    if (!effectiveNotchSig && sig) {
+      autoNotchSig = translateSigToNotch(sig);
+      if (autoNotchSig != sig) {
+        effectiveNotchSig = autoNotchSig.c_str();
+      }
+    }
+    if (!mid && srgName && effectiveNotchSig) {
+      if (env->ExceptionCheck())
+        env->ExceptionClear();
+      mid = env->GetMethodID(cls, srgName, effectiveNotchSig);
+    }
     if (!mid && notchName) {
       if (env->ExceptionCheck())
         env->ExceptionClear();
-      mid = env->GetMethodID(cls, notchName, notchSig ? notchSig : sig);
+      mid = env->GetMethodID(cls, notchName, effectiveNotchSig ? effectiveNotchSig : sig);
     }
     if (!mid) {
       if (env->ExceptionCheck())
@@ -393,10 +655,23 @@ public:
         env->ExceptionClear();
       mid = env->GetStaticMethodID(cls, srgName, sig);
     }
+    std::string autoNotchSig;
+    const char* effectiveNotchSig = notchSig;
+    if (!effectiveNotchSig && sig) {
+      autoNotchSig = translateSigToNotch(sig);
+      if (autoNotchSig != sig) {
+        effectiveNotchSig = autoNotchSig.c_str();
+      }
+    }
+    if (!mid && srgName && effectiveNotchSig) {
+      if (env->ExceptionCheck())
+        env->ExceptionClear();
+      mid = env->GetStaticMethodID(cls, srgName, effectiveNotchSig);
+    }
     if (!mid && notchName) {
       if (env->ExceptionCheck())
         env->ExceptionClear();
-      mid = env->GetStaticMethodID(cls, notchName, notchSig ? notchSig : sig);
+      mid = env->GetStaticMethodID(cls, notchName, effectiveNotchSig ? effectiveNotchSig : sig);
     }
     if (!mid) {
       if (env->ExceptionCheck())
@@ -516,19 +791,6 @@ public:
 
   void Cleanup() {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    if (classes.empty())
-      return;
-
-    JNIEnv *env = getEnv();
-    if (!env) {
-      classes.clear();
-      return;
-    }
-
-    for (auto &pair : classes) {
-      if (pair.second)
-        env->DeleteGlobalRef(pair.second);
-    }
     classes.clear();
   }
 

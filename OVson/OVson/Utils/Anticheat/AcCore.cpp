@@ -10,6 +10,7 @@
 #include "../SafeGuard.h"
 #include "AcInternal.h"
 #include "Anticheat.h"
+#include "../../Plugins/EventDispatcher.h"
 #include "../../Services/KhadowService.h"
 #include "../../Logic/StatsTracker.internal.h"
 #include <Windows.h>
@@ -81,10 +82,7 @@ static std::string resolveAbLogPath() {
 }
 
 void abLog(const char *fmt, ...) {
-  // return (writes go to %TEMP%\autoblock_debug.log).
-  (void)fmt;
-  return;
-  /*
+  if (!Config::isGlobalDebugEnabled()) return;
   std::lock_guard<std::mutex> lk(g_abLogMutex);
   if (!g_abLog.is_open()) {
     std::string path = resolveAbLogPath();
@@ -111,7 +109,6 @@ void abLog(const char *fmt, ...) {
   va_end(ap);
   g_abLog << prefix << body << "\n";
   g_abLog.flush();
-  */
 }
 
 static std::string resolveAcLogPath() {
@@ -1167,6 +1164,7 @@ void flag(PlayerData &p, Check *check, const std::string &info, double vl) {
   st.lastAlertMs = now;
   st.vl = (double)threshold * 0.5;
   p.isFlagged = true;
+  EventDispatcher::postAnticheatFlagEvent(p.name);
   {
     std::string target;
     for (char c : p.name) {
@@ -1198,7 +1196,7 @@ void flag(PlayerData &p, Check *check, const std::string &info, double vl) {
                           "7";
   
   {
-    std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
+    std::lock_guard<std::recursive_mutex> lock(OVson::g_statsMutex);
     auto itTC = OVson::g_playerTeamColor.find(p.name);
     if (itTC != OVson::g_playerTeamColor.end() && !itTC->second.empty()) {
       teamColor = OVson::mcColorForTeam(itTC->second);
@@ -1793,6 +1791,52 @@ void clearAllPlayers() {
   g_players.clear();
 }
 
+void observeConfirmedBlockHit(int attackerEntityId, std::uint64_t atMs,
+                              double distance, bool blockingKnown,
+                              bool blocking, bool holdingSword,
+                              bool healthConfirmed,
+                              bool velocityConfirmed) {
+  if (!g_started.load() || !Config::isAnticheatEnabled() ||
+      !Config::isAnticheatAutoBlockEnabled()) {
+    return;
+  }
+  if (!(OVson::g_inHypixelGame || OVson::g_inReplay)) {
+    abLog("confirmed hit rejected: eid=%d reason=outside-game-state",
+          attackerEntityId);
+    return;
+  }
+  if (attackerEntityId < 0) {
+    abLog("confirmed hit rejected: eid=%d reason=no-attacker", attackerEntityId);
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(g_playersMutex);
+  const auto found = g_players.find(attackerEntityId);
+  if (found == g_players.end()) {
+    abLog("confirmed hit rejected: eid=%d reason=attacker-not-tracked",
+          attackerEntityId);
+    return;
+  }
+
+  Check::ConfirmedAttack attack;
+  attack.atMs = atMs;
+  attack.distance = distance;
+  attack.blockingKnown = blockingKnown;
+  attack.blocking = blocking;
+  attack.holdingSword = holdingSword;
+  attack.healthConfirmed = healthConfirmed;
+  attack.velocityConfirmed = velocityConfirmed;
+  for (auto &check : g_checks) {
+    if (check) check->onConfirmedAttack(found->second, attack);
+  }
+}
+
+void resetAutoBlockEvidence() {
+  std::lock_guard<std::mutex> lock(g_playersMutex);
+  for (auto &entry : g_players)
+    entry.second.confirmedAutoBlockHits.clear();
+}
+
 void tickFromRenderThread() {
   static bool s_loggedFirstCall = false;
   if (!s_loggedFirstCall) {
@@ -1952,3 +1996,4 @@ bool isPlayerFlagged(const std::string &name) {
 }
 
 } // namespace Anticheat
+

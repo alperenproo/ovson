@@ -15,6 +15,28 @@ namespace FocusFix {
         jobject mc = env->GetStaticObjectField(mcCls, f_mc);
         if (!mc) return;
 
+        if (focus) {
+            jfieldID f_player = lc->GetFieldID(mcCls, "thePlayer", "Lnet/minecraft/client/entity/EntityPlayerSP;", "field_71439_g", "h");
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            jobject player = f_player ? env->GetObjectField(mc, f_player) : nullptr;
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            if (!player) {
+                env->DeleteLocalRef(mc);
+                return;
+            }
+            env->DeleteLocalRef(player);
+
+            jfieldID f_world = lc->GetFieldID(mcCls, "theWorld", "Lnet/minecraft/client/multiplayer/WorldClient;", "field_71441_e", "f");
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            jobject world = f_world ? env->GetObjectField(mc, f_world) : nullptr;
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            if (!world) {
+                env->DeleteLocalRef(mc);
+                return;
+            }
+            env->DeleteLocalRef(world);
+        }
+
         jfieldID f_focus = env->GetFieldID(mcCls, "inGameHasFocus", "Z");
         if (!f_focus) { if (env->ExceptionCheck()) env->ExceptionClear(); f_focus = env->GetFieldID(mcCls, "field_71415_G", "Z"); }
         if (!f_focus) { if (env->ExceptionCheck()) env->ExceptionClear(); f_focus = env->GetFieldID(mcCls, "w", "Z"); }

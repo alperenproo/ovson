@@ -92,18 +92,6 @@ bool Logger::initialize(const char *logFileName) {
       SetFilePointer(g_tagLogHandle, 0, nullptr, FILE_END);
     }
 
-
-
-    wchar_t hoverLogPath[MAX_PATH];
-    swprintf_s(hoverLogPath, L"%s\\hover_debug.log", logDir);
-    g_hoverLogHandle = CreateFileW(hoverLogPath, GENERIC_WRITE,
-                                   FILE_SHARE_READ | FILE_SHARE_WRITE
-                                     | FILE_SHARE_DELETE,
-                                   nullptr, OPEN_ALWAYS,
-                                   FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (g_hoverLogHandle != INVALID_HANDLE_VALUE) {
-      SetFilePointer(g_hoverLogHandle, 0, nullptr, FILE_END);
-    }
   }
 
   if (g_logHandle == INVALID_HANDLE_VALUE && logFileName) {
@@ -142,10 +130,7 @@ void Logger::tagDebug(const char *fmt, ...) {
 
 
 void Logger::hoverDebug(const char *fmt, ...) {
-  va_list args;
-  va_start(args, fmt);
-  writeCategoryLog(g_hoverLogHandle, "HOVER_DEBUG", fmt, args);
-  va_end(args);
+
 }
 
 void Logger::log(Config::DebugCategory cat, const char *fmt, ...) {

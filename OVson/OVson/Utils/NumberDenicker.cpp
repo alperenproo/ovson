@@ -61,7 +61,7 @@ static std::string FilterCommas(const std::string &input) {
 }
 
 static bool VerifyPlayerNickState(const std::string &playerName) {
-  std::lock_guard<std::mutex> lock(OVson::g_statsMutex);
+  std::lock_guard<std::recursive_mutex> lock(OVson::g_statsMutex);
   auto it = OVson::g_playerStatsMap.find(playerName);
   return (it != OVson::g_playerStatsMap.end() && it->second.isNicked);
 }

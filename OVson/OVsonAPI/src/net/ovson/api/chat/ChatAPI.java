@@ -53,4 +53,17 @@ public final class ChatAPI {
      * @return A list of sent messages.
      */
     public static native java.util.List<String> getSentHistory(int maxCount);
+
+    /**
+     * Retrieves the single latest chat message rendered in the chat HUD.
+     * @return The latest unformatted chat message string, or empty if none.
+     */
+    public static native String getLatestChatMessage();
+
+    /**
+     * Retrieves all newly arrived chat messages since the last call in chronological order.
+     * Guaranteed zero duplicates and 100% realtime from the chat HUD.
+     * @return A list of new chat messages.
+     */
+    public static native java.util.List<String> getNewMessages();
 }

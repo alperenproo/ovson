@@ -17,6 +17,7 @@ public final class EventBus {
     private EventBus() {}
 
     public void register(Object listener) {
+        if (listener == null) return;
         for (Method method : listener.getClass().getDeclaredMethods()) {
             if (!method.isAnnotationPresent(EventHandler.class)) {
                 continue;
@@ -39,19 +40,25 @@ public final class EventBus {
     }
 
     public void unregister(Object listener) {
+        if (listener == null) return;
         for (List<ListenerMethod> list : listenerMap.values()) {
             list.removeIf(lm -> lm.instance == listener);
         }
     }
 
+    public void clear() {
+        listenerMap.clear();
+    }
+
     public void post(Event event) {
+        if (event == null) return;
         List<ListenerMethod> list = listenerMap.get(event.getClass());
-        if (list == null) return;
+        if (list == null || list.isEmpty()) return;
 
         for (ListenerMethod lm : list) {
             try {
                 lm.method.invoke(lm.instance, event);
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 e.printStackTrace();
             }
         }

@@ -14,9 +14,13 @@ namespace PluginLoader {
         bool enabled;
     };
 
+    std::wstring getAppDataDir();
+
     void initialize();
 
     void shutdown();
+
+    void reloadPlugins();
 
     const std::vector<PluginContext>& getLoadedPlugins();
 
@@ -29,4 +33,6 @@ namespace PluginLoader {
     jclass loadAPIClass(JNIEnv* env, const char* name);
     
     void postEvent(jobject eventInstance);
+
+    bool hasPlugins();
 }

@@ -3,6 +3,19 @@
 #include "../Utils/Logger.h"
 #include "../Chat/ChatAPI_Bridge.h"
 #include "../ClickGUI/ClickGUI_Bridge.h"
+#include "PlayerAPI_Bridge.h"
+#include "OVsonAPI_Bridge.h"
+#include "RenderAPI_Bridge.h"
+#include "GL_Bridge.h"
+#include "EventDispatcher.h"
+#include "WorldAPI_Bridge.h"
+#include "ScoreboardAPI_Bridge.h"
+#include "InventoryAPI_Bridge.h"
+#include "KeybindAPI_Bridge.h"
+#include "PacketAPI_Bridge.h"
+#include "StatsAPI_Bridge.h"
+#include "AdvancedAPI_Bridge.h"
+#include "EntityAPI_Bridge.h"
 #include "../resource.h"
 #include <windows.h>
 #include <shlobj.h>
@@ -18,8 +31,9 @@ namespace PluginLoader {
     static jobject s_eventBusObj = nullptr;
     static jmethodID s_postEventMethod = nullptr;
     static jobject s_classLoaderRef = nullptr;
+    static std::atomic<bool> s_hasPlugins{false};
 
-    static std::wstring getAppDataDir() {
+    std::wstring getAppDataDir() {
         wchar_t* localAppData;
         if (SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, NULL, &localAppData) == S_OK) {
             std::wstring path = std::wstring(localAppData) + L"\\OVson";
@@ -63,30 +77,32 @@ namespace PluginLoader {
             fs::create_directories(pluginsDir);
         }
 
-        HMODULE hMod = (HMODULE)&__ImageBase;
-        if (hMod) {
-            HRSRC hRes = FindResourceW(hMod, MAKEINTRESOURCEW(IDR_OVSON_API_JAR), MAKEINTRESOURCEW(10));
-            if (hRes) {
-                HGLOBAL hLoad = LoadResource(hMod, hRes);
-                if (hLoad) {
-                    DWORD size = SizeofResource(hMod, hRes);
-                    void* data = LockResource(hLoad);
-                    if (data && size > 0) {
-                        FILE* f = nullptr;
-                        if (_wfopen_s(&f, apiJarPath.c_str(), L"wb") == 0 && f) {
-                            fwrite(data, 1, size, f);
-                            fclose(f);
-                            Logger::info("[PluginLoader] Successfully extracted/updated OVsonAPI.jar from resources.");
-                        } else {
-                            Logger::info("[PluginLoader] Failed to write extracted OVsonAPI.jar. It may be locked by the JVM on re-inject.");
+        if (!fs::exists(apiJarPath)) {
+            HMODULE hMod = (HMODULE)&__ImageBase;
+            if (hMod) {
+                HRSRC hRes = FindResourceW(hMod, MAKEINTRESOURCEW(IDR_OVSON_API_JAR), MAKEINTRESOURCEW(10));
+                if (hRes) {
+                    HGLOBAL hLoad = LoadResource(hMod, hRes);
+                    if (hLoad) {
+                        DWORD size = SizeofResource(hMod, hRes);
+                        void* data = LockResource(hLoad);
+                        if (data && size > 0) {
+                            FILE* f = nullptr;
+                            if (_wfopen_s(&f, apiJarPath.c_str(), L"wb") == 0 && f) {
+                                fwrite(data, 1, size, f);
+                                fclose(f);
+                                Logger::info("[PluginLoader] Successfully extracted OVsonAPI.jar from resources.");
+                            } else {
+                                Logger::info("[PluginLoader] Failed to write extracted OVsonAPI.jar.");
+                            }
                         }
                     }
+                } else {
+                    Logger::error("[PluginLoader] OVsonAPI.jar resource not found in DLL!");
                 }
             } else {
-                Logger::error("[PluginLoader] OVsonAPI.jar resource not found in DLL!");
+                Logger::error("[PluginLoader] Could not get module handle for OVson.dll!");
             }
-        } else {
-            Logger::error("[PluginLoader] Could not get module handle for OVson.dll!");
         }
 
         if (!fs::exists(apiJarPath)) {
@@ -178,6 +194,118 @@ namespace PluginLoader {
             Logger::error("[PluginLoader] Could not load ClickGUI class!");
         }
 
+        jclass playerApiClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.player.PlayerAPI");
+        if (playerApiClass) {
+            PlayerAPIBridge::registerNatives(env, playerApiClass);
+            env->DeleteLocalRef(playerApiClass);
+            Logger::info("[PluginLoader] PlayerAPI natives registered.");
+        } else {
+            Logger::error("[PluginLoader] Could not load PlayerAPI class!");
+        }
+
+        jclass ovsonApiClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.OVsonAPI");
+        if (ovsonApiClass) {
+            OVsonAPIBridge::registerNatives(env, ovsonApiClass);
+            env->DeleteLocalRef(ovsonApiClass);
+            Logger::info("[PluginLoader] OVsonAPI natives registered.");
+        } else {
+            Logger::error("[PluginLoader] Could not load OVsonAPI class!");
+        }
+
+        jclass renderApiClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.render.RenderAPI");
+        if (renderApiClass) {
+            RenderAPIBridge::registerNatives(env, renderApiClass);
+            env->DeleteLocalRef(renderApiClass);
+            Logger::info("[PluginLoader] RenderAPI natives registered.");
+        } else {
+            Logger::error("[PluginLoader] Could not load RenderAPI class!");
+        }
+
+        jclass glClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.render.gl.GL");
+        if (glClass) {
+            GLBridge::registerNatives(env, glClass);
+            env->DeleteLocalRef(glClass);
+            Logger::info("[PluginLoader] GL natives registered.");
+        } else {
+            Logger::error("[PluginLoader] Could not load GL class!");
+        }
+
+        jclass worldApiClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.world.WorldAPI");
+        if (worldApiClass) {
+            WorldAPIBridge::registerNatives(env, worldApiClass);
+            env->DeleteLocalRef(worldApiClass);
+            Logger::info("[PluginLoader] WorldAPI natives registered.");
+        }
+
+        jclass scoreboardApiClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.world.ScoreboardAPI");
+        if (scoreboardApiClass) {
+            ScoreboardAPIBridge::registerNatives(env, scoreboardApiClass);
+            env->DeleteLocalRef(scoreboardApiClass);
+            Logger::info("[PluginLoader] ScoreboardAPI natives registered.");
+        }
+
+        jclass invApiClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.inventory.InventoryAPI");
+        if (invApiClass) {
+            InventoryAPIBridge::registerNatives(env, invApiClass);
+            env->DeleteLocalRef(invApiClass);
+            Logger::info("[PluginLoader] InventoryAPI natives registered.");
+        }
+
+        jclass keybindApiClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.input.KeybindAPI");
+        if (keybindApiClass) {
+            KeybindAPIBridge::registerNatives(env, keybindApiClass);
+            env->DeleteLocalRef(keybindApiClass);
+            Logger::info("[PluginLoader] KeybindAPI natives registered.");
+        }
+
+        jclass packetFactoryClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.packet.PacketFactory");
+        if (packetFactoryClass) {
+            PacketAPIBridge::registerFactoryNatives(env, packetFactoryClass);
+            env->DeleteLocalRef(packetFactoryClass);
+        }
+        
+        jclass packetHelperClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.packet.PacketHelper");
+        if (packetHelperClass) {
+            PacketAPIBridge::registerHelperNatives(env, packetHelperClass);
+            env->DeleteLocalRef(packetHelperClass);
+            Logger::info("[PluginLoader] PacketAPI natives registered.");
+        }
+
+        jclass statsApiClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.player.StatsAPI");
+        if (statsApiClass) {
+            StatsAPIBridge::registerNatives(env, statsApiClass);
+            env->DeleteLocalRef(statsApiClass);
+            Logger::info("[PluginLoader] StatsAPI natives registered.");
+        }
+
+        jclass acApiClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.player.AnticheatAPI");
+        if (acApiClass) {
+            StatsAPIBridge::registerAnticheatNatives(env, acApiClass);
+            env->DeleteLocalRef(acApiClass);
+            Logger::info("[PluginLoader] AnticheatAPI natives registered.");
+        }
+
+        jclass notifClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.ui.NotificationAPI");
+        if (notifClass) { AdvancedAPIBridge::registerNatives(env, notifClass); env->DeleteLocalRef(notifClass); }
+
+        jclass bedClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.world.BedDefenseAPI");
+        if (bedClass) { AdvancedAPIBridge::registerBedDefenseNatives(env, bedClass); env->DeleteLocalRef(bedClass); }
+
+        jclass audioClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.media.AudioAPI");
+        if (audioClass) { AdvancedAPIBridge::registerAudioNatives(env, audioClass); env->DeleteLocalRef(audioClass); }
+
+        jclass spoofClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.net.SpoofAPI");
+        if (spoofClass) { AdvancedAPIBridge::registerSpoofNatives(env, spoofClass); env->DeleteLocalRef(spoofClass); }
+
+        jclass entityClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.model.Entity");
+        if (entityClass) {
+            EntityAPIBridge::registerNatives(env, entityClass);
+            env->DeleteLocalRef(entityClass);
+            Logger::info("[PluginLoader] Entity model natives registered.");
+        }
+
+        EventDispatcher::initialize();
+
         jclass pmClass = loadClassViaLoader(env, s_classLoaderRef,
                                              "net.ovson.api.PluginManager");
         if (pmClass) {
@@ -197,6 +325,14 @@ namespace PluginLoader {
                     env->ExceptionClear();
                 }
                 env->DeleteLocalRef(jPluginsPath);
+
+                jmethodID hasPluginsMethod = env->GetStaticMethodID(pmClass, "hasPlugins", "()Z");
+                if (hasPluginsMethod) {
+                    jboolean has = env->CallStaticBooleanMethod(pmClass, hasPluginsMethod);
+                    if (env->ExceptionCheck()) env->ExceptionClear();
+                    s_hasPlugins.store(has == JNI_TRUE, std::memory_order_relaxed);
+                    Logger::info("[PluginLoader] Has active plugins: %s", (has == JNI_TRUE) ? "YES" : "NO");
+                }
             }
             env->DeleteLocalRef(pmClass);
         } else {
@@ -218,7 +354,7 @@ namespace PluginLoader {
     }
 
     void shutdown() {
-        JNIEnv* env = lc->getEnv();
+        JNIEnv* env = lc ? lc->getEnv() : nullptr;
         if (!env) return;
 
         Logger::info("[PluginLoader] Disabling all plugins...");
@@ -240,13 +376,78 @@ namespace PluginLoader {
             } else {
                 Logger::error("[PluginLoader] Could not load PluginManager during shutdown!");
             }
+            if (env->ExceptionCheck()) env->ExceptionClear();
+
+            auto unregisterCls = [&](const char* name) {
+                jclass cls = loadClassViaLoader(env, s_classLoaderRef, name);
+                if (cls) {
+                    env->UnregisterNatives(cls);
+                    env->DeleteLocalRef(cls);
+                }
+                if (env->ExceptionCheck()) env->ExceptionClear();
+            };
+
+            unregisterCls("net.ovson.api.chat.ChatAPI");
+            unregisterCls("net.ovson.api.clickgui.ClickGUI");
+            unregisterCls("net.ovson.api.player.PlayerAPI");
+            unregisterCls("net.ovson.api.OVsonAPI");
+            unregisterCls("net.ovson.api.render.RenderAPI");
+            unregisterCls("net.ovson.api.render.gl.GL");
+            unregisterCls("net.ovson.api.world.WorldAPI");
+            unregisterCls("net.ovson.api.world.ScoreboardAPI");
+            unregisterCls("net.ovson.api.inventory.InventoryAPI");
+            unregisterCls("net.ovson.api.input.KeybindAPI");
+            unregisterCls("net.ovson.api.packet.PacketFactory");
+            unregisterCls("net.ovson.api.packet.PacketHelper");
+            unregisterCls("net.ovson.api.player.StatsAPI");
+            unregisterCls("net.ovson.api.player.AnticheatAPI");
+            unregisterCls("net.ovson.api.ui.NotificationAPI");
+            unregisterCls("net.ovson.api.world.BedDefenseAPI");
+            unregisterCls("net.ovson.api.media.AudioAPI");
+            unregisterCls("net.ovson.api.net.SpoofAPI");
+            unregisterCls("net.ovson.api.model.Entity");
+
             env->DeleteGlobalRef(s_classLoaderRef);
             s_classLoaderRef = nullptr;
         }
 
+        EventDispatcher::shutdown();
+
         if (s_eventBusObj) {
             env->DeleteGlobalRef(s_eventBusObj);
             s_eventBusObj = nullptr;
+        }
+        s_hasPlugins.store(false, std::memory_order_relaxed);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+    }
+
+    void reloadPlugins() {
+        JNIEnv* env = lc ? lc->getEnv() : nullptr;
+        if (!env || !s_classLoaderRef) return;
+
+        std::wstring appDataDir = getAppDataDir();
+        if (appDataDir.empty()) return;
+        std::wstring pluginsDir = appDataDir + L"\\plugins";
+
+        jclass pmClass = loadClassViaLoader(env, s_classLoaderRef, "net.ovson.api.PluginManager");
+        if (pmClass) {
+            jmethodID loadMethod = env->GetStaticMethodID(pmClass, "loadPlugins",
+                "(Ljava/lang/String;Ljava/lang/ClassLoader;)V");
+            if (loadMethod) {
+                std::string utf8Dir = fs::path(pluginsDir).string();
+                jstring jPluginsPath = env->NewStringUTF(utf8Dir.c_str());
+
+                Logger::info("[PluginLoader] Reloading plugins from: %s", utf8Dir.c_str());
+                env->CallStaticVoidMethod(pmClass, loadMethod, jPluginsPath, s_classLoaderRef);
+
+                if (env->ExceptionCheck()) {
+                    Logger::error("[PluginLoader] Exception in PluginManager.loadPlugins during reload");
+                    env->ExceptionDescribe();
+                    env->ExceptionClear();
+                }
+                env->DeleteLocalRef(jPluginsPath);
+            }
+            env->DeleteLocalRef(pmClass);
         }
     }
 
@@ -282,5 +483,9 @@ namespace PluginLoader {
     jclass loadAPIClass(JNIEnv* env, const char* name) {
         if (!env || !s_classLoaderRef) return nullptr;
         return loadClassViaLoader(env, s_classLoaderRef, name);
+    }
+
+    bool hasPlugins() {
+        return s_hasPlugins.load(std::memory_order_relaxed);
     }
 }

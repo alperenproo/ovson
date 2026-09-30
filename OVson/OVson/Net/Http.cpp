@@ -84,8 +84,6 @@ bool Http::get(const std::string &url, std::string &responseBody,
 
   HINTERNET hConnect = WinHttpConnect(g_hSession, host.c_str(), port, 0);
   if (!hConnect) {
-    FILE* dbg = nullptr; fopen_s(&dbg, "C:\\Users\\HPC1\\Desktop\\http_debug.log", "a");
-    if (dbg) { fprintf(dbg, "WinHttpConnect failed: %lu\n", GetLastError()); fclose(dbg); }
     return false;
   }
   DWORD flags = https ? WINHTTP_FLAG_SECURE : 0;

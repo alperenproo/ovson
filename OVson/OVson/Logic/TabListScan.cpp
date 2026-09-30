@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <jni.h>
 #include <mutex>
@@ -823,7 +824,7 @@ void updateTabListStats() {
                   "FRESH START");
 
       {
-        std::lock_guard<std::mutex> lock(g_statsMutex);
+        std::lock_guard<std::recursive_mutex> lock(g_statsMutex);
         g_playerStatsMap.clear();
       }
       {
@@ -1038,7 +1039,7 @@ void updateTabListStats() {
     }
 
     {
-      std::lock_guard<std::mutex> lock(g_statsMutex);
+      std::lock_guard<std::recursive_mutex> lock(g_statsMutex);
       bool needsImmediateTeamSync = false;
       for (const auto &name : currentNames) {
         if (g_playerTeamColor.find(name) == g_playerTeamColor.end()) {
@@ -1139,7 +1140,7 @@ void updateTabListStats() {
               Hypixel::PlayerStats stats;
               bool hasStats = false;
               {
-                std::lock_guard<std::mutex> lock(g_statsMutex);
+                std::lock_guard<std::recursive_mutex> lock(g_statsMutex);
                 auto itS = g_playerStatsMap.find(name);
                 if (itS != g_playerStatsMap.end()) {
                   stats = itS->second;
@@ -1153,7 +1154,7 @@ void updateTabListStats() {
               std::string cName = name;
 
               {
-                std::lock_guard<std::mutex> lock(g_statsMutex);
+                std::lock_guard<std::recursive_mutex> lock(g_statsMutex);
                 auto itTC = g_playerTeamColor.find(name);
                 if (itTC != g_playerTeamColor.end() && !itTC->second.empty()) {
                   currentTeam = itTC->second;
@@ -1246,9 +1247,13 @@ void updateTabListStats() {
                   fullTabString = teamColorCode + name +
                                   " \xC2\xA7"
                                   "4[NICKED]";
+                } else if (Hypixel::isFreshAccount(stats)) {
+                  fullTabString = teamColorCode + name +
+                                  " \xC2\xA7"
+                                  "5[FRESH]";
                 } else {
                   fullTabString =
-                      BedwarsStars::GetFormattedLevel(stats.bedwarsStar) + " " +
+                      BedwarsStars::GetFormattedLevel(stats) + " " +
                       teamColorCode + name;
                   if (Config::isTagsEnabled())
                     fullTabString += stats.tagsDisplay;
@@ -1354,7 +1359,7 @@ void updateTabListStats() {
 
       bool changed = false;
       {
-        std::lock_guard<std::mutex> lock(g_statsMutex);
+        std::lock_guard<std::recursive_mutex> lock(g_statsMutex);
         if (currentNames.size() != g_onlinePlayers.size()) {
           changed = true;
         } else {
@@ -1431,36 +1436,44 @@ void syncTeamColors() {
                              : nullptr;
     env->ExceptionClear();
     if (scoreboard) {
-      if (g_jCache.m_getPlayersTeam && g_jCache.m_getPrefix) {
+      int dbgWrote = 0;
+      int dbgSkippedNoTeam = 0;
+      int dbgSkippedDowngrade = 0;
+      const bool dbgGate = g_jCache.m_getPlayersTeam && g_jCache.m_getPrefix;
+
+      {
         std::vector<std::string> namesToSync;
         {
-          std::lock_guard<std::mutex> stLock(g_statsMutex);
+          std::lock_guard<std::recursive_mutex> stLock(g_statsMutex);
           for (const auto &pair : g_playerStatsMap) {
             namesToSync.push_back(pair.first);
           }
         }
 
         std::unordered_map<std::string, std::string> resolvedTeams;
-        for (const auto &name : namesToSync) {
-          std::string team = resolveTeamForNameEx(
-              env, name, scoreboard, g_jCache.m_getPlayersTeam,
-              g_jCache.teamCls, g_jCache.m_getPrefix);
-          if (!team.empty()) {
-            resolvedTeams[name] = team;
+        if (g_jCache.m_getPlayersTeam && g_jCache.m_getPrefix) {
+          for (const auto &name : namesToSync) {
+            std::string team = resolveTeamForNameEx(
+                env, name, scoreboard, g_jCache.m_getPlayersTeam,
+                g_jCache.teamCls, g_jCache.m_getPrefix);
+            if (!team.empty()) {
+              resolvedTeams[name] = team;
+            }
           }
         }
 
         {
-          std::lock_guard<std::mutex> stLock2(g_statsMutex);
+          std::lock_guard<std::recursive_mutex> stLock2(g_statsMutex);
           for (const auto &name : namesToSync) {
             auto it = resolvedTeams.find(name);
+            auto itT = g_playerTeamColor.find(name);
             std::string team;
-            if (it != resolvedTeams.end()) {
+            if (itT != g_playerTeamColor.end() && g_helmetTeamSet.find(name) != g_helmetTeamSet.end()) {
+              team = itT->second;
+            } else if (it != resolvedTeams.end()) {
               team = it->second;
-            } else {
-              auto itT = g_playerTeamColor.find(name);
-              if (itT != g_playerTeamColor.end())
-                team = itT->second;
+            } else if (itT != g_playerTeamColor.end()) {
+              team = itT->second;
             }
 
             if (!team.empty()) {
@@ -1472,13 +1485,47 @@ void syncTeamColors() {
                 auto statIt = g_playerStatsMap.find(name);
                 if (statIt != g_playerStatsMap.end()) {
                   statIt->second.teamColor = team;
+                  ++dbgWrote;
                 }
+              } else {
+                ++dbgSkippedDowngrade;
               }
               setTeamColorSticky(name, team);
+            } else {
+              ++dbgSkippedNoTeam;
             }
           }
         }
       }
+
+      if (Config::isGlobalDebugEnabled()) {
+        static ULONGLONG lastSyncDbg = 0;
+        const ULONGLONG nowDbg = GetTickCount64();
+        if (lastSyncDbg == 0 || nowDbg - lastSyncDbg >= 2000) {
+          lastSyncDbg = nowDbg;
+          std::ofstream out(
+              (Config::getDataDirectory() + "\\ovson_team_sync_debug.txt").c_str(),
+              std::ios::out);
+          out << "--- syncTeamColors ---" << std::endl;
+          out << "gate(m_getPlayersTeam && m_getPrefix)=" << (dbgGate ? 1 : 0)
+              << "  wrote=" << dbgWrote
+              << "  skippedNoTeam=" << dbgSkippedNoTeam
+              << "  skippedDowngrade=" << dbgSkippedDowngrade << std::endl;
+          std::lock_guard<std::recursive_mutex> dl(g_statsMutex);
+          out << "statsMap=" << g_playerStatsMap.size()
+              << "  teamColorMap=" << g_playerTeamColor.size() << std::endl;
+          for (const auto &pr : g_playerStatsMap) {
+            auto tc = g_playerTeamColor.find(pr.first);
+            out << "  " << pr.first
+                << "  stats.teamColor='" << pr.second.teamColor << "'"
+                << "  g_playerTeamColor='"
+                << (tc == g_playerTeamColor.end() ? std::string("<missing>")
+                                                  : tc->second)
+                << "'" << std::endl;
+          }
+        }
+      }
+
       env->DeleteLocalRef(scoreboard);
     }
     env->DeleteLocalRef(world);
@@ -1526,7 +1573,7 @@ void syncTags() {
 
   std::vector<std::pair<std::string, std::string>> playersNeedingTags;
   {
-    std::lock_guard<std::mutex> tagLock(g_statsMutex);
+    std::lock_guard<std::recursive_mutex> tagLock(g_statsMutex);
     for (auto &pair : g_playerStatsMap) {
       bool needsUrchin = (activeS == "Urchin" || activeS == "Both");
       bool needsSeraph = (activeS == "Seraph" || activeS == "Both");
@@ -1557,7 +1604,7 @@ void syncTags() {
     bool needsUrchin = (activeS == "Urchin" || activeS == "Both");
     bool needsSeraph = (activeS == "Seraph" || activeS == "Both");
     {
-      std::lock_guard<std::mutex> lock(g_statsMutex);
+      std::lock_guard<std::recursive_mutex> lock(g_statsMutex);
       auto itS = g_playerStatsMap.find(p.first);
       if (itS != g_playerStatsMap.end()) {
         for (const auto &rt : itS->second.rawTags) {
@@ -1606,7 +1653,7 @@ void syncTags() {
   }
 
   if (!updates.empty()) {
-    std::lock_guard<std::mutex> tagLock2(g_statsMutex);
+    std::lock_guard<std::recursive_mutex> tagLock2(g_statsMutex);
     for (const auto &u : updates) {
       auto it = g_playerStatsMap.find(std::get<0>(u));
       if (it != g_playerStatsMap.end()) {

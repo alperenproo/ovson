@@ -7,6 +7,9 @@
 #include "../Render/RenderHook.h"
 #include "../Utils/SafeGuard.h"
 #include "../Utils/Timer.h"
+#include "FootstepMuter.h"
+#include "BowDistance.h"
+#include "MojangCape.h"
 
 #include <Windows.h>
 #include <atomic>
@@ -26,6 +29,10 @@ void pollBody() {
     return;
     
   Config::update();
+
+  FootstepMuter::tick(env);
+  BowDistance::tick(env);
+  MojangCape::tick(env);
 
   ULONGLONG now = GetTickCount64();
   if (g_lastChatReadTick == 0 || (now - g_lastChatReadTick) >= 20) {
@@ -87,22 +94,21 @@ void pollBody() {
     queuePlayersForFetching();
     processPendingStats();
 
-    bool queueEmpty = false;
-    {
-      std::lock_guard<std::mutex> qlock(g_queueMutex);
-      queueEmpty = g_queuedPlayers.empty();
-    }
-    
     static ULONGLONG gameStartTick = 0;
     if (g_inHypixelGame && !g_inPreGameLobby) {
-        if (gameStartTick == 0) gameStartTick = now;
+      if (gameStartTick == 0)
+        gameStartTick = now;
     } else {
-        gameStartTick = 0;
+      gameStartTick = 0;
     }
 
     if (g_inHypixelGame && !g_inPreGameLobby && Config::isTeamReportEnabled() && !g_teamReportSent) {
-      if (queueEmpty && !g_playerStatsMap.empty() && (now - gameStartTick > 5000)) {
-        sendTeamStatsReport(false, "");
+      if (now - gameStartTick >= 3000) {
+        bool allReady = areAllGameStatsReady();
+        bool timeout = (now - gameStartTick >= 20000);
+        if ((allReady || timeout) && !g_playerStatsMap.empty()) {
+          sendTeamStatsReport(false, "");
+        }
       }
     }
   }

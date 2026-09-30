@@ -20,8 +20,11 @@ bool handleEnterKeyPress();
 // 0 = bedwars, 1 = skywars, 2 = duels
 void setMode(int mode);
 
+std::string getRealLocalUsername();
+std::string getRealLocalUsername(bool forceRefresh);
+
 extern std::unordered_map<std::string, Hypixel::PlayerStats> g_playerStatsMap;
-extern std::mutex g_statsMutex;
+extern std::recursive_mutex g_statsMutex;
 
 extern std::unordered_map<std::string, std::string> g_nickToRealMap;
 extern std::mutex g_nickMapMutex;

@@ -3,6 +3,7 @@
 #include "../Chat/ChatSDK.h"
 #include "../Chat/Commands.h"
 #include "../Config/Config.h"
+#include "../Chat/ChatHook.h"
 #include "../Logic/AutoGG.h"
 #include "../Utils/Logger.h"
 #include "../Utils/NumberDenicker.h"
@@ -228,7 +229,7 @@ void parsePlayersFromOnlineLine(const std::string &joined) {
       return;
 
     {
-      std::lock_guard<std::mutex> lock(g_statsMutex);
+      std::lock_guard<std::recursive_mutex> lock(g_statsMutex);
       g_onlinePlayers = names;
     }
   }
@@ -241,6 +242,31 @@ static std::vector<std::string> s_nativeChatQueue;
 void enqueueNativeChat(const std::string &chat) {
   std::lock_guard<std::mutex> lock(s_nativeChatMutex);
   s_nativeChatQueue.push_back(chat);
+}
+
+static bool isIgnoredChatLine(const std::string &cleanChat) {
+  std::string trimmed = cleanChat;
+  size_t p = trimmed.find_first_not_of(" \t\r\n");
+  if (p != std::string::npos) {
+    trimmed = trimmed.substr(p);
+  }
+
+  if (trimmed.empty()) return true;
+  if (trimmed.find("[OVson]") != std::string::npos) return true;
+
+  if (trimmed.rfind("Party", 0) == 0 || trimmed.rfind("[Party]", 0) == 0) return true;
+
+  if (trimmed.rfind("Guild", 0) == 0 || trimmed.rfind("[Guild]", 0) == 0) return true;
+
+  if (trimmed.rfind("To ", 0) == 0 || trimmed.rfind("To:", 0) == 0 ||
+      trimmed.rfind("From ", 0) == 0 || trimmed.rfind("From:", 0) == 0 ||
+      trimmed.rfind("[To]", 0) == 0 || trimmed.rfind("[From]", 0) == 0) return true;
+
+  if (trimmed.rfind("Officer", 0) == 0 || trimmed.rfind("Co-op", 0) == 0) return true;
+
+  if (trimmed.rfind("Your Online Status", 0) == 0) return true;
+
+  return false;
 }
 
 void processRawChatLine(const std::string &chat, const std::string &rawLogLine) {
@@ -281,9 +307,7 @@ void processRawChatLine(const std::string &chat, const std::string &rawLogLine) 
           }
         }
 
-        if (cleanChat.find("[OVson]") == std::string::npos &&
-            cleanChat.find("To ") != 0 && cleanChat.find("From ") != 0 &&
-            cleanChat.find("Your Online Status is currently set to") != 0) {
+        if (!isIgnoredChatLine(cleanChat)) {
           size_t firstColon = cleanChat.find(": ");
           if (firstColon != std::string::npos && firstColon > 0) {
             std::string prefix = cleanChat.substr(0, firstColon);
@@ -293,6 +317,13 @@ void processRawChatLine(const std::string &chat, const std::string &rawLogLine) 
             if (pStart != std::string::npos) {
               prefix = prefix.substr(pStart, pEnd - pStart + 1);
             }
+
+            if (prefix.find("Party") != std::string::npos ||
+                prefix.find("Guild") != std::string::npos ||
+                prefix.find("Leader") != std::string::npos ||
+                prefix.find("Members") != std::string::npos ||
+                prefix.find("Moderator") != std::string::npos) {
+            } else {
 
             std::string username;
             size_t lastBracket = prefix.find_last_of(']');
@@ -336,28 +367,47 @@ void processRawChatLine(const std::string &chat, const std::string &rawLogLine) 
             }
 
             if (valid) {
-              if (g_chatPrintedPlayers.find(username) ==
-                  g_chatPrintedPlayers.end()) {
+              std::string realName = getRealLocalUsername();
+              std::string msgBody = cleanChat.substr(firstColon + 2);
+              bool sentBySelf = ChatHook::wasMessageSentRecentlyBySelf(msgBody);
+              bool isSelf = (!realName.empty() && username == realName) ||
+                            (g_isNicked && !g_activeNick.empty() && username == g_activeNick) ||
+                            (!g_localName.empty() && username == g_localName) ||
+                            sentBySelf;
+
+              if (sentBySelf && !realName.empty() && username != realName) {
+                g_isNicked = true;
+                g_activeNick = username;
+                g_localName = username;
+              }
+
+              std::string queryName = (isSelf && !realName.empty()) ? realName : username;
+
+              if (g_chatPrintedPlayers.find(username) == g_chatPrintedPlayers.end() &&
+                  g_chatPrintedPlayers.find(queryName) == g_chatPrintedPlayers.end()) {
                 g_chatPrintedPlayers.insert(username);
+                if (queryName != username) {
+                  g_chatPrintedPlayers.insert(queryName);
+                }
 
                 if (std::find(g_manualPushedPlayers.begin(),
                               g_manualPushedPlayers.end(),
-                              username) == g_manualPushedPlayers.end()) {
-                  g_manualPushedPlayers.push_back(username);
+                              queryName) == g_manualPushedPlayers.end()) {
+                  g_manualPushedPlayers.push_back(queryName);
                 }
                 if (std::find(g_onlinePlayers.begin(), g_onlinePlayers.end(),
-                              username) == g_onlinePlayers.end()) {
-                  g_onlinePlayers.push_back(username);
+                              queryName) == g_onlinePlayers.end()) {
+                  g_onlinePlayers.push_back(queryName);
                 }
 
-                g_forceChatOutputPlayers.insert(username);
+                g_forceChatOutputPlayers.insert(queryName);
 
                 {
                   std::lock_guard<std::mutex> lockA(g_activeFetchesMutex);
-                  if (g_activeFetches.find(username) == g_activeFetches.end()) {
-                    g_activeFetches.insert(username);
+                  if (g_activeFetches.find(queryName) == g_activeFetches.end()) {
+                    g_activeFetches.insert(queryName);
 
-                    std::thread(fetchWorker, username, "").detach();
+                    std::thread(fetchWorker, queryName, "").detach();
                   }
                 }
               } else {
@@ -377,6 +427,7 @@ void processRawChatLine(const std::string &chat, const std::string &rawLogLine) 
                     "c[DEBUG] Invalid Username Parsed: " + username);
                 lastInvalidDbg = nowDbg;
               }
+            }
             }
           }
         }
@@ -405,17 +456,19 @@ void processRawChatLine(const std::string &chat, const std::string &rawLogLine) 
           cleanChat += (char)c;
         }
 
-        if (cleanChat.find("[OVson]") == std::string::npos && 
-            cleanChat.find("To ") != 0 && 
-            cleanChat.find("From ") != 0 &&
-            cleanChat.find("Party") != 0 &&
-            cleanChat.find("Guild") != 0) {
+        if (!isIgnoredChatLine(cleanChat)) {
           size_t firstColon = cleanChat.find(": ");
           if (firstColon != std::string::npos && firstColon > 0) {
             std::string prefix = cleanChat.substr(0, firstColon);
             size_t pStart = prefix.find_first_not_of(' ');
             size_t pEnd = prefix.find_last_not_of(' ');
             if (pStart != std::string::npos) prefix = prefix.substr(pStart, pEnd - pStart + 1);
+
+            if (prefix.find("Party") == std::string::npos &&
+                prefix.find("Guild") == std::string::npos &&
+                prefix.find("Leader") == std::string::npos &&
+                prefix.find("Members") == std::string::npos &&
+                prefix.find("Moderator") == std::string::npos) {
 
             std::string username;
             size_t lastBracket = prefix.find_last_of(']');
@@ -436,7 +489,10 @@ void processRawChatLine(const std::string &chat, const std::string &rawLogLine) 
             for (char c : username) {
               if (!isalnum((unsigned char)c) && c != '_') { valid = false; break; }
             }
-            if (username == g_localName) {
+            std::string realLocal = getRealLocalUsername();
+            std::string msgBodyStr = cleanChat.substr(firstColon + 2);
+            bool sentByMe = ChatHook::wasMessageSentRecentlyBySelf(msgBodyStr);
+            if (username == g_localName || (!realLocal.empty() && username == realLocal) || (g_isNicked && !g_activeNick.empty() && username == g_activeNick) || sentByMe) {
               valid = false;
             }
 
@@ -459,6 +515,7 @@ void processRawChatLine(const std::string &chat, const std::string &rawLogLine) 
                   CommandRegistry::instance().tryDispatch(cmd);
                 }
               }
+            }
             }
           }
         }

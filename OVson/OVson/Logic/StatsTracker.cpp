@@ -11,10 +11,12 @@
 #include "../Utils/ChatBypasser.h"
 #include "../Utils/Logger.h"
 #include "../Utils/NumberDenicker.h"
+#include "../Utils/ColoredHitboxes.h"
 
 #include <Windows.h>
 #include <cctype>
 #include "../Chat/ChatHook.h"
+#include "FootstepMuter.h"
 
 #include <chrono>
 #include <cstring>
@@ -55,6 +57,155 @@ ULONGLONG g_bootstrapStartTick = 0;
 ULONGLONG g_preGameDetectTick = 0;
 std::string g_localTeam;
 std::string g_localName;
+bool g_isNicked = false;
+std::string g_activeNick;
+std::string g_realUsername;
+
+std::string getRealLocalUsername(bool forceRefresh) {
+  if (!forceRefresh && !g_realUsername.empty())
+    return g_realUsername;
+
+  JNIEnv *env = lc ? lc->getEnv() : nullptr;
+  if (!env)
+    return g_realUsername.empty() ? g_localName : g_realUsername;
+
+  std::string detectedName;
+
+  jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
+  if (mcCls) {
+    jmethodID getMcM = lc->GetStaticMethodID(
+        mcCls, "getMinecraft", "()Lnet/minecraft/client/Minecraft;", "func_71410_x", "A");
+    if (getMcM) {
+      jobject mc = env->CallStaticObjectMethod(mcCls, getMcM);
+      if (mc) {
+        jclass mcClass = env->GetObjectClass(mc);
+
+        jfieldID playerField = lc->GetFieldID(
+            mcClass, "thePlayer", "Lnet/minecraft/client/entity/EntityPlayerSP;",
+            "field_71439_g", "h", "Lbew;");
+        if (playerField) {
+          jobject player = env->GetObjectField(mc, playerField);
+          if (player) {
+            jclass playerClass = env->GetObjectClass(player);
+            jmethodID getProfile = lc->GetMethodID(
+                playerClass, "getGameProfile", "()Lcom/mojang/authlib/GameProfile;",
+                "func_146103_bH", "eQ");
+            if (!getProfile) {
+              getProfile = lc->GetMethodID(
+                  playerClass, "getGameProfile", "()Lcom/mojang/authlib/GameProfile;",
+                  "func_146103_bH", "bH");
+            }
+            if (getProfile) {
+              jobject prof = env->CallObjectMethod(player, getProfile);
+              if (prof) {
+                jclass profClass = env->GetObjectClass(prof);
+                jmethodID getProfName = lc->GetMethodID(profClass, "getName", "()Ljava/lang/String;");
+                env->DeleteLocalRef(profClass);
+                if (getProfName) {
+                  jstring js = (jstring)env->CallObjectMethod(prof, getProfName);
+                  if (js) {
+                    const char *utf = env->GetStringUTFChars(js, nullptr);
+                    if (utf && strlen(utf) > 0) {
+                      detectedName = utf;
+                      env->ReleaseStringUTFChars(js, utf);
+                    }
+                    env->DeleteLocalRef(js);
+                  }
+                }
+                env->DeleteLocalRef(prof);
+              }
+            }
+            if (detectedName.empty()) {
+              const char *nameMethods[] = {"getName", "func_70005_c_", "e_", "h_", "f_", "g_", "i_", "j_", "k_", nullptr};
+              for (int i = 0; nameMethods[i]; i++) {
+                jmethodID m_getName = env->GetMethodID(playerClass, nameMethods[i], "()Ljava/lang/String;");
+                if (env->ExceptionCheck()) env->ExceptionClear();
+                else if (m_getName) {
+                  jstring js = (jstring)env->CallObjectMethod(player, m_getName);
+                  if (js) {
+                    const char *utf = env->GetStringUTFChars(js, nullptr);
+                    if (utf && strlen(utf) > 0) {
+                      detectedName = utf;
+                      env->ReleaseStringUTFChars(js, utf);
+                    }
+                    env->DeleteLocalRef(js);
+                  }
+                  break;
+                }
+              }
+            }
+            env->DeleteLocalRef(playerClass);
+            env->DeleteLocalRef(player);
+          }
+        }
+
+        if (detectedName.empty()) {
+          jobject sess = nullptr;
+          jmethodID getSessM = lc->GetMethodID(
+              mcClass, "getSession", "()Lnet/minecraft/util/Session;",
+              "func_110432_I", "L", "()Lavm;");
+          if (getSessM) {
+            sess = env->CallObjectMethod(mc, getSessM);
+          }
+          if (!sess) {
+            jfieldID sessField = lc->GetFieldID(
+                mcClass, "session", "Lnet/minecraft/util/Session;",
+                "field_71449_j", "ae", "Lavm;");
+            if (sessField) {
+              sess = env->GetObjectField(mc, sessField);
+            }
+          }
+          if (sess) {
+            jclass sessClass = env->GetObjectClass(sess);
+            jmethodID getUsername = lc->GetMethodID(
+                sessClass, "getUsername", "()Ljava/lang/String;", "func_111285_a", "c");
+            if (!getUsername) {
+              const char *userMethods[] = {"getUsername", "func_111285_a", "c", nullptr};
+              for (int i = 0; userMethods[i]; i++) {
+                getUsername = env->GetMethodID(sessClass, userMethods[i], "()Ljava/lang/String;");
+                if (env->ExceptionCheck()) env->ExceptionClear();
+                else if (getUsername) break;
+              }
+            }
+            env->DeleteLocalRef(sessClass);
+            if (getUsername) {
+              jstring js = (jstring)env->CallObjectMethod(sess, getUsername);
+              if (js) {
+                const char *utf = env->GetStringUTFChars(js, nullptr);
+                if (utf && strlen(utf) > 0) {
+                  detectedName = utf;
+                  env->ReleaseStringUTFChars(js, utf);
+                }
+                env->DeleteLocalRef(js);
+              }
+            }
+            env->DeleteLocalRef(sess);
+          }
+        }
+
+        env->DeleteLocalRef(mcClass);
+        env->DeleteLocalRef(mc);
+      }
+    }
+  }
+
+  if (!detectedName.empty()) {
+    g_realUsername = detectedName;
+    g_localName = detectedName;
+    return detectedName;
+  }
+
+  if (g_realUsername.empty() && !g_localName.empty() && (g_activeNick.empty() || g_localName != g_activeNick)) {
+    g_realUsername = g_localName;
+  }
+
+  return g_realUsername;
+}
+
+std::string getRealLocalUsername() {
+  return getRealLocalUsername(false);
+}
+
 std::unordered_map<std::string, ULONGLONG> g_autoStatsCooldowns;
 std::unordered_map<std::string, int> g_teamProbeTries;
 bool g_teamReportSent = false;
@@ -84,7 +235,7 @@ std::mutex g_cacheMutex;
 JCache g_jCache;
 
 std::unordered_map<std::string, Hypixel::PlayerStats> g_playerStatsMap;
-std::mutex g_statsMutex;
+std::recursive_mutex g_statsMutex;
 
 std::unordered_map<std::string, std::string> g_nickToRealMap;
 std::mutex g_nickMapMutex;
@@ -108,7 +259,7 @@ void shutdown() {
     return;
   g_initialized = false;
   {
-    std::lock_guard<std::mutex> lock(g_statsMutex);
+    std::lock_guard<std::recursive_mutex> lock(g_statsMutex);
     g_playerStatsMap.clear();
   }
   g_onlinePlayers.clear();
@@ -122,6 +273,7 @@ void shutdown() {
 
   JNIEnv *env = lc->getEnv();
   if (env) {
+    FootstepMuter::cleanup(env);
     g_jCache.cleanup(env);
   }
 }
@@ -129,7 +281,7 @@ void shutdown() {
 void setMode(int mode) { g_mode = mode; }
 
 bool isInGame(const std::string &name) {
-  std::lock_guard<std::mutex> lock(g_statsMutex);
+  std::lock_guard<std::recursive_mutex> lock(g_statsMutex);
   return g_playerStatsMap.count(name) > 0;
 }
 
@@ -165,7 +317,7 @@ int getPendingStatsCount() {
 void clearAllCaches() {
   {
     NumberDenicker::onWorldChange();
-    std::lock_guard<std::mutex> lock(g_statsMutex);
+    std::lock_guard<std::recursive_mutex> lock(g_statsMutex);
     std::lock_guard<std::mutex> nLock(g_nickMapMutex);
     g_playerStatsMap.clear();
     g_nickToRealMap.clear();
@@ -203,6 +355,8 @@ void clearAllCaches() {
     g_alertedPlayers.clear();
   }
   g_playerTeamColor.clear();
+  g_localTeam.clear();
+  g_helmetTeamSet.clear();
   g_manualPushedPlayers.clear();
   g_forceChatOutputPlayers.clear();
   g_chatPrintedPlayers.clear();
@@ -213,6 +367,7 @@ void clearAllCaches() {
   }
   Urchin::clearCache();
   Seraph::clearCache();
+  OVson::Utils::clearHitboxColorCache();
   Logger::log(Config::DebugCategory::General,
               "All player caches cleared via OVson::clearAllCaches.");
 }
@@ -323,7 +478,12 @@ bool handleEnterKeyPress() {
     isCommandPrefix = false;
   }
 
-  if (pos < text.size() && isCommandPrefix && Config::isCommandsEnabled()) {
+  bool isIrcPrefix = (Config::isIrcEnabled() && pos < text.size() && text[pos] == '@');
+  if (isIrcPrefix && pos + 1 < text.size() && text[pos + 1] == '@') {
+    isIrcPrefix = false;
+  }
+
+  if (pos < text.size() && ((isCommandPrefix && Config::isCommandsEnabled()) || isIrcPrefix)) {
     std::string cmdText = text.substr(pos);
 
     jmethodID mSetText = lc->GetMethodID(

@@ -2,6 +2,7 @@
 #include "StatsTracker.internal.h"
 
 #include "../Java.h"
+#include "../Config/Config.h"
 #include "../Utils/Logger.h"
 #include "../Utils/Anticheat/Anticheat.h"
 
@@ -78,7 +79,7 @@ void setTeamColorSticky(const std::string &name, const std::string &newTeam, boo
 
   if (fromHelmet) {
       g_helmetTeamSet.insert(name);
-  } else if (g_inReplay && g_helmetTeamSet.find(name) != g_helmetTeamSet.end()) {
+  } else if (g_helmetTeamSet.find(name) != g_helmetTeamSet.end()) {
       return;
   }
 
@@ -88,6 +89,19 @@ void setTeamColorSticky(const std::string &name, const std::string &newTeam, boo
     return;
   }
   g_playerTeamColor[name] = newTeam;
+
+  std::string realLocal = getRealLocalUsername();
+  bool isLocal = (!g_localName.empty() && name == g_localName) ||
+                 (!realLocal.empty() && name == realLocal) ||
+                 (g_isNicked && !g_activeNick.empty() && name == g_activeNick);
+
+  if (isLocal && isRealBedwarsTeam(newTeam)) {
+    if (fromHelmet || g_localTeam.empty()) {
+      g_localTeam = newTeam;
+      Logger::info("Local team set sticky (fromHelmet=%d): %s", fromHelmet,
+                   newTeam.c_str());
+    }
+  }
 }
 
 std::string teamFromColorCode(char code) {
@@ -121,10 +135,12 @@ void detectTeamsFromLine(const std::string &chat) {
   for (const char *t : teams) {
     std::string needle1 = std::string("You are on the ") + t + " Team!";
     if (chat.find(needle1) != std::string::npos) {
-      Logger::info("Local team detected: %s", t);
+      Logger::info("Local team detected from chat: %s", t);
       g_localTeam = t;
-      if (!g_localName.empty() && !g_localTeam.empty()) {
-        g_playerTeamColor[g_localName] = g_localTeam;
+      std::string myName = !g_localName.empty() ? g_localName : getRealLocalUsername();
+      if (!myName.empty() && !g_localTeam.empty()) {
+        g_playerTeamColor[myName] = g_localTeam;
+        g_helmetTeamSet.insert(myName);
       }
     }
     std::string needle2 = std::string(" joined (") + t + ")";
@@ -177,6 +193,409 @@ std::string closestTeamColor(int color) {
     }
   }
   return bestTeam;
+}
+
+static bool isRankPrefix(const std::string &str) {
+  if (str.empty()) return false;
+  std::string s = str;
+  for (char &c : s) c = (char)tolower((unsigned char)c);
+  if (s.find("vip") != std::string::npos ||
+      s.find("mvp") != std::string::npos ||
+      s.find("helper") != std::string::npos ||
+      s.find("mod") != std::string::npos ||
+      s.find("admin") != std::string::npos ||
+      s.find("yt") != std::string::npos ||
+      s.find("youtube") != std::string::npos ||
+      s.find("hypixel") != std::string::npos ||
+      s.find("build team") != std::string::npos ||
+      s.find("mojang") != std::string::npos ||
+      s.find("owner") != std::string::npos) {
+    return true;
+  }
+  return false;
+}
+
+static std::string findColorCodeBeforeName(const std::string &formatted, const std::string &name) {
+  if (formatted.empty()) return "";
+
+  static const char *teamNames[] = {"Red", "Blue", "Green", "Yellow", "Aqua", "White", "Pink", "Gray", "Grey"};
+  for (const char *t : teamNames) {
+    std::string needle = std::string("[") + t + "]";
+    if (formatted.find(needle) != std::string::npos) {
+      return (strcmp(t, "Grey") == 0) ? "Gray" : t;
+    }
+  }
+
+  std::string fLower = formatted;
+  for (char &c : fLower) c = (char)tolower((unsigned char)c);
+  std::string nLower = name;
+  for (char &c : nLower) c = (char)tolower((unsigned char)c);
+
+  size_t pos = fLower.rfind(nLower);
+  if (pos == std::string::npos) {
+    pos = formatted.length();
+  }
+
+  char colorCode = 0;
+
+  for (int i = (int)pos - 1; i >= 0; --i) {
+    unsigned char c = (unsigned char)formatted[i];
+    if (c == ']' && colorCode == 0) {
+      break;
+    }
+
+    if (i >= 2 && (unsigned char)formatted[i - 2] == 0xC2 && (unsigned char)formatted[i - 1] == 0xA7) {
+      char code = (char)tolower(c);
+      if ((code >= '0' && code <= '9') || (code >= 'a' && code <= 'f')) {
+        colorCode = code;
+        break;
+      } else if (code == 'k' || code == 'l' || code == 'm' || code == 'n' || code == 'o' || code == 'r') {
+        i -= 2;
+        continue;
+      }
+    } else if (i >= 1 && (unsigned char)formatted[i - 1] == 0xA7) {
+      char code = (char)tolower(c);
+      if ((code >= '0' && code <= '9') || (code >= 'a' && code <= 'f')) {
+        colorCode = code;
+        break;
+      } else if (code == 'k' || code == 'l' || code == 'm' || code == 'n' || code == 'o' || code == 'r') {
+        i -= 1;
+        continue;
+      }
+    }
+  }
+
+  if (colorCode == 0) {
+    return "";
+  }
+
+  std::string team = teamFromColorCode(colorCode);
+  if (isRealBedwarsTeam(team)) {
+    return team;
+  }
+  return "";
+}
+
+struct TabLocalFrame {
+  JNIEnv *env;
+  bool ok;
+  TabLocalFrame(JNIEnv *e, jint cap = 64) : env(e), ok(false) {
+    if (env && env->PushLocalFrame(cap) == 0) ok = true;
+  }
+  ~TabLocalFrame() {
+    if (ok && env) env->PopLocalFrame(nullptr);
+  }
+};
+
+std::string resolveTeamFromTabList(const std::string &targetPlayerName) {
+  JNIEnv *env = lc ? lc->getEnv() : nullptr;
+  if (!env) return "";
+
+  TabLocalFrame topFrame(env, 128);
+  if (!topFrame.ok) return "";
+
+  jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
+  if (!mcCls) mcCls = env->FindClass("ave");
+  if (!mcCls) return "";
+
+  jmethodID m_getMc = env->GetStaticMethodID(
+      mcCls, "getMinecraft", "()Lnet/minecraft/client/Minecraft;");
+  if (!m_getMc) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    m_getMc = env->GetStaticMethodID(mcCls, "func_71410_x",
+                                     "()Lnet/minecraft/client/Minecraft;");
+  }
+  if (!m_getMc) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    m_getMc = env->GetStaticMethodID(mcCls, "A", "()Lave;");
+  }
+  if (env->ExceptionCheck()) env->ExceptionClear();
+
+  jfieldID theMc = env->GetStaticFieldID(mcCls, "theMinecraft",
+                                         "Lnet/minecraft/client/Minecraft;");
+  if (!theMc) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    theMc = env->GetStaticFieldID(mcCls, "field_71432_P",
+                                  "Lnet/minecraft/client/Minecraft;");
+  }
+  if (!theMc) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    theMc = env->GetStaticFieldID(mcCls, "S", "Lave;");
+  }
+  if (env->ExceptionCheck()) env->ExceptionClear();
+
+  jobject mcObj = nullptr;
+  if (m_getMc)
+    mcObj = env->CallStaticObjectMethod(mcCls, m_getMc);
+  if (!mcObj && theMc)
+    mcObj = env->GetStaticObjectField(mcCls, theMc);
+  if (!mcObj) return "";
+
+  jmethodID m_getNet = lc->GetMethodID(
+      mcCls, "getNetHandler", "()Lnet/minecraft/client/network/NetHandlerPlayClient;",
+      "func_147114_u", "v", "()Lbcy;");
+  if (!m_getNet) {
+    m_getNet = lc->FindMethodBySignature(mcCls, "()Lnet/minecraft/client/network/NetHandlerPlayClient;");
+    if (!m_getNet) m_getNet = lc->FindMethodBySignature(mcCls, "()Lbcy;");
+  }
+
+  jobject nh = m_getNet ? env->CallObjectMethod(mcObj, m_getNet) : nullptr;
+  if (env->ExceptionCheck()) env->ExceptionClear();
+
+  if (!nh) {
+    jfieldID f_thePlayer = lc->GetFieldID(
+        mcCls, "thePlayer", "Lnet/minecraft/client/entity/EntityPlayerSP;",
+        "field_71439_g", "h");
+    if (f_thePlayer) {
+      jobject playerObj = env->GetObjectField(mcObj, f_thePlayer);
+      if (env->ExceptionCheck()) env->ExceptionClear();
+      if (playerObj) {
+        jclass pCls = env->GetObjectClass(playerObj);
+        jfieldID f_sendQueue = lc->GetFieldID(
+            pCls, "sendQueue", "Lnet/minecraft/client/network/NetHandlerPlayClient;",
+            "field_71174_a", "a");
+        if (!f_sendQueue) f_sendQueue = lc->FindFieldBySignature(pCls, "Lnet/minecraft/client/network/NetHandlerPlayClient;");
+        if (!f_sendQueue) f_sendQueue = lc->FindFieldBySignature(pCls, "Lbcy;");
+        if (f_sendQueue) {
+          nh = env->GetObjectField(playerObj, f_sendQueue);
+          if (env->ExceptionCheck()) env->ExceptionClear();
+        }
+      }
+    }
+  }
+  if (!nh) return "";
+
+  jclass nhCls = env->GetObjectClass(nh);
+  jmethodID m_getPlayerInfoMap = lc->GetMethodID(
+      nhCls, "getPlayerInfoMap", "()Ljava/util/Collection;",
+      "func_175106_d", "d", "()Ljava/util/Collection;");
+  if (!m_getPlayerInfoMap) {
+    m_getPlayerInfoMap = lc->FindMethodBySignature(nhCls, "()Ljava/util/Collection;");
+  }
+  if (env->ExceptionCheck()) env->ExceptionClear();
+  if (!m_getPlayerInfoMap) return "";
+
+  jobject coll = env->CallObjectMethod(nh, m_getPlayerInfoMap);
+  if (env->ExceptionCheck()) env->ExceptionClear();
+  if (!coll) return "";
+
+  jclass collCls = env->GetObjectClass(coll);
+  jmethodID m_iterator = env->GetMethodID(collCls, "iterator", "()Ljava/util/Iterator;");
+  jobject iter = m_iterator ? env->CallObjectMethod(coll, m_iterator) : nullptr;
+  if (env->ExceptionCheck()) env->ExceptionClear();
+  if (!iter) return "";
+
+  jclass iterCls = env->GetObjectClass(iter);
+  jmethodID m_hasNext = env->GetMethodID(iterCls, "hasNext", "()Z");
+  jmethodID m_next = env->GetMethodID(iterCls, "next", "()Ljava/lang/Object;");
+
+  jclass npiCls = lc->GetClass("net.minecraft.client.network.NetworkPlayerInfo");
+  if (!npiCls) npiCls = env->FindClass("bdc");
+  if (env->ExceptionCheck()) env->ExceptionClear();
+
+  jmethodID m_getGameProfile = npiCls ? lc->GetMethodID(
+      npiCls, "getGameProfile", "()Lcom/mojang/authlib/GameProfile;",
+      "func_178845_a", "a", "()Lcom/mojang/authlib/GameProfile;") : nullptr;
+  jmethodID m_getDisplayName = npiCls ? lc->GetMethodID(
+      npiCls, "getDisplayName", "()Lnet/minecraft/util/IChatComponent;",
+      "func_178854_k", "k", "()Leu;") : nullptr;
+  jmethodID m_getPlayerTeam = npiCls ? lc->GetMethodID(
+      npiCls, "getPlayerTeam", "()Lnet/minecraft/scoreboard/ScorePlayerTeam;",
+      "func_178850_i", "i", "()Lbfa;") : nullptr;
+
+  jclass gpCls = lc->GetClass("com.mojang.authlib.GameProfile");
+  if (!gpCls) gpCls = env->FindClass("com/mojang/authlib/GameProfile");
+  if (env->ExceptionCheck()) env->ExceptionClear();
+  jmethodID m_getName = gpCls ? env->GetMethodID(gpCls, "getName", "()Ljava/lang/String;") : nullptr;
+
+  jclass chatCompCls = lc->GetClass("net.minecraft.util.IChatComponent");
+  if (!chatCompCls) chatCompCls = env->FindClass("eu");
+  if (env->ExceptionCheck()) env->ExceptionClear();
+  jmethodID m_getFormattedText = chatCompCls ? lc->GetMethodID(
+      chatCompCls, "getFormattedText", "()Ljava/lang/String;",
+      "func_150254_d", "d", "()Ljava/lang/String;") : nullptr;
+
+  jclass teamCls = lc->GetClass("net.minecraft.scoreboard.ScorePlayerTeam");
+  if (!teamCls) teamCls = env->FindClass("bfa");
+  if (env->ExceptionCheck()) env->ExceptionClear();
+  jmethodID m_getPrefix = teamCls ? lc->GetMethodID(
+      teamCls, "getColorPrefix", "()Ljava/lang/String;",
+      "func_96668_e", "c", "()Ljava/lang/String;") : nullptr;
+  jmethodID m_getRegisteredName = teamCls ? lc->GetMethodID(
+      teamCls, "getRegisteredName", "()Ljava/lang/String;",
+      "func_96661_b", "b", "()Ljava/lang/String;") : nullptr;
+
+  jobject tabOverlay = nullptr;
+  jmethodID m_getTabPlayerName = nullptr;
+  jfieldID f_gui = lc->GetFieldID(
+      mcCls, "ingameGUI", "Lnet/minecraft/client/gui/GuiIngame;",
+      "field_71456_v", "q", "Lavo;");
+  if (!f_gui) f_gui = lc->FindFieldBySignature(mcCls, "Lnet/minecraft/client/gui/GuiIngame;");
+  if (env->ExceptionCheck()) env->ExceptionClear();
+
+  if (f_gui) {
+    jobject guiObj = env->GetObjectField(mcObj, f_gui);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (guiObj) {
+      jclass gCls = env->GetObjectClass(guiObj);
+      jfieldID f_tab = lc->GetFieldID(
+          gCls, "overlayPlayerList", "Lnet/minecraft/client/gui/GuiPlayerTabOverlay;",
+          "field_175181_C", "v", "Lawh;");
+      if (!f_tab) f_tab = lc->FindFieldBySignature(gCls, "Lnet/minecraft/client/gui/GuiPlayerTabOverlay;");
+      if (env->ExceptionCheck()) env->ExceptionClear();
+      if (f_tab) {
+        tabOverlay = env->GetObjectField(guiObj, f_tab);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (tabOverlay) {
+          jclass tabCls = env->GetObjectClass(tabOverlay);
+          m_getTabPlayerName = lc->GetMethodID(
+              tabCls, "getPlayerName", "(Lnet/minecraft/client/network/NetworkPlayerInfo;)Ljava/lang/String;",
+              "func_175243_a", "a", "(Lbdc;)Ljava/lang/String;");
+          if (!m_getTabPlayerName) {
+            m_getTabPlayerName = lc->FindMethodBySignature(tabCls, "(Lnet/minecraft/client/network/NetworkPlayerInfo;)Ljava/lang/String;");
+            if (!m_getTabPlayerName) m_getTabPlayerName = lc->FindMethodBySignature(tabCls, "(Lbdc;)Ljava/lang/String;");
+          }
+          if (env->ExceptionCheck()) env->ExceptionClear();
+        }
+      }
+    }
+  }
+
+  std::string lowerTarget = targetPlayerName;
+  for (char &c : lowerTarget) c = (char)tolower((unsigned char)c);
+
+  std::string realLocalLower = getRealLocalUsername();
+  for (char &c : realLocalLower) c = (char)tolower((unsigned char)c);
+
+  std::string nickLower = g_activeNick;
+  for (char &c : nickLower) c = (char)tolower((unsigned char)c);
+
+  std::string localNameLower = g_localName;
+  for (char &c : localNameLower) c = (char)tolower((unsigned char)c);
+
+  bool lookingForLocal = lowerTarget.empty() || lowerTarget == realLocalLower ||
+                         lowerTarget == nickLower || lowerTarget == localNameLower;
+
+  std::string foundTeam = "";
+
+  while (m_hasNext && env->CallBooleanMethod(iter, m_hasNext)) {
+    if (env->ExceptionCheck()) { env->ExceptionClear(); break; }
+    TabLocalFrame loopFrame(env, 32);
+    if (!loopFrame.ok) break;
+
+    jobject npi = env->CallObjectMethod(iter, m_next);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); continue; }
+    if (!npi) continue;
+
+    std::string pName = "";
+    if (m_getGameProfile && m_getName) {
+      jobject gp = env->CallObjectMethod(npi, m_getGameProfile);
+      if (env->ExceptionCheck()) env->ExceptionClear();
+      if (gp) {
+        jstring jn = (jstring)env->CallObjectMethod(gp, m_getName);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (jn) {
+          const char *utf = env->GetStringUTFChars(jn, nullptr);
+          if (utf) {
+            pName = utf;
+            env->ReleaseStringUTFChars(jn, utf);
+          }
+        }
+      }
+    }
+
+    if (pName.empty()) continue;
+
+    std::string pNameLower = pName;
+    for (char &c : pNameLower) c = (char)tolower((unsigned char)c);
+
+    bool match = false;
+    if (pNameLower == lowerTarget) {
+      match = true;
+    } else if (lookingForLocal &&
+               ((!realLocalLower.empty() && pNameLower == realLocalLower) ||
+                (!nickLower.empty() && pNameLower == nickLower) ||
+                (!localNameLower.empty() && pNameLower == localNameLower))) {
+      match = true;
+    }
+
+    if (match) {
+      std::string tabFormatted = "";
+
+      if (tabOverlay && m_getTabPlayerName) {
+        jstring jFormatted = (jstring)env->CallObjectMethod(tabOverlay, m_getTabPlayerName, npi);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (jFormatted) {
+          const char *utf = env->GetStringUTFChars(jFormatted, nullptr);
+          if (utf) {
+            tabFormatted = utf;
+            env->ReleaseStringUTFChars(jFormatted, utf);
+          }
+        }
+      }
+
+      if (tabFormatted.empty() && m_getDisplayName && m_getFormattedText) {
+        jobject chatComp = env->CallObjectMethod(npi, m_getDisplayName);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (chatComp) {
+          jstring jFormatted = (jstring)env->CallObjectMethod(chatComp, m_getFormattedText);
+          if (env->ExceptionCheck()) env->ExceptionClear();
+          if (jFormatted) {
+            const char *utf = env->GetStringUTFChars(jFormatted, nullptr);
+            if (utf) {
+              tabFormatted = utf;
+              env->ReleaseStringUTFChars(jFormatted, utf);
+            }
+          }
+        }
+      }
+
+      jobject teamObj = m_getPlayerTeam ? env->CallObjectMethod(npi, m_getPlayerTeam) : nullptr;
+      if (env->ExceptionCheck()) env->ExceptionClear();
+
+      if (teamObj) {
+        if (m_getRegisteredName) {
+          jstring jReg = (jstring)env->CallObjectMethod(teamObj, m_getRegisteredName);
+          if (env->ExceptionCheck()) env->ExceptionClear();
+          if (jReg) {
+            const char *utf = env->GetStringUTFChars(jReg, nullptr);
+            if (utf) {
+              std::string regStr = utf;
+              env->ReleaseStringUTFChars(jReg, utf);
+              for (const char *t : {"Red", "Blue", "Green", "Yellow", "Aqua", "White", "Pink", "Gray"}) {
+                if (strstr(regStr.c_str(), t)) {
+                  foundTeam = t;
+                  break;
+                }
+              }
+            }
+          }
+        }
+
+        if (tabFormatted.empty() && m_getPrefix) {
+          jstring jPref = (jstring)env->CallObjectMethod(teamObj, m_getPrefix);
+          if (env->ExceptionCheck()) env->ExceptionClear();
+          if (jPref) {
+            const char *utf = env->GetStringUTFChars(jPref, nullptr);
+            if (utf) {
+              tabFormatted = std::string(utf) + pName;
+              env->ReleaseStringUTFChars(jPref, utf);
+            }
+          }
+        }
+      }
+
+      if (foundTeam.empty() && !tabFormatted.empty()) {
+        foundTeam = findColorCodeBeforeName(tabFormatted, pName);
+      }
+
+      if (isRealBedwarsTeam(foundTeam)) {
+        break;
+      }
+    }
+  }
+
+  return foundTeam;
 }
 
 void updateTeamsFromScoreboard() {
@@ -260,7 +679,7 @@ void updateTeamsFromScoreboard() {
     return;
   }
   
-  if (g_inReplay) {
+  if (g_inHypixelGame || g_inReplay) {
     jfieldID f_loadedEntityList = env->GetFieldID(worldCls, "loadedEntityList", "Ljava/util/List;");
     if (!f_loadedEntityList) { env->ExceptionClear(); f_loadedEntityList = env->GetFieldID(worldCls, "field_72996_f", "Ljava/util/List;"); }
     if (!f_loadedEntityList) { env->ExceptionClear(); f_loadedEntityList = env->GetFieldID(worldCls, "f", "Ljava/util/List;"); }
@@ -276,13 +695,13 @@ void updateTeamsFromScoreboard() {
           if (array) {
             jclass epCls = lc->GetClass("net.minecraft.entity.player.EntityPlayer");
             jmethodID m_getName = lc->GetMethodID(epCls, "getName", "()Ljava/lang/String;", "func_70005_c_", "e_");
-            jfieldID f_inventory = lc->GetFieldID(epCls, "inventory", "Lnet/minecraft/entity/player/InventoryPlayer;", "field_71071_by", "bi");
+            jfieldID f_inventory = lc->GetFieldID(epCls, "inventory", "Lnet/minecraft/entity/player/InventoryPlayer;", "field_71071_by", "bi", "Lwm;");
             jclass ipCls = lc->GetClass("net.minecraft.entity.player.InventoryPlayer");
-            jfieldID f_armorInventory = lc->GetFieldID(ipCls, "armorInventory", "[Lnet/minecraft/item/ItemStack;", "field_70460_b", "b");
+            jfieldID f_armorInventory = lc->GetFieldID(ipCls, "armorInventory", "[Lnet/minecraft/item/ItemStack;", "field_70460_b", "b", "[Lzx;");
             jclass isCls = lc->GetClass("net.minecraft.item.ItemStack");
-            jmethodID m_getItem = lc->GetMethodID(isCls, "getItem", "()Lnet/minecraft/item/Item;", "func_77973_b", "b");
+            jmethodID m_getItem = lc->GetMethodID(isCls, "getItem", "()Lnet/minecraft/item/Item;", "func_77973_b", "b", "()Lzw;");
             jclass iaCls = lc->GetClass("net.minecraft.item.ItemArmor");
-            jmethodID m_getColor = lc->GetMethodID(iaCls, "getColor", "(Lnet/minecraft/item/ItemStack;)I", "func_82814_b", "b");
+            jmethodID m_getColor = lc->GetMethodID(iaCls, "getColor", "(Lnet/minecraft/item/ItemStack;)I", "func_82814_b", "b", "(Lzx;)I");
 
             if (epCls && m_getName && f_inventory && ipCls && f_armorInventory && isCls && m_getItem && iaCls && m_getColor) {
                 int len = env->GetArrayLength(array);
@@ -431,13 +850,21 @@ void updateTeamsFromScoreboard() {
 
   static auto lastDbg = std::chrono::steady_clock::now();
   auto now = std::chrono::steady_clock::now();
-  bool shouldDbg = std::chrono::duration_cast<std::chrono::seconds>(now - lastDbg).count() >= 2;
+  bool shouldDbg =
+      Config::isGlobalDebugEnabled() &&
+      std::chrono::duration_cast<std::chrono::seconds>(now - lastDbg).count() >= 2;
   if (shouldDbg) lastDbg = now;
-  
+
   std::ofstream dbg;
   if (shouldDbg) {
-      dbg.open("C:\\Users\\HPC1\\Desktop\\ovson_team_debug.txt", std::ios::out);
-      dbg << "--- updateTeamsFromScoreboard ---" << std::endl;
+    const std::string path = Config::getDataDirectory() + "\\ovson_team_debug.txt";
+    dbg.open(path.c_str(), std::ios::out);
+    dbg << "--- updateTeamsFromScoreboard ---" << std::endl;
+    dbg << "inReplay=" << (g_inReplay ? 1 : 0)
+        << " inGame=" << (g_inHypixelGame ? 1 : 0)
+        << " onlinePlayers=" << g_onlinePlayers.size()
+        << " helmetResolved=" << g_helmetTeamSet.size()
+        << " teamColorEntries=" << g_playerTeamColor.size() << std::endl;
   }
 
   for (const std::string &name : g_onlinePlayers) {
@@ -464,7 +891,7 @@ void updateTeamsFromScoreboard() {
           if (!teamWord.empty()) {
             setTeamColorSticky(name, teamWord);
             if (shouldDbg) dbg << "    -> Assigned Team (by Word): " << teamWord << std::endl;
-          } else {
+          } else if (!isRankPrefix(utf)) {
             char code = 0;
             const unsigned char *u = (const unsigned char *)utf;
             for (size_t i = 0; u[i]; ++i) {
@@ -483,10 +910,17 @@ void updateTeamsFromScoreboard() {
             if (shouldDbg) dbg << " -> Extracted Color: " << (code ? std::string(1, code) : "none") << std::endl;
             if (code) {
               std::string tname = teamFromColorCode(code);
-              if (!tname.empty()) {
+              if (!tname.empty() && isRealBedwarsTeam(tname)) {
                 setTeamColorSticky(name, tname);
                 if (shouldDbg) dbg << "    -> Assigned Team: " << tname << std::endl;
               }
+            }
+          } else {
+            if (shouldDbg) dbg << "    -> Rank Prefix (" << utf << "), checking tab list..." << std::endl;
+            std::string tabTeam = resolveTeamFromTabList(name);
+            if (isRealBedwarsTeam(tabTeam)) {
+              setTeamColorSticky(name, tabTeam);
+              if (shouldDbg) dbg << "    -> Assigned Team (from Tab): " << tabTeam << std::endl;
             }
           }
           env->ReleaseStringUTFChars(pref, utf);
@@ -526,25 +960,28 @@ std::string resolveTeamForNameEx(JNIEnv *env, const std::string &name,
           (const unsigned char *)env->GetStringUTFChars(pref, 0);
       char code = 0;
       if (u) {
-        for (size_t i = 0; u[i]; ++i) {
-          if (u[i] == 0xC2 && u[i + 1] == 0xA7 && u[i + 2]) {
-            char c = (char)tolower(u[i + 2]);
-            if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-              code = c;
+        std::string pStr = (const char *)u;
+        if (!isRankPrefix(pStr)) {
+          for (size_t i = 0; u[i]; ++i) {
+            if (u[i] == 0xC2 && u[i + 1] == 0xA7 && u[i + 2]) {
+              char c = (char)tolower(u[i + 2]);
+              if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+                code = c;
+              }
+            } else if (u[i] == 0xA7 && u[i + 1]) {
+              char c = (char)tolower(u[i + 1]);
+              if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+                code = c;
+              }
             }
-          } else if (u[i] == 0xA7 && u[i + 1]) {
-            char c = (char)tolower(u[i + 1]);
-            if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-              code = c;
-            }
+          }
+          if (code) {
+            std::string tname = teamFromColorCode(code);
+            if (!tname.empty() && isRealBedwarsTeam(tname))
+              result = tname;
           }
         }
         env->ReleaseStringUTFChars(pref, (const char *)u);
-      }
-      if (code) {
-        std::string tname = teamFromColorCode(code);
-        if (!tname.empty())
-          result = tname;
       }
       env->DeleteLocalRef(pref);
     }
@@ -564,7 +1001,7 @@ std::string resolveTeamForName(const std::string &name) {
   }
 
   {
-    std::lock_guard<std::mutex> lock(g_statsMutex);
+    std::lock_guard<std::recursive_mutex> lock(g_statsMutex);
     auto itT = g_playerTeamColor.find(name);
     if (itT != g_playerTeamColor.end() && !itT->second.empty()) {
       return itT->second;
@@ -576,6 +1013,22 @@ std::string resolveTeamForName(const std::string &name) {
   jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
   if (!mcCls)
     return std::string();
+
+  jmethodID m_getMc = env->GetStaticMethodID(
+      mcCls, "getMinecraft", "()Lnet/minecraft/client/Minecraft;");
+  if (!m_getMc) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    m_getMc = env->GetStaticMethodID(mcCls, "func_71410_x",
+                                     "()Lnet/minecraft/client/Minecraft;");
+  }
+  if (!m_getMc) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    m_getMc = env->GetStaticMethodID(mcCls, "A", "()Lave;");
+  }
+  if (!m_getMc) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+  }
+
   jfieldID theMc = env->GetStaticFieldID(mcCls, "theMinecraft",
                                          "Lnet/minecraft/client/Minecraft;");
   if (!theMc) {
@@ -589,7 +1042,16 @@ std::string resolveTeamForName(const std::string &name) {
       env->ExceptionClear();
     theMc = env->GetStaticFieldID(mcCls, "S", "Lave;");
   }
-  jobject mcObj = theMc ? env->GetStaticObjectField(mcCls, theMc) : nullptr;
+  if (!theMc) {
+    if (env->ExceptionCheck())
+      env->ExceptionClear();
+  }
+
+  jobject mcObj = nullptr;
+  if (m_getMc)
+    mcObj = env->CallStaticObjectMethod(mcCls, m_getMc);
+  if (!mcObj && theMc)
+    mcObj = env->GetStaticObjectField(mcCls, theMc);
   if (!mcObj)
     return std::string();
 
@@ -624,6 +1086,15 @@ std::string resolveTeamForName(const std::string &name) {
     env->DeleteLocalRef(world);
   }
   env->DeleteLocalRef(mcObj);
+
+  if (!isRealBedwarsTeam(result)) {
+    std::string tabResult = resolveTeamFromTabList(name);
+    if (isRealBedwarsTeam(tabResult)) {
+      result = tabResult;
+      setTeamColorSticky(name, result);
+    }
+  }
+
   return result;
 }
 

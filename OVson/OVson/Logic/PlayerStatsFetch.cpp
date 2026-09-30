@@ -45,7 +45,7 @@ void requestStatsForVisiblePlayer(const std::string &name,
     if (!isalnum((unsigned char)c) && c != '_') return;
   }
   {
-    std::lock_guard<std::mutex> lk(g_statsMutex);
+    std::lock_guard<std::recursive_mutex> lk(g_statsMutex);
     if (g_playerStatsMap.find(name) != g_playerStatsMap.end()) return;
   }
   ULONGLONG now = GetTickCount64();
@@ -168,8 +168,31 @@ void fetchWorkerBody(const std::string &name, const std::string &forcedUuid) {
         } else {
           apiFailCount = 0;
         }
+
+        if (!statsOpt && !apiKey.empty() && apiKey != "None") {
+          statsOpt = Hypixel::getPlayerStats(apiKey, *uuid);
+          if (statsOpt) {
+            Logger::info("Keyless failed for %s, succeeded with Hypixel API key fallback", name.c_str());
+          }
+        }
       } else {
-        statsOpt = Hypixel::getPlayerStats(apiKey, *uuid);
+        bool hasValidKey = (!apiKey.empty() && apiKey != "None");
+        if (hasValidKey) {
+          statsOpt = Hypixel::getPlayerStats(apiKey, *uuid);
+          if (!statsOpt) {
+            Logger::info("Hypixel failed for %s uuid=%s, falling back to Abyss...", name.c_str(), uuid->c_str());
+            statsOpt = AbyssService::getPlayerStats(*uuid);
+          }
+          if (!statsOpt) {
+            Logger::info("Abyss fallback failed for %s uuid=%s, falling back to Prism...", name.c_str(), uuid->c_str());
+            statsOpt = PrismService::getPlayerStats(*uuid);
+          }
+        } else {
+          statsOpt = AbyssService::getPlayerStats(*uuid);
+          if (!statsOpt) {
+            statsOpt = PrismService::getPlayerStats(*uuid);
+          }
+        }
       }
 
       double apiEnd = TimeUtil::getTime();
@@ -390,6 +413,7 @@ void fetchWorkerBody(const std::string &name, const std::string &forcedUuid) {
       Hypixel::PlayerStats nickedStats;
       nickedStats.isNicked = true;
       nickedStats.isFetched = true;
+      nickedStats.isFresh = false;
       {
         std::lock_guard<std::mutex> lock(g_pendingStatsMutex);
         g_pendingStatsMap[name] = nickedStats;
@@ -496,6 +520,10 @@ void processPendingStats() {
     }
   }
   bool isRealName = false;
+  std::string realLocal = getRealLocalUsername();
+  if (!realLocal.empty() && name == realLocal) {
+    isRealName = true;
+  }
   if (!online) {
     std::lock_guard<std::mutex> lockNick(g_nickMapMutex);
     for (const auto &np : g_nickToRealMap) {
@@ -507,6 +535,10 @@ void processPendingStats() {
   }
   if (!online && !forceOutput && !isRealName)
     return;
+
+  if (g_isNicked && !g_activeNick.empty() && name == g_activeNick) {
+    forceOutput = false;
+  }
 
   double fkdr =
       (stats.bedwarsFinalDeaths == 0)
@@ -525,8 +557,14 @@ void processPendingStats() {
   auto itT = g_playerTeamColor.find(name);
   if (itT != g_playerTeamColor.end())
     team = itT->second;
+  else if (!g_localTeam.empty() && !realLocal.empty() && name == realLocal) {
+    team = g_localTeam;
+  }
   else {
     team = resolveTeamForName(name);
+    if (team.empty() && g_isNicked && !g_activeNick.empty() && !realLocal.empty() && name == realLocal) {
+      team = resolveTeamForName(g_activeNick);
+    }
     if (!team.empty())
       setTeamColorSticky(name, team);
   }
@@ -537,6 +575,10 @@ void processPendingStats() {
   const char *white = "\xC2\xA7"
                       "f";
 
+  if (!realLocal.empty() && name == realLocal) {
+    stats.isNicked = false;
+  }
+
   std::string msg;
   if (stats.isNicked) {
     const char *nameColor = (team == "Gray") ? "\xC2\xA7"
@@ -545,8 +587,15 @@ void processPendingStats() {
     msg = nameColor + name +
           " \xC2\xA7"
           "4[NICKED]";
+  } else if (Hypixel::isFreshAccount(stats)) {
+    const char *nameColor = (team == "Gray") ? "\xC2\xA7"
+                                               "8"
+                                             : (team.empty() ? white : tcol);
+    msg = nameColor + name +
+          " \xC2\xA7"
+          "5[FRESH]";
   } else {
-    msg += BedwarsStars::GetFormattedLevel(stats.bedwarsStar);
+    msg += BedwarsStars::GetFormattedLevel(stats);
     msg += " ";
 
     if (forceOutput || g_inPreGameLobby) {
@@ -651,7 +700,7 @@ void processPendingStats() {
                       "a[VIP] ";
       }
 
-      msg += rankDisplay + name + " -";
+      msg += rankDisplay + name;
       if (g_mode == 0) {
         msg += std::string(" \xC2\xA7"
                            "7[\xC2\xA7"
@@ -715,9 +764,12 @@ void processPendingStats() {
     }
   }
 
-  if (stats.bedwarsStar <= 1 && stats.bedwarsFinalKills == 0 &&
+  if (!stats.isNicked && stats.isFetched && !stats.displayName.empty() &&
+      stats.bedwarsStar <= 1 && stats.bedwarsFinalKills == 0 &&
       stats.bedwarsWins == 0) {
-    stats.isNicked = true;
+    stats.isFresh = true;
+  } else {
+    stats.isFresh = false;
   }
 
   std::string cleanName;
@@ -730,11 +782,20 @@ void processPendingStats() {
   }
 
   {
-    std::lock_guard<std::mutex> lock(g_statsMutex);
+    std::lock_guard<std::recursive_mutex> lock(g_statsMutex);
     stats.teamColor = team;
     if (!cleanName.empty())
       g_playerStatsMap[cleanName] = stats;
     g_playerStatsMap[name] = stats;
+    if (g_isNicked && !g_activeNick.empty() && !realLocal.empty() && name == realLocal) {
+      g_playerStatsMap[g_activeNick] = stats;
+      std::string cleanNick;
+      for (char c : g_activeNick) {
+        if (c >= 'A' && c <= 'Z') cleanNick += (char)(c + 32);
+        else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') cleanNick += c;
+      }
+      if (!cleanNick.empty()) g_playerStatsMap[cleanNick] = stats;
+    }
   }
 
   auto escapeJsonLocal = [](const std::string &str) -> std::string {
@@ -753,7 +814,8 @@ void processPendingStats() {
     return result;
   };
 
-  if (forceOutput || Config::getOverlayMode() == "chat") {
+  bool shouldPrintChat = forceOutput || (Config::getOverlayMode() == "chat" && (realLocal.empty() || name != realLocal));
+  if (shouldPrintChat) {
     struct TagInfo { std::string text; std::string reason; };
     std::vector<TagInfo> tags;
 
@@ -873,6 +935,15 @@ void processPendingStats() {
           }
           lp.Cleanup();
         }
+      }
+    }
+
+    if (Config::isMuteTeamTagAlertsEnabled()) {
+      const std::string localTeam = OVson::g_localTeam;
+      if (!localTeam.empty() && OVson::isRealBedwarsTeam(localTeam)) {
+        const std::string theirTeam = OVson::resolveTeamForName(pname);
+        if (!theirTeam.empty() && theirTeam == localTeam)
+          return true;
       }
     }
 

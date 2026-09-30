@@ -10,6 +10,7 @@
 #include "../Utils/Logger.h"
 #include "../SDK/Minecraft.h"
 #include "../SDK/Player.h"
+#include "Bedwars/BedwarsRuntime.h"
 
 #include <Windows.h>
 #include <cctype>
@@ -71,7 +72,7 @@ void detectFinalKillsFromLine(const std::string &chat) {
   }
 
   if (!victim.empty()) {
-    std::lock_guard<std::mutex> lock(g_statsMutex);
+    std::lock_guard<std::recursive_mutex> lock(g_statsMutex);
     if (g_playerStatsMap.find(victim) != g_playerStatsMap.end()) {
       g_playerStatsMap.erase(victim);
       Logger::info("Player removed from GUI due to FINAL KILL: %s",
@@ -106,32 +107,58 @@ void detectPreGameLobby() {
 
   static ULONGLONG lastNameUpdate = 0;
   ULONGLONG now = GetTickCount64();
-  if (g_localName.empty() || now - lastNameUpdate > 5000) {
+  if (g_localName.empty() || now - lastNameUpdate > 5000 || (g_isNicked && !g_activeNick.empty() && g_localName != g_activeNick)) {
       lastNameUpdate = now;
+      std::string realName = getRealLocalUsername();
+
       CMinecraft mc;
       CPlayer lp = mc.GetLocalPlayer();
       if (lp.Get()) {
-          jclass epCls = lc->GetClass("net.minecraft.entity.Entity");
-          if (epCls) {
-              jmethodID m_getName = nullptr;
-              const char *nameMethods[] = {"getName", "func_70005_c_", "h_", "e_", "f_", "g_", "i_", "j_", "k_", nullptr};
-              for (int i = 0; nameMethods[i]; i++) {
-                  m_getName = env->GetMethodID(epCls, nameMethods[i], "()Ljava/lang/String;");
-                  if (env->ExceptionCheck()) env->ExceptionClear();
-                  else if (m_getName) break;
-              }
-              if (m_getName) {
-                  jstring js = (jstring)env->CallObjectMethod(lp.Get(), m_getName);
-                  if (js) {
-                      const char *utf = env->GetStringUTFChars(js, nullptr);
-                      if (utf) {
-                          g_localName = utf;
-                          env->ReleaseStringUTFChars(js, utf);
+          jclass playerClass = env->GetObjectClass(lp.Get());
+          jmethodID getPlayerInfo = lc->GetMethodID(playerClass, "getPlayerInfo",
+              "()Lnet/minecraft/client/network/NetworkPlayerInfo;", "func_175155_b", "m", "()Lbdc;");
+          env->DeleteLocalRef(playerClass);
+          if (getPlayerInfo) {
+              jobject pInfo = env->CallObjectMethod(lp.Get(), getPlayerInfo);
+              if (pInfo) {
+                  jclass infoClass = env->GetObjectClass(pInfo);
+                  jmethodID getProf = lc->GetMethodID(infoClass, "getGameProfile", "()Lcom/mojang/authlib/GameProfile;", "func_178845_a", "a", "()Lcom/mojang/authlib/GameProfile;");
+                  env->DeleteLocalRef(infoClass);
+                  if (getProf) {
+                      jobject prof = env->CallObjectMethod(pInfo, getProf);
+                      if (prof) {
+                          jclass profClass = env->GetObjectClass(prof);
+                          jmethodID getName = lc->GetMethodID(profClass, "getName", "()Ljava/lang/String;");
+                          env->DeleteLocalRef(profClass);
+                          if (getName) {
+                              jstring jPName = (jstring)env->CallObjectMethod(prof, getName);
+                              if (jPName) {
+                                  const char* pUtf = env->GetStringUTFChars(jPName, nullptr);
+                                  if (pUtf) {
+                                      std::string tabName = pUtf;
+                                      env->ReleaseStringUTFChars(jPName, pUtf);
+                                      if (!tabName.empty() && !realName.empty() && tabName != realName) {
+                                          g_isNicked = true;
+                                          g_activeNick = tabName;
+                                          g_localName = tabName;
+                                      }
+                                  }
+                                  env->DeleteLocalRef(jPName);
+                              }
+                          }
+                          env->DeleteLocalRef(prof);
                       }
-                      env->DeleteLocalRef(js);
                   }
+                  env->DeleteLocalRef(pInfo);
               }
           }
+
+          if (g_isNicked && !g_activeNick.empty()) {
+              g_localName = g_activeNick;
+          } else if (g_localName.empty() && !realName.empty()) {
+              g_localName = realName;
+          }
+
           lp.Cleanup();
       }
   }
@@ -146,7 +173,6 @@ void detectPreGameLobby() {
       Logger::log(Config::DebugCategory::GameDetection,
                   "Pre-game lobby ended (game started)");
     }
-    return;
   }
 
   jclass mcCls = lc->GetClass("net.minecraft.client.Minecraft");
@@ -503,6 +529,27 @@ void detectPreGameLobby() {
                 clean += (char)c;
               }
 
+              Bedwars::Runtime::instance().onScoreboardLine(clean);
+
+              if (clean.find("YOU") != std::string::npos) {
+                static const char *sidebarTeams[] = {
+                    "Red", "Blue", "Green", "Yellow", "Aqua", "White", "Pink", "Gray"};
+                for (const char *t : sidebarTeams) {
+                  if (clean.find(t) != std::string::npos) {
+                    if (g_localTeam != t) {
+                      Logger::info("[Scoreboard Sidebar] Detected local team from YOU indicator: %s", t);
+                      g_localTeam = t;
+                      std::string myName = !g_localName.empty() ? g_localName : getRealLocalUsername();
+                      if (!myName.empty()) {
+                        setTeamColorSticky(myName, t, true);
+                        g_helmetTeamSet.insert(myName);
+                      }
+                    }
+                    break;
+                  }
+                }
+              }
+
               if (clean.find("Map:") != std::string::npos)
                 foundMap = true;
               if (clean.find("Players:") != std::string::npos)
@@ -586,7 +633,7 @@ void detectPreGameLobby() {
   bool isPreGame = (foundMap && foundPlayers) || (foundMap && foundMode) ||
                    (foundPlayers && foundMode);
 
-  if (isReplay) {
+  if (isReplay || g_inHypixelGame) {
       isPreGame = false;
   }
 

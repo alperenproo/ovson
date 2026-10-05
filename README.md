@@ -1,8 +1,6 @@
 # OVson
 
-see update progress, report bugs / make suggestions on my discord server.
 
-[join discord](https://discord.gg/NNUhqjGd6b)
 
 
 ## Features

@@ -47,7 +47,6 @@
 <details>
 <summary>Open Preview</summary>
 
-![Lobby Pre Game Stats](https://nigga.tr/pre_game_stats.png)
 
 </details>
 
@@ -76,33 +75,33 @@
 <details>
 <summary>FKDR Sort (FK Mode)</summary>
 
-![Tab FKDR Sort](https://nigga.tr/tab_fkdr_sort.png)
+![Tab FKDR Sort](https:///tab_fkdr_sort.png)
 
 </details>
 
 <details>
 <summary>Teams (Normal)</summary>
 
-![Tab Teams Normal](https://nigga.tr/tab_teams_normal.png)
+![Tab Teams Normal](https:///tab_teams_normal.png)
 
 </details>
 
 <details>
 <summary>Multiple Tags Preview</summary>
 
-![Tab Multiple Tags](https://nigga.tr/tab_multiple_tags.png)
+![Tab Multiple Tags](https:///tab_multiple_tags.png)
 
 </details>
 
 <details> <summary>BetterTab Preview</summary>
   
-![BetterTab](https://nigga.tr/bettertab.png)
+![BetterTab](https:///bettertab.png)
   
 </details>
 
 <details> <summary>BetterTab Toggled Columns Preview</summary>
   
-![BetterTab](https://nigga.tr/bettertab_toggled.png)
+![BetterTab](https:///bettertab_toggled.png)
   
 </details>
 
@@ -119,21 +118,21 @@
 <details>
 <summary>FKDR Sort</summary>
 
-![GUI FKDR Sort](https://nigga.tr/gui_fkdr_sort.png)
+![GUI FKDR Sort](https:///gui_fkdr_sort.png)
 
 </details>
 
 <details>
 <summary>Stars Sort</summary>
 
-![GUI Stars Sort](https://nigga.tr/gui_stars_sort.png)
+![GUI Stars Sort](https:///gui_stars_sort.png)
 
 </details>
 
 <details>
 <summary>Toggled Off Columns (Tags, Wins, WLR)</summary>
 
-![GUI Toggled Off Columns](https://nigga.tr/gui_toggled_off.png)
+![GUI Toggled Off Columns](https:///gui_toggled_off.png)
 
 </details>
 
@@ -148,7 +147,7 @@
 <details>
 <summary>Open Preview</summary>
 
-![GUI Player Search](https://nigga.tr/gui_player_search.png)
+
 
 </details>
 
@@ -164,7 +163,7 @@
 <details>
 <summary>Open Preview</summary>
 
-![Click GUI](https://nigga.tr/clickgui_normal.png)
+![Click GUI](https:///clickgui_normal.png)
 
 </details>
 
